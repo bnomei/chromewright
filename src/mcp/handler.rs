@@ -4,7 +4,7 @@ use crate::browser::{BrowserSession, ConnectionOptions};
 use log::debug;
 use rmcp::{
     ServerHandler,
-    handler::server::tool::ToolRouter,
+    handler::server::router::tool::ToolRouter,
     model::{ServerCapabilities, ServerInfo},
     tool_handler,
 };
@@ -70,13 +70,10 @@ impl Drop for BrowserServer {
     }
 }
 
-#[tool_handler]
+#[tool_handler(router = self.tool_router)]
 impl ServerHandler for BrowserServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            instructions: Some("Browser-use MCP Server".into()),
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            ..Default::default()
-        }
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_instructions("Browser-use MCP Server")
     }
 }

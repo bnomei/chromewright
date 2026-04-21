@@ -24,21 +24,6 @@ Meta:
 
 ## Todo
 
-- [ ] T004: Upgrade `rmcp` to `1.5.x` and resolve transport fallout (owner: unassigned) (scope: `Cargo.toml`, `Cargo.lock`, `src/mcp/`, `src/bin/mcp_server.rs`, `README.md`) (depends: T003)
-  - Covers: R002, R003, R005
-  - Context: Upstream `rmcp` `1.x` changed server patterns and removed built-in SSE transport support. This repo currently depends on `transport-sse-server` and uses the `0.8` API shape. The recommended default is to keep stdio and streamable HTTP and remove SSE mode during the migration unless the user explicitly wants SSE preserved.
-  - Reuse_targets: upstream `rmcp` `1.x` examples using `ServerInfo::new(...)`, existing tool-router layout in `src/mcp/`
-  - Read_allowlist: local cargo registry `rmcp-1.5.0`, official migration guide
-  - Autonomy: strict
-  - Risk: high
-  - Complexity: high
-  - Verification_mode: mayor
-  - Verification_status: pending
-  - DoD: repo builds and tests on `rmcp` `1.5.x`; transport surface is intentional and documented.
-  - Validation: `cargo check --all-features --all-targets --locked`, `cargo test --locked`
-  - Escalate if: the user wants to preserve SSE transport instead of removing it as part of the migration.
-  - Notes: Close with one atomic commit dedicated to the RMCP migration.
-
 - [ ] T005: Preserve structured MCP outputs (owner: unassigned) (scope: `src/mcp/`, `src/tools/`, `tests/`) (depends: T004)
   - Covers: R002, R006
   - Context: The current MCP adapter converts internal JSON results into prettified text, which throws away structure that clients could consume directly. After the `rmcp` upgrade, move this seam to structured outputs with text fallback only when necessary.
@@ -84,6 +69,14 @@ Meta:
   - DoD: compatible dependency updates land cleanly and the baseline remains green.
   - Validation: `cargo update`, `cargo test --locked --all-features`, `cargo check --all-features --all-targets --locked`
   - Notes: Refreshed the lockfile to current same-major releases including `headless_chrome 1.0.21`, `axum 0.8.9`, `tokio 1.52.1`, `clap 4.6.1`, `env_logger 0.11.10`, `schemars 1.2.1`, `indexmap 2.14.0`, `serde_json 1.0.149`, and `thiserror 2.0.18`. `Cargo.toml` did not need edits because the existing semver ranges already admitted these updates.
+
+- [x] T004: Upgrade `rmcp` to `1.5.x` and resolve transport fallout (owner: mayor) (scope: `Cargo.toml`, `Cargo.lock`, `src/mcp/`, `src/bin/mcp_server.rs`, `README.md`) (depends: T003)
+  - Covers: R002, R003, R005
+  - Verification_mode: mayor
+  - Verification_status: passed
+  - DoD: repo builds and tests on `rmcp` `1.5.x`; transport surface is intentional and documented.
+  - Validation: `cargo update -p rmcp --precise 1.5.0`, `cargo check --all-features --all-targets --locked`, `cargo test --locked --all-features`
+  - Notes: Migrated to `rmcp 1.5.0`, removed the leftover `transport-sse-server` feature flag from the manifest, dropped the now-unused direct `tokio-util` dependency, and updated the MCP server glue to the 1.5 router and `ServerInfo::new(...).with_instructions(...)` conventions. The T002 CLI cleanup meant no further user-facing transport changes were needed here.
 
 - [x] T001: Stabilize the browser-launch baseline (owner: mayor) (scope: `src/browser/`, `tests/`, `Cargo.toml`) (depends: -)
   - Covers: R001, R002, R004
