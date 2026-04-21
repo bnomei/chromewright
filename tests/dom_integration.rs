@@ -259,6 +259,7 @@ fn test_snapshot_tool_exposes_document_metadata_and_node_refs() {
     assert!(!nodes.is_empty(), "expected actionable nodes in snapshot");
 
     let first_ref = &nodes[0]["node_ref"];
+    let first_cursor = &nodes[0]["cursor"];
     assert_eq!(
         first_ref["document_id"].as_str(),
         document["document_id"].as_str()
@@ -268,6 +269,11 @@ fn test_snapshot_tool_exposes_document_metadata_and_node_refs() {
         document["revision"].as_str()
     );
     assert!(first_ref["index"].as_u64().is_some());
+    assert_eq!(&first_cursor["node_ref"], first_ref);
+    assert_eq!(first_cursor["index"].as_u64(), first_ref["index"].as_u64());
+    assert_eq!(first_cursor["role"].as_str(), nodes[0]["role"].as_str());
+    assert_eq!(first_cursor["name"].as_str(), nodes[0]["name"].as_str());
+    assert!(first_cursor["selector"].as_str().is_some());
 }
 
 #[test]
@@ -380,6 +386,54 @@ fn test_same_origin_iframe_content_is_included_in_snapshot() {
             .unwrap_or_default()
             .contains("Inside Frame")
     );
+    assert_eq!(
+        data["document"]["frames"][0]["status"].as_str(),
+        Some("expanded")
+    );
+}
+
+#[test]
+#[ignore]
+fn test_snapshot_tool_exposes_cursor_for_same_origin_iframe_node() {
+    use chromewright::tools::{SnapshotParams, Tool, ToolContext, snapshot::SnapshotTool};
+
+    let _guard = common::browser_test_guard();
+    let Some(session) = common::launch_or_skip() else {
+        return;
+    };
+
+    let html = r#"
+        <html>
+        <body>
+            <iframe id="frame" srcdoc="<html><body><button id='inside'>Inside</button></body></html>"></iframe>
+        </body>
+        </html>
+    "#;
+
+    session
+        .navigate(&format!("data:text/html,{}", html))
+        .expect("Failed to navigate");
+    session
+        .wait_for_document_ready_with_timeout(std::time::Duration::from_secs(5))
+        .expect("Failed to wait for page readiness");
+
+    let tool = SnapshotTool::default();
+    let mut context = ToolContext::new(&session);
+
+    let result = tool
+        .execute_typed(SnapshotParams::default(), &mut context)
+        .expect("Failed to execute snapshot tool");
+
+    assert!(result.success);
+    let data = result.data.unwrap();
+    let nodes = data["nodes"].as_array().expect("snapshot should return nodes");
+    let iframe_node = nodes
+        .iter()
+        .find(|node| node["cursor"]["selector"].as_str() == Some("#inside"))
+        .expect("expected same-origin iframe button to expose a cursor");
+
+    assert_eq!(iframe_node["name"].as_str(), Some("Inside"));
+    assert_eq!(iframe_node["cursor"]["selector"].as_str(), Some("#inside"));
     assert_eq!(
         data["document"]["frames"][0]["status"].as_str(),
         Some("expanded")

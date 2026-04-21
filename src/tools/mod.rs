@@ -12,6 +12,7 @@ pub mod go_back;
 pub mod go_forward;
 pub mod hover;
 pub mod html_to_markdown;
+pub mod inspect_node;
 pub mod input;
 pub mod markdown;
 pub mod navigate;
@@ -37,6 +38,7 @@ pub use extract::ExtractParams;
 pub use go_back::GoBackParams;
 pub use go_forward::GoForwardParams;
 pub use hover::HoverParams;
+pub use inspect_node::{InspectDetail, InspectNodeParams};
 pub use input::InputParams;
 pub use markdown::GetMarkdownParams;
 pub use navigate::NavigateParams;
@@ -53,7 +55,7 @@ pub use wait::WaitCondition;
 pub use wait::WaitParams;
 
 use crate::browser::BrowserSession;
-use crate::dom::{DocumentMetadata, DomTree, NodeRef, SnapshotNode};
+use crate::dom::{Cursor, DocumentMetadata, DomTree, NodeRef, SnapshotNode};
 use crate::error::BrowserError;
 use crate::error::Result;
 use crate::tools::snapshot::{RenderMode, render_aria_tree};
@@ -146,6 +148,8 @@ impl DocumentEnvelopeOptions {
 pub struct TargetEnvelope {
     pub method: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<Cursor>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub node_ref: Option<NodeRef>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub selector: Option<String>,
@@ -155,25 +159,18 @@ pub struct TargetEnvelope {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ResolvedTarget {
+    pub method: String,
     pub selector: String,
     pub index: Option<usize>,
     pub node_ref: Option<NodeRef>,
+    pub cursor: Option<Cursor>,
 }
 
 impl ResolvedTarget {
-    pub fn method(&self) -> &'static str {
-        if self.node_ref.is_some() {
-            "node_ref"
-        } else if self.index.is_some() {
-            "index"
-        } else {
-            "css"
-        }
-    }
-
     pub fn to_target_envelope(&self) -> TargetEnvelope {
         TargetEnvelope {
-            method: self.method().to_string(),
+            method: self.method.clone(),
+            cursor: self.cursor.clone(),
             node_ref: self.node_ref.clone(),
             selector: Some(self.selector.clone()),
             index: self.index,
@@ -220,44 +217,64 @@ pub(crate) fn resolve_target(
     node_ref: Option<NodeRef>,
     dom: Option<&DomTree>,
 ) -> Result<TargetResolution> {
+    resolve_target_with_cursor(tool, selector, index, node_ref, None, dom)
+}
+
+pub(crate) fn resolve_target_with_cursor(
+    tool: &str,
+    selector: Option<String>,
+    index: Option<usize>,
+    node_ref: Option<NodeRef>,
+    cursor: Option<Cursor>,
+    dom: Option<&DomTree>,
+) -> Result<TargetResolution> {
     let target_count = usize::from(selector.is_some())
         + usize::from(index.is_some())
-        + usize::from(node_ref.is_some());
+        + usize::from(node_ref.is_some())
+        + usize::from(cursor.is_some());
 
     if target_count > 1 {
         return Ok(TargetResolution::Failure(invalid_target_failure(
-            "Cannot specify more than one of 'selector', 'index', or 'node_ref'.",
+            "Cannot specify more than one of 'selector', 'index', 'node_ref', or 'cursor'.",
         )));
     }
 
     if target_count == 0 {
         return Ok(TargetResolution::Failure(invalid_target_failure(
-            "Must specify one of 'selector', 'index', or 'node_ref'.",
+            "Must specify one of 'selector', 'index', 'node_ref', or 'cursor'.",
         )));
     }
 
-    match (selector, index, node_ref) {
-        (Some(selector), None, None) => Ok(TargetResolution::Resolved(ResolvedTarget {
-            selector,
-            index: None,
-            node_ref: None,
-        })),
-        (None, Some(index), None) => {
+    match (selector, index, node_ref, cursor) {
+        (Some(selector), None, None, None) => {
+            let cursor = dom.and_then(|dom| actionable_cursor_for_selector(dom, &selector));
+
+            Ok(TargetResolution::Resolved(ResolvedTarget {
+                method: "css".to_string(),
+                selector,
+                index: None,
+                node_ref: None,
+                cursor,
+            }))
+        }
+        (None, Some(index), None, None) => {
             let dom = dom.ok_or_else(|| BrowserError::ToolExecutionFailed {
                 tool: tool.to_string(),
                 reason: "DOM tree is required to resolve an element index.".to_string(),
             })?;
-            let selector = dom.get_selector(index).ok_or_else(|| {
+            let cursor = dom.cursor_for_index(index).ok_or_else(|| {
                 BrowserError::ElementNotFound(format!("No element with index {}", index))
             })?;
 
             Ok(TargetResolution::Resolved(ResolvedTarget {
-                selector: selector.clone(),
-                index: Some(index),
-                node_ref: dom.node_ref_for_index(index),
+                method: "index".to_string(),
+                selector: cursor.selector.clone(),
+                index: Some(cursor.index),
+                node_ref: Some(cursor.node_ref.clone()),
+                cursor: Some(cursor),
             }))
         }
-        (None, None, Some(node_ref)) => {
+        (None, None, Some(node_ref), None) => {
             let dom = dom.ok_or_else(|| BrowserError::ToolExecutionFailed {
                 tool: tool.to_string(),
                 reason: "DOM tree is required to resolve a node reference.".to_string(),
@@ -272,17 +289,51 @@ pub(crate) fn resolve_target(
                 )));
             }
 
-            let selector = dom.get_selector(node_ref.index).ok_or_else(|| {
+            let mut cursor = dom.cursor_for_index(node_ref.index).ok_or_else(|| {
                 BrowserError::ElementNotFound(format!(
                     "No element with index {} for the provided node reference",
                     node_ref.index
                 ))
             })?;
+            cursor.node_ref = node_ref.clone();
 
             Ok(TargetResolution::Resolved(ResolvedTarget {
-                selector: selector.clone(),
+                method: "node_ref".to_string(),
+                selector: cursor.selector.clone(),
                 index: Some(node_ref.index),
                 node_ref: Some(node_ref),
+                cursor: Some(cursor),
+            }))
+        }
+        (None, None, None, Some(cursor_input)) => {
+            let dom = dom.ok_or_else(|| BrowserError::ToolExecutionFailed {
+                tool: tool.to_string(),
+                reason: "DOM tree is required to resolve a cursor.".to_string(),
+            })?;
+
+            if cursor_input.node_ref.document_id != dom.document.document_id
+                || cursor_input.node_ref.revision != dom.document.revision
+            {
+                return Ok(TargetResolution::Failure(stale_node_ref_failure(
+                    &cursor_input.node_ref,
+                    &dom.document,
+                )));
+            }
+
+            let mut cursor = dom.cursor_for_index(cursor_input.node_ref.index).ok_or_else(|| {
+                BrowserError::ElementNotFound(format!(
+                    "No element with index {} for the provided cursor",
+                    cursor_input.node_ref.index
+                ))
+            })?;
+            cursor.node_ref = cursor_input.node_ref.clone();
+
+            Ok(TargetResolution::Resolved(ResolvedTarget {
+                method: "cursor".to_string(),
+                selector: cursor.selector.clone(),
+                index: Some(cursor.index),
+                node_ref: Some(cursor.node_ref.clone()),
+                cursor: Some(cursor),
             }))
         }
         _ => Err(BrowserError::ToolExecutionFailed {
@@ -290,6 +341,14 @@ pub(crate) fn resolve_target(
             reason: "Failed to resolve target".to_string(),
         }),
     }
+}
+
+pub(crate) fn actionable_cursor_for_selector(dom: &DomTree, selector: &str) -> Option<Cursor> {
+    dom.selectors
+        .iter()
+        .enumerate()
+        .find_map(|(index, candidate)| (candidate == selector).then(|| dom.cursor_for_index(index)))
+        .flatten()
 }
 
 /// Result of tool execution
@@ -505,6 +564,7 @@ impl ToolRegistry {
         self.register(markdown::GetMarkdownTool);
         self.register(read_links::ReadLinksTool);
         self.register(snapshot::SnapshotTool);
+        self.register(inspect_node::InspectNodeTool);
         self.register(close::CloseTool);
     }
 
@@ -686,12 +746,14 @@ mod tests {
                 assert_eq!(
                     target,
                     ResolvedTarget {
+                        method: "css".to_string(),
                         selector: "#submit".to_string(),
                         index: None,
                         node_ref: None,
+                        cursor: None,
                     }
                 );
-                assert_eq!(target.method(), "css");
+                assert_eq!(target.method, "css");
             }
             TargetResolution::Failure(failure) => panic!("unexpected failure: {:?}", failure),
         }
@@ -708,6 +770,7 @@ mod tests {
                 assert_eq!(
                     target,
                     ResolvedTarget {
+                        method: "index".to_string(),
                         selector: "#submit".to_string(),
                         index: Some(1),
                         node_ref: Some(crate::dom::NodeRef {
@@ -715,9 +778,75 @@ mod tests {
                             revision: "main:1".to_string(),
                             index: 1,
                         }),
+                        cursor: Some(crate::dom::Cursor {
+                            node_ref: crate::dom::NodeRef {
+                                document_id: "doc-1".to_string(),
+                                revision: "main:1".to_string(),
+                                index: 1,
+                            },
+                            selector: "#submit".to_string(),
+                            index: 1,
+                            role: "button".to_string(),
+                            name: "Submit".to_string(),
+                        }),
                     }
                 );
-                assert_eq!(target.method(), "node_ref");
+                assert_eq!(target.method, "index");
+                let envelope = target.to_target_envelope();
+                assert_eq!(
+                    envelope
+                        .cursor
+                        .as_ref()
+                        .map(|cursor| cursor.selector.as_str()),
+                    Some("#submit")
+                );
+            }
+            TargetResolution::Failure(failure) => panic!("unexpected failure: {:?}", failure),
+        }
+    }
+
+    #[test]
+    fn test_resolve_target_with_cursor_accepts_cursor_input() {
+        let dom = sample_dom();
+        let cursor = dom.cursor_for_index(1).expect("cursor should exist");
+        let target = resolve_target_with_cursor(
+            "inspect_node",
+            None,
+            None,
+            None,
+            Some(cursor.clone()),
+            Some(&dom),
+        )
+        .expect("cursor target should resolve against DOM");
+
+        match target {
+            TargetResolution::Resolved(target) => {
+                assert_eq!(target.method, "cursor");
+                assert_eq!(target.selector, "#submit");
+                assert_eq!(target.cursor.as_ref(), Some(&cursor));
+            }
+            TargetResolution::Failure(failure) => panic!("unexpected failure: {:?}", failure),
+        }
+    }
+
+    #[test]
+    fn test_resolve_target_with_cursor_enriches_actionable_selector() {
+        let dom = sample_dom();
+        let target = resolve_target_with_cursor(
+            "inspect_node",
+            Some("#submit".to_string()),
+            None,
+            None,
+            None,
+            Some(&dom),
+        )
+        .expect("selector target should resolve");
+
+        match target {
+            TargetResolution::Resolved(target) => {
+                assert_eq!(target.method, "css");
+                assert_eq!(target.selector, "#submit");
+                assert!(target.cursor.is_some());
             }
             TargetResolution::Failure(failure) => panic!("unexpected failure: {:?}", failure),
         }

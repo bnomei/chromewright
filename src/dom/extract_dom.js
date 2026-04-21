@@ -609,7 +609,7 @@ JSON.stringify((function() {
                 receivesPointerEvents: true
             };
             const frameVisited = new Set();
-            visit(frameSnapshot, frameRootElement, true, frameVisited, false, frameReports);
+            visit(frameSnapshot, frameRootElement, true, frameVisited, true, frameReports);
             normalizeStringChildren(frameSnapshot);
             normalizeGenericRoles(frameSnapshot);
             ariaNode.children.push.apply(ariaNode.children, frameSnapshot.children);

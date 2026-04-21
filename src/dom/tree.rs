@@ -13,6 +13,16 @@ pub struct NodeRef {
     pub index: usize,
 }
 
+/// Reusable handoff payload for a resolved actionable node.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+pub struct Cursor {
+    pub node_ref: NodeRef,
+    pub selector: String,
+    pub index: usize,
+    pub role: String,
+    pub name: String,
+}
+
 /// Metadata about an iframe encountered during extraction.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
 pub struct FrameMetadata {
@@ -42,6 +52,7 @@ pub struct DocumentMetadata {
 /// Agent-facing summary of one actionable node in the current snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct SnapshotNode {
+    pub cursor: Cursor,
     pub node_ref: NodeRef,
     pub index: usize,
     pub role: String,
@@ -266,17 +277,32 @@ impl DomTree {
         })
     }
 
+    /// Build a reusable cursor for an actionable index.
+    pub fn cursor_for_index(&self, index: usize) -> Option<Cursor> {
+        let node = self.find_node_by_index(index)?;
+        let selector = self.get_selector(index)?.clone();
+
+        Some(Cursor {
+            node_ref: self.node_ref_for_index(index)?,
+            selector,
+            index,
+            role: node.role.clone(),
+            name: node.name.clone(),
+        })
+    }
+
     /// Collect the actionable nodes currently exposed to agents.
     pub fn snapshot_nodes(&self) -> Vec<SnapshotNode> {
         self.interactive_indices()
             .into_iter()
             .filter_map(|index| {
-                let node = self.find_node_by_index(index)?;
+                let cursor = self.cursor_for_index(index)?;
                 Some(SnapshotNode {
-                    node_ref: self.node_ref_for_index(index)?,
-                    index,
-                    role: node.role.clone(),
-                    name: node.name.clone(),
+                    node_ref: cursor.node_ref.clone(),
+                    index: cursor.index,
+                    role: cursor.role.clone(),
+                    name: cursor.name.clone(),
+                    cursor,
                 })
             })
             .collect()
@@ -427,6 +453,24 @@ mod tests {
     }
 
     #[test]
+    fn test_cursor_for_index_uses_document_metadata_and_selector() {
+        let root = create_test_tree();
+        let mut tree = DomTree::new(root);
+        tree.document.document_id = "doc-1".to_string();
+        tree.document.revision = "rev-7".to_string();
+        tree.selectors = vec!["button.primary".to_string(), "a[href='/next']".to_string()];
+
+        let cursor = tree.cursor_for_index(1).expect("cursor should exist");
+        assert_eq!(cursor.node_ref.document_id, "doc-1");
+        assert_eq!(cursor.node_ref.revision, "rev-7");
+        assert_eq!(cursor.node_ref.index, 1);
+        assert_eq!(cursor.selector, "a[href='/next']");
+        assert_eq!(cursor.index, 1);
+        assert_eq!(cursor.role, "link");
+        assert_eq!(cursor.name, "Go to page");
+    }
+
+    #[test]
     fn test_count_nodes() {
         let root = create_test_tree();
         let tree = DomTree::new(root);
@@ -502,8 +546,17 @@ mod tests {
         assert_eq!(snapshot_nodes[0].name, "Click me");
         assert_eq!(snapshot_nodes[0].node_ref.document_id, "doc-1");
         assert_eq!(snapshot_nodes[0].node_ref.revision, "rev-2");
+        assert_eq!(snapshot_nodes[0].cursor.selector, "button.primary");
+        assert_eq!(snapshot_nodes[0].cursor.index, 0);
+        assert_eq!(snapshot_nodes[0].cursor.role, "button");
+        assert_eq!(snapshot_nodes[0].cursor.name, "Click me");
+        assert_eq!(
+            snapshot_nodes[0].cursor.node_ref,
+            snapshot_nodes[0].node_ref
+        );
         assert_eq!(snapshot_nodes[1].index, 1);
         assert_eq!(snapshot_nodes[1].role, "link");
+        assert_eq!(snapshot_nodes[1].cursor.selector, "a[href='/next']");
     }
 
     #[test]

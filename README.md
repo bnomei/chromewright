@@ -96,10 +96,11 @@ Supported transports:
 
 ## Features
 
-- Default high-level agent tools for snapshot, navigate, click, input, wait, tabs, and extraction
+- Default high-level agent tools for snapshot, inspect_node, navigate, click, input, wait, tabs, and extraction
 - DOM extraction with revision-scoped node references and iframe metadata
+- Cursor-first targeted inspection via `snapshot` and `inspect_node`, without expanding into a wide getter family
 - Metadata-first post-action envelopes for high-level tools, with the full snapshot surface kept on the `snapshot` tool
-- CSS selector, numeric index, or `node_ref` targeting for document interactions
+- Cursor, CSS selector, numeric index, or `node_ref` targeting for document interactions, with `cursor` preferred for follow-up calls
 - Explicit operator opt-ins for raw JavaScript evaluation and filesystem-bound screenshots
 - Thread-safe browser session management
 
@@ -109,6 +110,10 @@ The default `ToolRegistry` and MCP server expose the high-level document interac
 Raw JavaScript evaluation and path-based screenshot capture are intentionally outside that default surface.
 High-level action tools now return updated document metadata by default; call `snapshot` when you need
 the full YAML snapshot plus actionable-node list.
+For targeted DOM reads, use `snapshot` to choose a node and reuse its `cursor`, then call
+`inspect_node`; keep `evaluate` as the explicit operator escape hatch when the bounded inspection
+surface is insufficient. During the migration, targetable tools still accept `selector`, `index`,
+and `node_ref`, but `cursor` is the preferred follow-up handle.
 See [docs/tool-description-index.md](docs/tool-description-index.md) for the concise tool-description
 index and wording rules.
 

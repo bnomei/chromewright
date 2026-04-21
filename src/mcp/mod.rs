@@ -99,7 +99,8 @@ register_mcp_tools! {
 
     // ---- Page Content and Extraction ----
     browser_get_markdown => tools::markdown::GetMarkdownTool, "Read page content as markdown. Extraction only; use snapshot for actions.";
-    browser_snapshot => tools::snapshot::SnapshotTool, "Capture page state and node_refs for actions. Next: click, input, select, hover, wait.";
+    browser_snapshot => tools::snapshot::SnapshotTool, "Capture page state and node cursors. Next: inspect_node, click, input, select, hover, wait.";
+    browser_inspect_node => tools::inspect_node::InspectNodeTool, "Inspect one node. Prefer cursor after snapshot; selector/index/node_ref still work.";
     // browser_get_text => tools::extract::ExtractContentTool, "Extract text or HTML content from the page or an element";
 
     // ---- Interaction ----
@@ -280,8 +281,9 @@ mod tests {
             ("browser_get_markdown", ["snapshot"].as_slice()),
             (
                 "browser_snapshot",
-                ["node_refs", "click", "wait"].as_slice(),
+                ["cursors", "inspect_node", "click", "wait"].as_slice(),
             ),
+            ("browser_inspect_node", ["cursor", "snapshot"].as_slice()),
             ("browser_click", ["snapshot", "wait"].as_slice()),
             ("browser_input_fill", ["snapshot", "press_key"].as_slice()),
             ("browser_select", ["snapshot", "wait"].as_slice()),
