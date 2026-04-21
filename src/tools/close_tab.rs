@@ -11,8 +11,17 @@ pub struct CloseTabParams {}
 #[derive(Default)]
 pub struct CloseTabTool;
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CloseTabOutput {
+    pub index: usize,
+    pub title: String,
+    pub url: String,
+    pub message: String,
+}
+
 impl Tool for CloseTabTool {
     type Params = CloseTabParams;
+    type Output = CloseTabOutput;
 
     fn name(&self) -> &str {
         "close_tab"
@@ -45,11 +54,11 @@ impl Tool for CloseTabTool {
             current_index, tab_title, tab_url
         );
 
-        Ok(ToolResult::success_with(serde_json::json!({
-            "index": current_index,
-            "title": tab_title,
-            "url": tab_url,
-            "message": message
-        })))
+        Ok(ToolResult::success_with(CloseTabOutput {
+            index: current_index,
+            message,
+            title: tab_title,
+            url: tab_url,
+        }))
     }
 }

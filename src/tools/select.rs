@@ -31,8 +31,19 @@ pub struct SelectTool;
 
 const SELECT_JS: &str = include_str!("select.js");
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SelectOutput {
+    #[serde(flatten)]
+    pub envelope: crate::tools::DocumentEnvelope,
+    pub action: String,
+    pub value: String,
+    #[serde(rename = "selectedText")]
+    pub selected_text: Option<String>,
+}
+
 impl Tool for SelectTool {
     type Params = SelectParams;
+    type Output = SelectOutput;
 
     fn name(&self) -> &str {
         "select"
@@ -86,20 +97,18 @@ impl Tool for SelectTool {
 
         if result_json["success"].as_bool() == Some(true) {
             context.invalidate_dom();
-            let mut payload = serde_json::to_value(build_document_envelope(
-                context,
-                Some(&target),
-                DocumentEnvelopeOptions::minimal(),
-            )?)?;
-            if let serde_json::Value::Object(ref mut map) = payload {
-                map.insert("action".to_string(), serde_json::json!("select"));
-                map.insert("value".to_string(), serde_json::json!(value));
-                map.insert(
-                    "selectedText".to_string(),
-                    result_json["selectedText"].clone(),
-                );
-            }
-            Ok(ToolResult::success_with(payload))
+            Ok(ToolResult::success_with(SelectOutput {
+                envelope: build_document_envelope(
+                    context,
+                    Some(&target),
+                    DocumentEnvelopeOptions::minimal(),
+                )?,
+                action: "select".to_string(),
+                value,
+                selected_text: result_json["selectedText"]
+                    .as_str()
+                    .map(ToString::to_string),
+            }))
         } else {
             Err(BrowserError::ToolExecutionFailed {
                 tool: "select".to_string(),

@@ -31,8 +31,18 @@ pub struct InputParams {
 #[derive(Default)]
 pub struct InputTool;
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct InputOutput {
+    #[serde(flatten)]
+    pub envelope: crate::tools::DocumentEnvelope,
+    pub action: String,
+    pub text: String,
+    pub clear: bool,
+}
+
 impl Tool for InputTool {
     type Params = InputParams;
+    type Output = InputOutput;
 
     fn name(&self) -> &str {
         "input"
@@ -119,17 +129,15 @@ impl Tool for InputTool {
             })?;
 
         context.invalidate_dom();
-        let mut result_json = serde_json::to_value(build_document_envelope(
-            context,
-            Some(&target),
-            DocumentEnvelopeOptions::minimal(),
-        )?)?;
-        if let serde_json::Value::Object(ref mut map) = result_json {
-            map.insert("action".to_string(), serde_json::json!("input"));
-            map.insert("text".to_string(), serde_json::json!(text));
-            map.insert("clear".to_string(), serde_json::json!(clear));
-        }
-
-        Ok(ToolResult::success_with(result_json))
+        Ok(ToolResult::success_with(InputOutput {
+            envelope: build_document_envelope(
+                context,
+                Some(&target),
+                DocumentEnvelopeOptions::minimal(),
+            )?,
+            action: "input".to_string(),
+            text,
+            clear,
+        }))
     }
 }

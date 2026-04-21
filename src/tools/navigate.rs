@@ -29,8 +29,17 @@ fn default_wait() -> bool {
 #[derive(Default)]
 pub struct NavigateTool;
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct NavigateOutput {
+    #[serde(flatten)]
+    pub envelope: crate::tools::DocumentEnvelope,
+    pub action: String,
+    pub url: String,
+}
+
 impl Tool for NavigateTool {
     type Params = NavigateParams;
+    type Output = NavigateOutput;
 
     fn name(&self) -> &str {
         "navigate"
@@ -53,16 +62,10 @@ impl Tool for NavigateTool {
         }
 
         context.invalidate_dom();
-        let mut payload = serde_json::to_value(build_document_envelope(
-            context,
-            None,
-            DocumentEnvelopeOptions::minimal(),
-        )?)?;
-        if let serde_json::Value::Object(ref mut map) = payload {
-            map.insert("action".to_string(), serde_json::json!("navigate"));
-            map.insert("url".to_string(), serde_json::json!(normalized_url));
-        }
-
-        Ok(ToolResult::success_with(payload))
+        Ok(ToolResult::success_with(NavigateOutput {
+            envelope: build_document_envelope(context, None, DocumentEnvelopeOptions::minimal())?,
+            action: "navigate".to_string(),
+            url: normalized_url,
+        }))
     }
 }

@@ -18,8 +18,17 @@ pub struct ScrollTool;
 
 const SCROLL_JS: &str = include_str!("scroll.js");
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ScrollOutput {
+    pub scrolled: i64,
+    pub is_at_bottom: bool,
+    pub message: String,
+}
+
 impl Tool for ScrollTool {
     type Params = ScrollParams;
+    type Output = ScrollOutput;
 
     fn name(&self) -> &str {
         "scroll"
@@ -66,11 +75,11 @@ impl Tool for ScrollTool {
             )
         };
 
-        Ok(ToolResult::success_with(serde_json::json!({
-            "scrolled": actual_scroll,
-            "isAtBottom": is_at_bottom,
-            "message": message
-        })))
+        Ok(ToolResult::success_with(ScrollOutput {
+            scrolled: actual_scroll,
+            is_at_bottom,
+            message,
+        }))
     }
 }
 

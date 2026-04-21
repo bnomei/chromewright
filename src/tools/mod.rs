@@ -396,12 +396,20 @@ pub trait Tool: Send + Sync + Default {
     /// Associated parameter type for this tool
     type Params: serde::Serialize + for<'de> serde::Deserialize<'de> + schemars::JsonSchema;
 
+    /// Associated success output type for this tool
+    type Output: serde::Serialize + schemars::JsonSchema + 'static;
+
     /// Get tool name
     fn name(&self) -> &str;
 
     /// Get tool parameter schema (JSON Schema)
     fn parameters_schema(&self) -> Value {
         serde_json::to_value(schemars::schema_for!(Self::Params)).unwrap_or_default()
+    }
+
+    /// Get tool success output schema (JSON Schema)
+    fn output_schema(&self) -> Value {
+        serde_json::to_value(schemars::schema_for!(Self::Output)).unwrap_or_default()
     }
 
     /// Execute the tool with strongly-typed parameters
@@ -420,6 +428,7 @@ pub trait Tool: Send + Sync + Default {
 pub trait DynTool: Send + Sync {
     fn name(&self) -> &str;
     fn parameters_schema(&self) -> Value;
+    fn output_schema(&self) -> Value;
     fn execute(&self, params: Value, context: &mut ToolContext) -> Result<ToolResult>;
 }
 
@@ -431,6 +440,10 @@ impl<T: Tool> DynTool for T {
 
     fn parameters_schema(&self) -> Value {
         Tool::parameters_schema(self)
+    }
+
+    fn output_schema(&self) -> Value {
+        Tool::output_schema(self)
     }
 
     fn execute(&self, params: Value, context: &mut ToolContext) -> Result<ToolResult> {
@@ -598,6 +611,32 @@ mod tests {
         assert!(registry.has("snapshot"));
         assert!(registry.has("evaluate"));
         assert!(registry.has("screenshot"));
+    }
+
+    #[test]
+    fn test_registered_tools_expose_object_input_and_output_schemas() {
+        for registry in [
+            ToolRegistry::with_defaults(),
+            ToolRegistry::with_all_tools(),
+        ] {
+            for tool in registry.all_tools() {
+                let input_schema = tool.parameters_schema();
+                assert_eq!(
+                    input_schema.get("type").and_then(Value::as_str),
+                    Some("object"),
+                    "tool '{}' should expose an object input schema",
+                    tool.name()
+                );
+
+                let output_schema = tool.output_schema();
+                assert_eq!(
+                    output_schema.get("type").and_then(Value::as_str),
+                    Some("object"),
+                    "tool '{}' should expose an object output schema",
+                    tool.name()
+                );
+            }
+        }
     }
 
     fn sample_dom() -> DomTree {

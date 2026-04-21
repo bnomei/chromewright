@@ -21,8 +21,18 @@ pub struct NewTabParams {
 #[derive(Default)]
 pub struct NewTabTool;
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct NewTabOutput {
+    #[serde(flatten)]
+    pub envelope: crate::tools::DocumentEnvelope,
+    pub action: String,
+    pub url: String,
+    pub message: String,
+}
+
 impl Tool for NewTabTool {
     type Params = NewTabParams;
+    type Output = NewTabOutput;
 
     fn name(&self) -> &str {
         "new_tab"
@@ -32,20 +42,11 @@ impl Tool for NewTabTool {
         let normalized_url = validate_navigation_url(&params.url, params.allow_unsafe)?;
         context.session.open_tab(&normalized_url)?;
         context.invalidate_dom();
-        let mut payload = serde_json::to_value(build_document_envelope(
-            context,
-            None,
-            DocumentEnvelopeOptions::minimal(),
-        )?)?;
-        if let serde_json::Value::Object(ref mut map) = payload {
-            map.insert("action".to_string(), serde_json::json!("new_tab"));
-            map.insert("url".to_string(), serde_json::json!(normalized_url.clone()));
-            map.insert(
-                "message".to_string(),
-                serde_json::json!(format!("Opened a new tab for {}", normalized_url)),
-            );
-        }
-
-        Ok(ToolResult::success_with(payload))
+        Ok(ToolResult::success_with(NewTabOutput {
+            envelope: build_document_envelope(context, None, DocumentEnvelopeOptions::minimal())?,
+            action: "new_tab".to_string(),
+            message: format!("Opened a new tab for {}", normalized_url),
+            url: normalized_url,
+        }))
     }
 }

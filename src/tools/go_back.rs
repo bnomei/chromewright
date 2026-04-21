@@ -13,8 +13,16 @@ pub struct GoBackParams {}
 #[derive(Default)]
 pub struct GoBackTool;
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GoBackOutput {
+    #[serde(flatten)]
+    pub envelope: crate::tools::DocumentEnvelope,
+    pub action: String,
+}
+
 impl Tool for GoBackTool {
     type Params = GoBackParams;
+    type Output = GoBackOutput;
 
     fn name(&self) -> &str {
         "go_back"
@@ -34,15 +42,9 @@ impl Tool for GoBackTool {
             })?;
 
         context.invalidate_dom();
-        let mut payload = serde_json::to_value(build_document_envelope(
-            context,
-            None,
-            DocumentEnvelopeOptions::minimal(),
-        )?)?;
-        if let serde_json::Value::Object(ref mut map) = payload {
-            map.insert("action".to_string(), serde_json::json!("go_back"));
-        }
-
-        Ok(ToolResult::success_with(payload))
+        Ok(ToolResult::success_with(GoBackOutput {
+            envelope: build_document_envelope(context, None, DocumentEnvelopeOptions::minimal())?,
+            action: "go_back".to_string(),
+        }))
     }
 }

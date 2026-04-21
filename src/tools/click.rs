@@ -26,8 +26,16 @@ pub struct ClickParams {
 #[derive(Default)]
 pub struct ClickTool;
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ClickOutput {
+    #[serde(flatten)]
+    pub envelope: crate::tools::DocumentEnvelope,
+    pub action: String,
+}
+
 impl Tool for ClickTool {
     type Params = ClickParams;
+    type Output = ClickOutput;
 
     fn name(&self) -> &str {
         "click"
@@ -61,15 +69,13 @@ impl Tool for ClickTool {
             })?;
 
         context.invalidate_dom();
-        let mut result = serde_json::to_value(build_document_envelope(
-            context,
-            Some(&target),
-            DocumentEnvelopeOptions::minimal(),
-        )?)?;
-        if let serde_json::Value::Object(ref mut map) = result {
-            map.insert("action".to_string(), serde_json::json!("click"));
-        }
-
-        Ok(ToolResult::success_with(result))
+        Ok(ToolResult::success_with(ClickOutput {
+            envelope: build_document_envelope(
+                context,
+                Some(&target),
+                DocumentEnvelopeOptions::minimal(),
+            )?,
+            action: "click".to_string(),
+        }))
     }
 }

@@ -21,8 +21,14 @@ pub struct EvaluateParams {
 #[derive(Default)]
 pub struct EvaluateTool;
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct EvaluateOutput {
+    pub result: Value,
+}
+
 impl Tool for EvaluateTool {
     type Params = EvaluateParams;
+    type Output = EvaluateOutput;
 
     fn name(&self) -> &str {
         "evaluate"
@@ -47,8 +53,8 @@ impl Tool for EvaluateTool {
 
         let result_value = result.value.unwrap_or(Value::Null);
 
-        Ok(ToolResult::success_with(serde_json::json!({
-            "result": result_value
-        })))
+        Ok(ToolResult::success_with(EvaluateOutput {
+            result: result_value,
+        }))
     }
 }

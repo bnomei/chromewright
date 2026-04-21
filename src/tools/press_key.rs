@@ -14,8 +14,14 @@ pub struct PressKeyParams {
 #[derive(Default)]
 pub struct PressKeyTool;
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PressKeyOutput {
+    pub key: String,
+}
+
 impl Tool for PressKeyTool {
     type Params = PressKeyParams;
+    type Output = PressKeyOutput;
 
     fn name(&self) -> &str {
         "press_key"
@@ -33,9 +39,7 @@ impl Tool for PressKeyTool {
             }
         })?;
 
-        Ok(ToolResult::success_with(serde_json::json!({
-            "key": params.key
-        })))
+        Ok(ToolResult::success_with(PressKeyOutput { key: params.key }))
     }
 }
 

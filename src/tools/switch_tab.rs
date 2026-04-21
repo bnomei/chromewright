@@ -14,8 +14,17 @@ pub struct SwitchTabParams {
 #[derive(Default)]
 pub struct SwitchTabTool;
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SwitchTabOutput {
+    pub index: usize,
+    pub title: String,
+    pub url: String,
+    pub message: String,
+}
+
 impl Tool for SwitchTabTool {
     type Params = SwitchTabParams;
+    type Output = SwitchTabOutput;
 
     fn name(&self) -> &str {
         "switch_tab"
@@ -69,11 +78,11 @@ impl Tool for SwitchTabTool {
             params.index, tab_list_str
         );
 
-        Ok(ToolResult::success_with(serde_json::json!({
-            "index": params.index,
-            "title": title,
-            "url": url,
-            "message": summary
-        })))
+        Ok(ToolResult::success_with(SwitchTabOutput {
+            index: params.index,
+            message: summary,
+            title,
+            url,
+        }))
     }
 }

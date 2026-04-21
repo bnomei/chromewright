@@ -70,7 +70,10 @@ macro_rules! register_mcp_tools {
         #[tool_router]
         impl BrowserServer {
             $(
-                #[tool(description = $description)]
+                #[tool(
+                    description = $description,
+                    output_schema = rmcp::handler::server::tool::schema_for_type::<<$tool_type as Tool>::Output>()
+                )]
                 fn $mcp_name(
                     &self,
                     params: Parameters<<$tool_type as Tool>::Params>,
@@ -118,6 +121,7 @@ register_mcp_tools! {
 #[cfg(test)]
 mod tests {
     use super::convert_result;
+    use crate::mcp::BrowserServer;
     use crate::tools::ToolResult as InternalToolResult;
     use serde_json::json;
 
@@ -195,5 +199,35 @@ mod tests {
             .and_then(|content| content.as_text())
             .map(|content| content.text.as_ref());
         assert_eq!(text, Some("Success"));
+    }
+
+    #[test]
+    fn test_mcp_tools_advertise_output_schemas() {
+        let tools = BrowserServer::tool_router().list_all();
+
+        assert!(!tools.is_empty(), "expected MCP tools to be registered");
+
+        let mut missing_output_schema = Vec::new();
+        let mut non_object_output_schema = Vec::new();
+
+        for tool in tools {
+            match tool.output_schema.as_ref() {
+                None => missing_output_schema.push(tool.name.to_string()),
+                Some(schema) => {
+                    if schema.get("type").and_then(|value| value.as_str()) != Some("object") {
+                        non_object_output_schema.push(tool.name.to_string());
+                    }
+                }
+            }
+        }
+
+        assert!(
+            missing_output_schema.is_empty(),
+            "MCP tools missing output_schema: {missing_output_schema:?}"
+        );
+        assert!(
+            non_object_output_schema.is_empty(),
+            "MCP tools with non-object output_schema: {non_object_output_schema:?}"
+        );
     }
 }

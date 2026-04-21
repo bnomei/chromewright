@@ -13,8 +13,16 @@ pub struct GoForwardParams {}
 #[derive(Default)]
 pub struct GoForwardTool;
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GoForwardOutput {
+    #[serde(flatten)]
+    pub envelope: crate::tools::DocumentEnvelope,
+    pub action: String,
+}
+
 impl Tool for GoForwardTool {
     type Params = GoForwardParams;
+    type Output = GoForwardOutput;
 
     fn name(&self) -> &str {
         "go_forward"
@@ -34,15 +42,9 @@ impl Tool for GoForwardTool {
             })?;
 
         context.invalidate_dom();
-        let mut payload = serde_json::to_value(build_document_envelope(
-            context,
-            None,
-            DocumentEnvelopeOptions::minimal(),
-        )?)?;
-        if let serde_json::Value::Object(ref mut map) = payload {
-            map.insert("action".to_string(), serde_json::json!("go_forward"));
-        }
-
-        Ok(ToolResult::success_with(payload))
+        Ok(ToolResult::success_with(GoForwardOutput {
+            envelope: build_document_envelope(context, None, DocumentEnvelopeOptions::minimal())?,
+            action: "go_forward".to_string(),
+        }))
     }
 }

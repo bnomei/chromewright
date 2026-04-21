@@ -21,8 +21,16 @@ fn default_format() -> String {
 #[derive(Default)]
 pub struct ExtractContentTool;
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ExtractOutput {
+    pub content: String,
+    pub format: String,
+    pub length: usize,
+}
+
 impl Tool for ExtractContentTool {
     type Params = ExtractParams;
+    type Output = ExtractOutput;
 
     fn name(&self) -> &str {
         "extract"
@@ -72,10 +80,10 @@ impl Tool for ExtractContentTool {
                 .unwrap_or_default()
         };
 
-        Ok(ToolResult::success_with(serde_json::json!({
-            "content": content,
-            "format": params.format,
-            "length": content.len()
-        })))
+        Ok(ToolResult::success_with(ExtractOutput {
+            length: content.len(),
+            format: params.format,
+            content,
+        }))
     }
 }

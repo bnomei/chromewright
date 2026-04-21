@@ -28,8 +28,25 @@ pub struct HoverTool;
 
 const HOVER_JS: &str = include_str!("hover.js");
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HoverElement {
+    pub tag_name: String,
+    pub id: String,
+    pub class_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct HoverOutput {
+    #[serde(flatten)]
+    pub envelope: crate::tools::DocumentEnvelope,
+    pub action: String,
+    pub element: HoverElement,
+}
+
 impl Tool for HoverTool {
     type Params = HoverParams;
+    type Output = HoverOutput;
 
     fn name(&self) -> &str {
         "hover"
@@ -83,23 +100,25 @@ impl Tool for HoverTool {
 
         if result_json["success"].as_bool() == Some(true) {
             context.invalidate_dom();
-            let mut payload = serde_json::to_value(build_document_envelope(
-                context,
-                Some(&target),
-                DocumentEnvelopeOptions::minimal(),
-            )?)?;
-            if let serde_json::Value::Object(ref mut map) = payload {
-                map.insert("action".to_string(), serde_json::json!("hover"));
-                map.insert(
-                    "element".to_string(),
-                    serde_json::json!({
-                        "tagName": result_json["tagName"],
-                        "id": result_json["id"],
-                        "className": result_json["className"]
-                    }),
-                );
-            }
-            Ok(ToolResult::success_with(payload))
+            Ok(ToolResult::success_with(HoverOutput {
+                envelope: build_document_envelope(
+                    context,
+                    Some(&target),
+                    DocumentEnvelopeOptions::minimal(),
+                )?,
+                action: "hover".to_string(),
+                element: HoverElement {
+                    tag_name: result_json["tagName"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string(),
+                    id: result_json["id"].as_str().unwrap_or_default().to_string(),
+                    class_name: result_json["className"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string(),
+                },
+            }))
         } else {
             Err(BrowserError::ToolExecutionFailed {
                 tool: "hover".to_string(),

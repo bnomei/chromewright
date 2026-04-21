@@ -20,6 +20,7 @@ pub struct SnapshotTool;
 
 impl Tool for SnapshotTool {
     type Params = SnapshotParams;
+    type Output = crate::tools::DocumentEnvelope;
 
     fn name(&self) -> &str {
         "snapshot"

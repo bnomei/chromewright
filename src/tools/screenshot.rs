@@ -21,8 +21,17 @@ pub struct ScreenshotParams {
 #[derive(Default)]
 pub struct ScreenshotTool;
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ScreenshotOutput {
+    pub path: String,
+    pub resolved_path: String,
+    pub size_bytes: usize,
+    pub full_page: bool,
+}
+
 impl Tool for ScreenshotTool {
     type Params = ScreenshotParams;
+    type Output = ScreenshotOutput;
 
     fn name(&self) -> &str {
         "screenshot"
@@ -64,12 +73,12 @@ impl Tool for ScreenshotTool {
             BrowserError::ScreenshotFailed(format!("Failed to save screenshot: {}", e))
         })?;
 
-        Ok(ToolResult::success_with(serde_json::json!({
-            "path": params.path,
-            "resolved_path": output_path,
-            "size_bytes": screenshot_data.len(),
-            "full_page": params.full_page
-        })))
+        Ok(ToolResult::success_with(ScreenshotOutput {
+            path: params.path,
+            resolved_path: output_path.display().to_string(),
+            size_bytes: screenshot_data.len(),
+            full_page: params.full_page,
+        }))
     }
 }
 

@@ -11,8 +11,14 @@ pub struct CloseParams {}
 #[derive(Default)]
 pub struct CloseTool;
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CloseOutput {
+    pub message: String,
+}
+
 impl Tool for CloseTool {
     type Params = CloseParams;
+    type Output = CloseOutput;
 
     fn name(&self) -> &str {
         "close"
@@ -31,8 +37,8 @@ impl Tool for CloseTool {
                 reason: e.to_string(),
             })?;
 
-        Ok(ToolResult::success_with(serde_json::json!({
-            "message": "Browser closed successfully"
-        })))
+        Ok(ToolResult::success_with(CloseOutput {
+            message: "Browser closed successfully".to_string(),
+        }))
     }
 }

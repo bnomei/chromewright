@@ -40,8 +40,24 @@ impl Default for GetMarkdownParams {
 #[derive(Default)]
 pub struct GetMarkdownTool;
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GetMarkdownOutput {
+    pub markdown: String,
+    pub title: String,
+    pub url: String,
+    pub current_page: usize,
+    pub total_pages: usize,
+    pub has_more_pages: bool,
+    pub length: usize,
+    pub byline: String,
+    pub excerpt: String,
+    pub site_name: String,
+}
+
 impl Tool for GetMarkdownTool {
     type Params = GetMarkdownParams;
+    type Output = GetMarkdownOutput;
 
     fn name(&self) -> &str {
         "get_markdown"
@@ -141,7 +157,7 @@ fn extract_markdown(context: &ToolContext) -> Result<ExtractionResult> {
     }
 }
 
-fn paginate_markdown(entry: &MarkdownCacheEntry, params: &GetMarkdownParams) -> serde_json::Value {
+fn paginate_markdown(entry: &MarkdownCacheEntry, params: &GetMarkdownParams) -> GetMarkdownOutput {
     let total_pages = if entry.full_markdown.is_empty() {
         1
     } else {
@@ -179,18 +195,20 @@ fn paginate_markdown(entry: &MarkdownCacheEntry, params: &GetMarkdownParams) -> 
         page_content.push_str(&pagination_info);
     }
 
-    serde_json::json!({
-        "markdown": page_content,
-        "title": entry.title,
-        "url": entry.url,
-        "currentPage": current_page,
-        "totalPages": total_pages,
-        "hasMorePages": current_page < total_pages,
-        "length": page_content.len(),
-        "byline": entry.byline,
-        "excerpt": entry.excerpt,
-        "siteName": entry.site_name,
-    })
+    let length = page_content.len();
+
+    GetMarkdownOutput {
+        markdown: page_content,
+        title: entry.title.clone(),
+        url: entry.url.clone(),
+        current_page,
+        total_pages,
+        has_more_pages: current_page < total_pages,
+        length,
+        byline: entry.byline.clone(),
+        excerpt: entry.excerpt.clone(),
+        site_name: entry.site_name.clone(),
+    }
 }
 
 fn wait_for_markdown_settle(context: &ToolContext, timeout: Duration) -> Result<()> {

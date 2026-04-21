@@ -17,8 +17,15 @@ pub struct Link {
 #[derive(Default)]
 pub struct ReadLinksTool;
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ReadLinksOutput {
+    pub links: Vec<Link>,
+    pub count: usize,
+}
+
 impl Tool for ReadLinksTool {
     type Params = ReadLinksParams;
+    type Output = ReadLinksOutput;
 
     fn name(&self) -> &str {
         "read_links"
@@ -55,9 +62,9 @@ impl Tool for ReadLinksTool {
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
 
-        Ok(ToolResult::success_with(serde_json::json!({
-            "links": links,
-            "count": links.len()
-        })))
+        Ok(ToolResult::success_with(ReadLinksOutput {
+            count: links.len(),
+            links,
+        }))
     }
 }

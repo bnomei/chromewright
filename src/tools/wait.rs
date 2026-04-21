@@ -102,8 +102,20 @@ fn default_timeout() -> u64 {
 #[derive(Default)]
 pub struct WaitTool;
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WaitOutput {
+    #[serde(flatten)]
+    pub envelope: crate::tools::DocumentEnvelope,
+    pub action: String,
+    pub condition: String,
+    pub elapsed_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub since_revision: Option<String>,
+}
+
 impl Tool for WaitTool {
     type Params = WaitParams;
+    type Output = WaitOutput;
 
     fn name(&self) -> &str {
         "wait"
@@ -120,23 +132,17 @@ impl Tool for WaitTool {
                     .wait_for_document_ready_with_timeout(timeout)?;
                 context.invalidate_dom();
 
-                let mut payload = serde_json::to_value(build_document_envelope(
-                    context,
-                    None,
-                    DocumentEnvelopeOptions::minimal(),
-                )?)?;
-                if let serde_json::Value::Object(ref mut map) = payload {
-                    map.insert("action".to_string(), serde_json::json!("wait"));
-                    map.insert(
-                        "condition".to_string(),
-                        serde_json::json!("navigation_settled"),
-                    );
-                    map.insert(
-                        "elapsed_ms".to_string(),
-                        serde_json::json!(start.elapsed().as_millis() as u64),
-                    );
-                }
-                Ok(ToolResult::success_with(payload))
+                Ok(ToolResult::success_with(WaitOutput {
+                    envelope: build_document_envelope(
+                        context,
+                        None,
+                        DocumentEnvelopeOptions::minimal(),
+                    )?,
+                    action: "wait".to_string(),
+                    condition: "navigation_settled".to_string(),
+                    elapsed_ms: start.elapsed().as_millis() as u64,
+                    since_revision: None,
+                }))
             }
             WaitCondition::RevisionChanged => {
                 let baseline = match params.since_revision {
@@ -148,24 +154,17 @@ impl Tool for WaitTool {
                     let current_revision = context.session.document_metadata()?.revision;
                     if current_revision != baseline {
                         context.invalidate_dom();
-                        let mut payload = serde_json::to_value(build_document_envelope(
-                            context,
-                            None,
-                            DocumentEnvelopeOptions::minimal(),
-                        )?)?;
-                        if let serde_json::Value::Object(ref mut map) = payload {
-                            map.insert("action".to_string(), serde_json::json!("wait"));
-                            map.insert(
-                                "condition".to_string(),
-                                serde_json::json!("revision_changed"),
-                            );
-                            map.insert("since_revision".to_string(), serde_json::json!(baseline));
-                            map.insert(
-                                "elapsed_ms".to_string(),
-                                serde_json::json!(start.elapsed().as_millis() as u64),
-                            );
-                        }
-                        return Ok(ToolResult::success_with(payload));
+                        return Ok(ToolResult::success_with(WaitOutput {
+                            envelope: build_document_envelope(
+                                context,
+                                None,
+                                DocumentEnvelopeOptions::minimal(),
+                            )?,
+                            action: "wait".to_string(),
+                            condition: "revision_changed".to_string(),
+                            elapsed_ms: start.elapsed().as_millis() as u64,
+                            since_revision: Some(baseline),
+                        }));
                     }
 
                     if start.elapsed() >= timeout {
@@ -212,23 +211,17 @@ impl Tool for WaitTool {
                         params.value.as_deref(),
                     ) {
                         context.invalidate_dom();
-                        let mut payload = serde_json::to_value(build_document_envelope(
-                            context,
-                            Some(&target),
-                            DocumentEnvelopeOptions::minimal(),
-                        )?)?;
-                        if let serde_json::Value::Object(ref mut map) = payload {
-                            map.insert("action".to_string(), serde_json::json!("wait"));
-                            map.insert(
-                                "condition".to_string(),
-                                serde_json::json!(condition_name(&condition)),
-                            );
-                            map.insert(
-                                "elapsed_ms".to_string(),
-                                serde_json::json!(start.elapsed().as_millis() as u64),
-                            );
-                        }
-                        return Ok(ToolResult::success_with(payload));
+                        return Ok(ToolResult::success_with(WaitOutput {
+                            envelope: build_document_envelope(
+                                context,
+                                Some(&target),
+                                DocumentEnvelopeOptions::minimal(),
+                            )?,
+                            action: "wait".to_string(),
+                            condition: condition_name(&condition).to_string(),
+                            elapsed_ms: start.elapsed().as_millis() as u64,
+                            since_revision: None,
+                        }));
                     }
 
                     if start.elapsed() >= timeout {

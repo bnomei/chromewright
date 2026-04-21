@@ -24,8 +24,16 @@ pub struct TabListParams {}
 #[derive(Default)]
 pub struct TabListTool;
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TabListOutput {
+    pub tab_list: Vec<TabInfo>,
+    pub count: usize,
+    pub summary: String,
+}
+
 impl Tool for TabListTool {
     type Params = TabListParams;
+    type Output = TabListOutput;
 
     fn name(&self) -> &str {
         "tab_list"
@@ -79,10 +87,10 @@ impl Tool for TabListTool {
             "No tabs available".to_string()
         };
 
-        Ok(ToolResult::success_with(serde_json::json!({
-            "tab_list": tab_list,
-            "count": tab_list.len(),
-            "summary": summary
-        })))
+        Ok(ToolResult::success_with(TabListOutput {
+            count: tab_list.len(),
+            summary,
+            tab_list,
+        }))
     }
 }
