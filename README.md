@@ -50,6 +50,17 @@ cargo run --features mcp-server --bin mcp-server -- \
 cargo run --features mcp-server --bin mcp-server -- --transport http
 ```
 
+Recommended macOS launch command for a visible dedicated Chrome session that this repo can reconnect to reliably:
+
+```bash
+open -na "Google Chrome" --args \
+  --remote-debugging-port=9222 \
+  --user-data-dir="$HOME/.browser-use-agent-profile"
+```
+
+Use this when you want a headed browser without attaching to your personal Chrome profile.
+After Chrome is running, point the MCP server at the DevTools browser WebSocket exposed on port `9222`.
+
 Supported browser-mode flags:
 
 - `--headed`

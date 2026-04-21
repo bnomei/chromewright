@@ -44,6 +44,16 @@ cargo run --bin mcp-server
 cargo run --bin mcp-server -- --headed
 ```
 
+在 macOS 上，当前更推荐先手动启动一个可视的、专用 profile 的 Chrome 实例，再让本仓库通过 CDP 连接它：
+
+```bash
+open -na "Google Chrome" --args \
+  --remote-debugging-port=9222 \
+  --user-data-dir="$HOME/.browser-use-agent-profile"
+```
+
+这样可以避免附着到你日常使用的个人 Chrome profile。Chrome 启动后，再把 MCP 服务器指向 `9222` 端口暴露出来的 DevTools WebSocket。
+
 ## 功能
 
 - 默认提供面向 agent 的高级文档工具：`snapshot`、`navigate`、`click`、`input`、`wait`、标签页与内容提取
