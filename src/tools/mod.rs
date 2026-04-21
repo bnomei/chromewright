@@ -411,42 +411,55 @@ impl ToolRegistry {
         }
     }
 
-    /// Create a registry with default tools
+    /// Create a registry with the default high-level agent tools.
     pub fn with_defaults() -> Self {
         let mut registry = Self::new();
+        registry.register_default_tools();
+        registry
+    }
 
+    /// Create a registry with the default high-level agent tools plus advanced operator tools.
+    pub fn with_all_tools() -> Self {
+        let mut registry = Self::with_defaults();
+        registry.register_operator_tools();
+        registry
+    }
+
+    /// Register the default high-level agent tool surface.
+    pub fn register_default_tools(&mut self) {
         // Register navigation tools
-        registry.register(navigate::NavigateTool);
-        registry.register(go_back::GoBackTool);
-        registry.register(go_forward::GoForwardTool);
-        registry.register(wait::WaitTool);
+        self.register(navigate::NavigateTool);
+        self.register(go_back::GoBackTool);
+        self.register(go_forward::GoForwardTool);
+        self.register(wait::WaitTool);
 
         // Register interaction tools
-        registry.register(click::ClickTool);
-        registry.register(input::InputTool);
-        registry.register(select::SelectTool);
-        registry.register(hover::HoverTool);
-        registry.register(press_key::PressKeyTool);
-        registry.register(scroll::ScrollTool);
+        self.register(click::ClickTool);
+        self.register(input::InputTool);
+        self.register(select::SelectTool);
+        self.register(hover::HoverTool);
+        self.register(press_key::PressKeyTool);
+        self.register(scroll::ScrollTool);
 
         // Register tab management tools
-        registry.register(new_tab::NewTabTool);
-        registry.register(tab_list::TabListTool);
-        registry.register(switch_tab::SwitchTabTool);
-        registry.register(close_tab::CloseTabTool);
+        self.register(new_tab::NewTabTool);
+        self.register(tab_list::TabListTool);
+        self.register(switch_tab::SwitchTabTool);
+        self.register(close_tab::CloseTabTool);
 
         // Register reading and extraction tools
-        registry.register(extract::ExtractContentTool);
-        registry.register(markdown::GetMarkdownTool);
-        registry.register(read_links::ReadLinksTool);
-        registry.register(snapshot::SnapshotTool);
+        self.register(extract::ExtractContentTool);
+        self.register(markdown::GetMarkdownTool);
+        self.register(read_links::ReadLinksTool);
+        self.register(snapshot::SnapshotTool);
+        self.register(close::CloseTool);
+    }
 
-        // Register utility tools
-        registry.register(screenshot::ScreenshotTool);
-        registry.register(evaluate::EvaluateTool);
-        registry.register(close::CloseTool);
-
-        registry
+    /// Register advanced operator tools such as raw JavaScript evaluation
+    /// and filesystem-bound screenshot capture.
+    pub fn register_operator_tools(&mut self) {
+        self.register(screenshot::ScreenshotTool);
+        self.register(evaluate::EvaluateTool);
     }
 
     /// Register a tool
@@ -526,6 +539,25 @@ mod tests {
         let result = ToolResult::success(None).with_metadata("duration_ms", serde_json::json!(100));
 
         assert!(result.metadata.contains_key("duration_ms"));
+    }
+
+    #[test]
+    fn test_default_registry_excludes_operator_tools() {
+        let registry = ToolRegistry::with_defaults();
+
+        assert!(registry.has("snapshot"));
+        assert!(registry.has("click"));
+        assert!(!registry.has("evaluate"));
+        assert!(!registry.has("screenshot"));
+    }
+
+    #[test]
+    fn test_all_tools_registry_includes_operator_tools() {
+        let registry = ToolRegistry::with_all_tools();
+
+        assert!(registry.has("snapshot"));
+        assert!(registry.has("evaluate"));
+        assert!(registry.has("screenshot"));
     }
 
     fn sample_dom() -> DomTree {

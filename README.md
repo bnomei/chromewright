@@ -9,7 +9,7 @@ A lightweight Rust library for browser automation via Chrome DevTools Protocol (
 - **Zero Node.js dependency** - Pure Rust implementation directly controlling browsers via CDP
 - **Lightweight & Fast** - No heavy runtime, minimal overhead
 - **MCP Integration** - Built-in Model Context Protocol server for AI-driven automation
-- **Simple API** - Easy-to-use tools for common browser operations
+- **Simple API** - High-level document tools for navigation, interaction, and extraction
 
 ## Installation
 
@@ -24,10 +24,11 @@ use browser_use::browser::BrowserSession;
 
 // Launch browser and navigate
 let session = BrowserSession::launch(Default::default())?;
-session.navigate("https://example.com", None)?;
+session.navigate("https://example.com")?;
 
-// Extract DOM with indexed interactive elements
+// Extract DOM with revision-scoped document metadata
 let dom = session.extract_dom()?;
+println!("Current revision: {}", dom.document.revision);
 ```
 
 ## MCP Server
@@ -64,10 +65,25 @@ Supported transports:
 
 ## Features
 
-- Navigate, click, input, screenshot, extract content
-- DOM extraction with indexed interactive elements
-- CSS selector or numeric index-based element targeting
+- Default high-level agent tools for snapshot, navigate, click, input, wait, tabs, and extraction
+- DOM extraction with revision-scoped node references and iframe metadata
+- CSS selector, numeric index, or `node_ref` targeting for document interactions
+- Explicit operator opt-ins for raw JavaScript evaluation and filesystem-bound screenshots
 - Thread-safe browser session management
+
+## Tool Surfaces
+
+The default `ToolRegistry` and MCP server expose the high-level document interaction contract.
+Raw JavaScript evaluation and path-based screenshot capture are intentionally outside that default surface.
+
+For direct Rust integrations, opt into those operator tools explicitly:
+
+```rust
+use browser_use::tools::ToolRegistry;
+
+let mut registry = ToolRegistry::with_defaults();
+registry.register_operator_tools();
+```
 
 ## Requirements
 

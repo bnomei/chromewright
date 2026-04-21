@@ -7,7 +7,7 @@
 - **无需 Node.js 依赖** - 纯 Rust 实现，通过 CDP 直接控制浏览器
 - **轻量快速** - 无需沉重的运行时，开销极小
 - **MCP 集成** - 内置 Model Context Protocol 服务器，支持 AI 驱动的自动化
-- **简洁 API** - 易于使用的工具集，涵盖常见浏览器操作
+- **简洁 API** - 提供面向文档交互的高级工具集
 
 ## 安装
 
@@ -25,10 +25,11 @@ use browser_use::browser::BrowserSession;
 
 // 启动浏览器并导航
 let session = BrowserSession::launch(Default::default())?;
-session.navigate("https://example.com", None)?;
+session.navigate("https://example.com")?;
 
-// 提取 DOM，包含索引化的交互元素
+// 提取 DOM，并读取当前文档修订版本
 let dom = session.extract_dom()?;
+println!("当前 revision: {}", dom.document.revision);
 ```
 
 ## MCP 服务器
@@ -45,10 +46,23 @@ cargo run --bin mcp-server -- --headed
 
 ## 功能
 
-- 导航、点击、输入、截图、提取内容
-- DOM 提取，包含索引化的交互元素
-- 支持 CSS 选择器或数字索引方式定位元素
+- 默认提供面向 agent 的高级文档工具：`snapshot`、`navigate`、`click`、`input`、`wait`、标签页与内容提取
+- DOM 提取包含 revision 级别的 `node_ref` 与 iframe 元数据
+- 支持使用 CSS 选择器、数字索引或 `node_ref` 定位元素
+- 原始 JavaScript 执行与基于文件路径的截图属于显式启用的操作员工具
 - 线程安全的浏览器会话管理
+
+## 工具分层
+
+默认的 `ToolRegistry` 与 MCP 服务器只暴露高级文档交互契约。
+`evaluate` 与基于路径的 `screenshot` 不再属于默认工具面，而是需要显式注册：
+
+```rust
+use browser_use::tools::ToolRegistry;
+
+let mut registry = ToolRegistry::with_defaults();
+registry.register_operator_tools();
+```
 
 ## 环境要求
 

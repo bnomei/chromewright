@@ -6,8 +6,8 @@
 //!
 //! - **MCP Server**: Model Context Protocol server for AI-driven browser automation
 //! - **Browser Session Management**: Launch or connect to Chrome/Chromium instances
-//! - **Tool System**: High-level browser operations (navigate, click, input, extract, screenshot, etc.)
-//! - **DOM Extraction**: Extract page structure with indexed interactive elements for AI-friendly targeting
+//! - **Tool System**: High-level browser operations (snapshot, navigate, click, input, wait, tabs, extraction)
+//! - **DOM Extraction**: Extract page structure with revision-scoped node references for AI-friendly targeting
 //!
 //! ## MCP Server
 //!
@@ -47,9 +47,9 @@
 //! // Navigate to a page
 //! session.navigate("https://example.com")?;
 //!
-//! // Extract DOM with indexed elements
+//! // Extract DOM and inspect the current revision
 //! let dom = session.extract_dom()?;
-//! println!("Found {} interactive elements", dom.count_interactive());
+//! println!("Document revision: {}", dom.document.revision);
 //! # Ok(())
 //! # }
 //! ```
@@ -69,16 +69,34 @@
 //! // Navigate using the tool system
 //! registry.execute("navigate", json!({"url": "https://example.com"}), &mut context)?;
 //!
-//! // Click an element by index
-//! registry.execute("click", json!({"index": 5}), &mut context)?;
+//! // Inspect the page and act on a revision-scoped node ref
+//! let snapshot = registry.execute("snapshot", json!({}), &mut context)?;
+//! let node_ref = snapshot.data
+//!     .as_ref()
+//!     .and_then(|data| data["nodes"].as_array())
+//!     .and_then(|nodes| nodes.first())
+//!     .and_then(|node| node.get("node_ref"))
+//!     .cloned()
+//!     .expect("snapshot should expose at least one actionable node");
+//! registry.execute("click", json!({ "node_ref": node_ref }), &mut context)?;
 //! # Ok(())
 //! # }
 //! ```
 //!
-//! ### DOM Indexing for AI Agents
+//! The default registry intentionally excludes advanced operator tools such as raw JavaScript
+//! evaluation and filesystem-bound screenshots. Opt into those explicitly only when needed:
 //!
-//! The library automatically indexes interactive elements (buttons, links, inputs) with numeric IDs,
-//! making it easier for AI agents to target elements without complex CSS selectors:
+//! ```rust,no_run
+//! use browser_use::tools::ToolRegistry;
+//!
+//! let mut registry = ToolRegistry::with_defaults();
+//! registry.register_operator_tools();
+//! ```
+//!
+//! ### Document Snapshots For AI Agents
+//!
+//! The library exposes actionable elements as revision-scoped node references rather than relying
+//! on fragile CSS selectors:
 //!
 //! ```rust,no_run
 //! # use browser_use::{BrowserSession, LaunchOptions};
@@ -87,8 +105,9 @@
 //! # session.navigate("https://example.com")?;
 //! let dom = session.extract_dom()?;
 //!
-//! // Interactive elements are indexed and can be accessed via tools
-//! println!("Found {} interactive elements", dom.count_interactive());
+//! // Snapshot metadata is revision-scoped, and actionable nodes can be resolved to node refs.
+//! println!("Document ID: {}", dom.document.document_id);
+//! println!("Document revision: {}", dom.document.revision);
 //! # Ok(())
 //! # }
 //! ```
@@ -96,8 +115,8 @@
 //! ## Module Overview
 //!
 //! - [`browser`]: Browser session management and configuration
-//! - [`dom`]: DOM extraction, element indexing, and tree representation
-//! - [`tools`]: Browser automation tools (navigate, click, input, extract, etc.)
+//! - [`dom`]: DOM extraction, revision-scoped node references, and tree representation
+//! - [`tools`]: Browser automation tools and registry composition helpers
 //! - [`error`]: Error types and result aliases
 //! - [`mcp`]: **Model Context Protocol server** (requires `mcp-handler` feature) - **Start here for AI integration**
 
@@ -110,7 +129,7 @@ pub mod tools;
 pub mod mcp;
 
 pub use browser::{BrowserSession, ConnectionOptions, LaunchOptions};
-pub use dom::{BoundingBox, DomTree, ElementNode};
+pub use dom::{BoundingBox, DocumentMetadata, DomTree, ElementNode, FrameMetadata, NodeRef, SnapshotNode};
 pub use error::{BrowserError, Result};
 pub use tools::{Tool, ToolContext, ToolRegistry, ToolResult};
 

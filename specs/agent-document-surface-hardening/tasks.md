@@ -21,21 +21,25 @@ Meta:
 
 ## Todo
 
-- [ ] T006: Separate advanced/operator surfaces from the default high-level agent contract (owner: unassigned) (scope: `src/tools/evaluate.rs`, `src/tools/screenshot.rs`, `src/tools/mod.rs`, `src/lib.rs`, `README.md`, `tests/`)
-  - Covers: R008
-  - Verification_mode: mayor
-  - DoD: docs and tool registration make the default document interaction surface distinct from raw JS evaluation and filesystem-bound screenshot capture.
-  - Validation: documentation updates plus focused registration/contract tests.
-  - Escalate-if: tool discovery constraints require keeping a single undifferentiated tool registry.
-
-- [ ] T007: Refresh browser-backed contract tests around the new document model (owner: unassigned) (scope: `tests/`, `src/tools/`, `src/dom/`)
-  - Covers: R009
-  - Verification_mode: required
-  - DoD: integration tests lock in the intended document contract and remove the current tolerance for drifting or optional index behavior.
-  - Validation: `cargo test --locked --all-features` with the updated contract tests enabled where environment support exists.
-  - Escalate-if: the environment-dependent browser tests still cannot provide deterministic signal after the launch baseline fixes.
+- (none)
 
 ## Done
+
+- [x] T007: Refresh browser-backed contract tests around the new document model (owner: mayor) (scope: `tests/`, `src/tools/`, `src/dom/`) (depends: T001, T002, T003, T004, T005)
+  - Covers: R009
+  - Verification_mode: required
+  - Verification_status: passed
+  - DoD: integration tests lock in the intended document contract and remove the current tolerance for drifting or optional index behavior.
+  - Validation: `cargo test --locked --all-features`, `cargo test --locked --all-features --test dom_integration test_snapshot_tool_exposes_document_metadata_and_node_refs -- --ignored --exact`, `cargo test --locked --all-features --test dom_integration test_stale_node_ref_returns_structured_failure -- --ignored --exact`, `cargo test --locked --all-features --test dom_integration test_same_origin_iframe_content_is_included_in_snapshot -- --ignored --exact`, `cargo test --locked --all-features --test browser_tools_integration test_wait_tool_text_contains -- --ignored --exact`, `cargo test --locked --all-features --test markdown_integration test_markdown_extraction_waits_for_delayed_content -- --ignored --exact`, `cargo test --locked --all-features --test navigation_integration test_wait_tool_navigation_settled -- --ignored --exact`
+  - Notes: Replaced the old “index may fail and that is acceptable” expectations with explicit node-ref, stale-ref, wait-predicate, delayed-markdown, and iframe-snapshot contract tests.
+
+- [x] T006: Separate advanced/operator surfaces from the default high-level agent contract (owner: mayor) (scope: `src/tools/evaluate.rs`, `src/tools/screenshot.rs`, `src/tools/mod.rs`, `src/lib.rs`, `README.md`, `tests/`) (depends: T003)
+  - Covers: R008
+  - Verification_mode: mayor
+  - Verification_status: passed
+  - DoD: docs and tool registration make the default document interaction surface distinct from raw JS evaluation and filesystem-bound screenshot capture.
+  - Validation: `cargo test --locked --all-features`
+  - Notes: The default `ToolRegistry` and MCP surface now describe the high-level document contract only, while raw JS evaluation and filesystem-bound screenshots require explicit `register_operator_tools()` / `with_all_tools()` opt-in for direct Rust consumers.
 
 - [x] T005: Wire iframe-aware document assembly into the snapshot path (owner: mayor) (scope: `src/dom/`, `src/browser/session.rs`, `src/tools/snapshot.rs`, `tests/dom_integration.rs`) (depends: T001)
   - Covers: R006

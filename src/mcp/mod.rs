@@ -95,9 +95,7 @@ register_mcp_tools! {
     // ---- Page Content and Extraction ----
     browser_get_markdown => tools::markdown::GetMarkdownTool, "Get the markdown content of the current page (use this tool only for information extraction; for interaction use the snapshot tool instead)";
     browser_snapshot => tools::snapshot::SnapshotTool, "Get a snapshot of the current page with revision-scoped node refs and actionable elements for interaction";
-    browser_screenshot => tools::screenshot::ScreenshotTool, "Capture a screenshot of the current page";
     // browser_get_text => tools::extract::ExtractContentTool, "Extract text or HTML content from the page or an element";
-    browser_evaluate => tools::evaluate::EvaluateTool, "Execute JavaScript code in the browser context";
 
     // ---- Interaction ----
     browser_click => tools::click::ClickTool, "Click on an element specified by CSS selector, index, or snapshot node_ref";
