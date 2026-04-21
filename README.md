@@ -1,6 +1,4 @@
-# browser-use
-
-[中文文档](README_CN.md)
+# chromewright
 
 A lightweight Rust library for browser automation via Chrome DevTools Protocol (CDP).
 
@@ -13,14 +11,36 @@ A lightweight Rust library for browser automation via Chrome DevTools Protocol (
 
 ## Installation
 
+### Binary From Crates.io
+
 ```bash
-cargo add browser-use
+cargo install chromewright
+```
+
+### Library Dependency
+
+If you only want the embeddable Rust library surface and not the standalone server binary dependencies:
+
+```bash
+cargo add chromewright --no-default-features
+```
+
+Enable `mcp-handler` explicitly if you need the in-process MCP module without the standalone CLI:
+
+```toml
+chromewright = { version = "0.2.3", default-features = false, features = ["mcp-handler"] }
+```
+
+### From Source
+
+```bash
+cargo install --path .
 ```
 
 ## Quick Start
 
 ```rust
-use browser_use::browser::BrowserSession;
+use chromewright::browser::BrowserSession;
 
 // Launch browser and navigate
 let session = BrowserSession::launch(Default::default())?;
@@ -37,17 +57,17 @@ Run the built-in MCP server for AI-driven automation:
 
 ```bash
 # Headless local browser over stdio
-cargo run --features mcp-server --bin mcp-server
+cargo run --bin chromewright
 
 # Visible local browser over stdio
-cargo run --features mcp-server --bin mcp-server -- --headed
+cargo run --bin chromewright -- --headed
 
 # Connect to an existing Chrome DevTools WebSocket instead of launching Chrome
-cargo run --features mcp-server --bin mcp-server -- \
+cargo run --bin chromewright -- \
   --ws-endpoint ws://127.0.0.1:9222/devtools/browser/<id>
 
 # Expose streamable HTTP transport on localhost:3000/mcp
-cargo run --features mcp-server --bin mcp-server -- --transport http
+cargo run --bin chromewright -- --transport http
 ```
 
 Recommended macOS launch command for a visible dedicated Chrome session that this repo can reconnect to reliably:
@@ -55,7 +75,7 @@ Recommended macOS launch command for a visible dedicated Chrome session that thi
 ```bash
 open -na "Google Chrome" --args \
   --remote-debugging-port=9222 \
-  --user-data-dir="$HOME/.browser-use-agent-profile"
+  --user-data-dir="$HOME/.chromewright-agent-profile"
 ```
 
 Use this when you want a headed browser without attaching to your personal Chrome profile.
@@ -89,11 +109,13 @@ The default `ToolRegistry` and MCP server expose the high-level document interac
 Raw JavaScript evaluation and path-based screenshot capture are intentionally outside that default surface.
 High-level action tools now return updated document metadata by default; call `snapshot` when you need
 the full YAML snapshot plus actionable-node list.
+See [docs/tool-description-index.md](docs/tool-description-index.md) for the concise tool-description
+index and wording rules.
 
 For direct Rust integrations, opt into those operator tools explicitly:
 
 ```rust
-use browser_use::tools::ToolRegistry;
+use chromewright::tools::ToolRegistry;
 
 let mut registry = ToolRegistry::with_defaults();
 registry.register_operator_tools();
@@ -105,8 +127,13 @@ unless the caller passes `allow_unsafe = true`.
 
 ## Requirements
 
-- Rust 1.70+
+- Rust 1.85+
 - Chrome or Chromium installed
+
+## Release Plan
+
+The repository is set up to support both crates.io distribution and GitHub release archives for the `chromewright` binary.
+The fastest way to reserve the crate name is to publish the package to crates.io first, then attach prebuilt archives from tagged GitHub releases.
 
 ## Acknowledgments
 

@@ -1,37 +1,16 @@
-use browser_use::tools::{GetMarkdownParams, Tool, ToolContext, markdown::GetMarkdownTool};
-use browser_use::{BrowserSession, LaunchOptions};
-use log::info;
+mod common;
 
-fn launch_or_skip() -> Option<BrowserSession> {
-    match BrowserSession::launch(LaunchOptions::new().headless(true)) {
-        Ok(session) => Some(session),
-        Err(err)
-            if err
-                .to_string()
-                .contains("didn't give us a WebSocket URL before we timed out")
-                || err
-                    .to_string()
-                    .contains("Could not auto detect a chrome executable")
-                || err
-                    .to_string()
-                    .contains("Running as root without --no-sandbox is not supported") =>
-        {
-            eprintln!(
-                "Skipping browser integration test due to environment: {}",
-                err
-            );
-            None
-        }
-        Err(err) => panic!("Unexpected launch failure: {}", err),
-    }
-}
+use chromewright::tools::{GetMarkdownParams, Tool, ToolContext, markdown::GetMarkdownTool};
+use log::info;
 
 /// Test basic markdown extraction from a simple HTML page
 #[test]
 #[ignore] // Requires Chrome to be installed
 fn test_basic_markdown_extraction() {
-    let session = BrowserSession::launch(LaunchOptions::new().headless(true))
-        .expect("Failed to launch browser");
+    let _guard = common::browser_test_guard();
+    let Some(session) = common::launch_or_skip() else {
+        return;
+    };
 
     // Create a simple article page
     let html = r#"
@@ -100,8 +79,10 @@ fn test_basic_markdown_extraction() {
 #[test]
 #[ignore]
 fn test_readability_filtering() {
-    let session = BrowserSession::launch(LaunchOptions::new().headless(true))
-        .expect("Failed to launch browser");
+    let _guard = common::browser_test_guard();
+    let Some(session) = common::launch_or_skip() else {
+        return;
+    };
 
     // Create a page with navigation, sidebar, and main content
     let html = r#"
@@ -175,8 +156,10 @@ fn test_readability_filtering() {
 #[test]
 #[ignore]
 fn test_markdown_pagination() {
-    let session = BrowserSession::launch(LaunchOptions::new().headless(true))
-        .expect("Failed to launch browser");
+    let _guard = common::browser_test_guard();
+    let Some(session) = common::launch_or_skip() else {
+        return;
+    };
 
     // Create a long article that will require multiple pages
     let mut paragraphs = String::new();
@@ -297,8 +280,10 @@ fn test_markdown_pagination() {
 #[test]
 #[ignore]
 fn test_empty_page() {
-    let session = BrowserSession::launch(LaunchOptions::new().headless(true))
-        .expect("Failed to launch browser");
+    let _guard = common::browser_test_guard();
+    let Some(session) = common::launch_or_skip() else {
+        return;
+    };
 
     let html = r#"
         <!DOCTYPE html>
@@ -339,8 +324,10 @@ fn test_empty_page() {
 #[test]
 #[ignore]
 fn test_table_conversion() {
-    let session = BrowserSession::launch(LaunchOptions::new().headless(true))
-        .expect("Failed to launch browser");
+    let _guard = common::browser_test_guard();
+    let Some(session) = common::launch_or_skip() else {
+        return;
+    };
 
     let html = r#"
         <!DOCTYPE html>
@@ -410,8 +397,10 @@ fn test_table_conversion() {
 #[test]
 #[ignore]
 fn test_double_execution_same_page() {
-    let session = BrowserSession::launch(LaunchOptions::new().headless(true))
-        .expect("Failed to launch browser");
+    let _guard = common::browser_test_guard();
+    let Some(session) = common::launch_or_skip() else {
+        return;
+    };
 
     // Create a simple article page
     let html = r#"
@@ -495,8 +484,10 @@ fn test_double_execution_same_page() {
 #[test]
 #[ignore]
 fn test_page_clamping() {
-    let session = BrowserSession::launch(LaunchOptions::new().headless(true))
-        .expect("Failed to launch browser");
+    let _guard = common::browser_test_guard();
+    let Some(session) = common::launch_or_skip() else {
+        return;
+    };
 
     let html = r#"
         <!DOCTYPE html>
@@ -544,7 +535,8 @@ fn test_page_clamping() {
 #[test]
 #[ignore]
 fn test_markdown_extraction_waits_for_delayed_content() {
-    let Some(session) = launch_or_skip() else {
+    let _guard = common::browser_test_guard();
+    let Some(session) = common::launch_or_skip() else {
         return;
     };
 

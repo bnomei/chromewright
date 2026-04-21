@@ -1,17 +1,20 @@
-use browser_use::tools::{
+mod common;
+
+use chromewright::tools::{
     CloseTabParams, NewTabParams, SwitchTabParams, TabListParams, Tool, ToolContext,
     close_tab::CloseTabTool, new_tab::NewTabTool, switch_tab::SwitchTabTool, tab_list::TabListTool,
 };
-use browser_use::{BrowserSession, LaunchOptions};
 use log::info;
 
 #[test]
 #[ignore]
 fn test_new_tab() {
-    use browser_use::tools::{NewTabParams, Tool, ToolContext, new_tab::NewTabTool};
+    use chromewright::tools::{NewTabParams, Tool, ToolContext, new_tab::NewTabTool};
 
-    let session = BrowserSession::launch(LaunchOptions::new().headless(true))
-        .expect("Failed to launch browser");
+    let _guard = common::browser_test_guard();
+    let Some(session) = common::launch_or_skip() else {
+        return;
+    };
 
     // Navigate to initial page
     session
@@ -76,8 +79,10 @@ fn test_new_tab() {
 #[test]
 #[ignore] // Requires Chrome to be installed
 fn test_tab_list() {
-    let session = BrowserSession::launch(LaunchOptions::new().headless(true))
-        .expect("Failed to launch browser");
+    let _guard = common::browser_test_guard();
+    let Some(session) = common::launch_or_skip() else {
+        return;
+    };
 
     // Navigate to a simple page
     session
@@ -126,8 +131,10 @@ fn test_tab_list() {
 #[test]
 #[ignore]
 fn test_new_tab_and_switch() {
-    let session = BrowserSession::launch(LaunchOptions::new().headless(true))
-        .expect("Failed to launch browser");
+    let _guard = common::browser_test_guard();
+    let Some(session) = common::launch_or_skip() else {
+        return;
+    };
 
     // Navigate to initial page
     session
@@ -185,13 +192,34 @@ fn test_new_tab_and_switch() {
         "Switched to tab: {}",
         serde_json::to_string_pretty(&data).unwrap()
     );
+
+    std::thread::sleep(std::time::Duration::from_millis(300));
+
+    let mut context = ToolContext::new(&session);
+    let result = tab_list_tool
+        .execute_typed(TabListParams {}, &mut context)
+        .expect("Failed to execute tab_list tool after switching");
+
+    let data = result.data.unwrap();
+    let tab_list = data["tab_list"]
+        .as_array()
+        .expect("tab_list should be present after switching");
+    let active_tabs: Vec<_> = tab_list
+        .iter()
+        .filter(|tab| tab["active"].as_bool() == Some(true))
+        .collect();
+
+    assert_eq!(active_tabs.len(), 1, "Exactly one tab should be active");
+    assert_eq!(active_tabs[0]["index"].as_u64(), Some(0));
 }
 
 #[test]
 #[ignore]
 fn test_switch_tab_invalid_index() {
-    let session = BrowserSession::launch(LaunchOptions::new().headless(true))
-        .expect("Failed to launch browser");
+    let _guard = common::browser_test_guard();
+    let Some(session) = common::launch_or_skip() else {
+        return;
+    };
 
     session
         .navigate("data:text/html,<html><body><h1>Tab</h1></body></html>")
@@ -216,8 +244,10 @@ fn test_switch_tab_invalid_index() {
 #[test]
 #[ignore]
 fn test_close_tab() {
-    let session = BrowserSession::launch(LaunchOptions::new().headless(true))
-        .expect("Failed to launch browser");
+    let _guard = common::browser_test_guard();
+    let Some(session) = common::launch_or_skip() else {
+        return;
+    };
 
     // Create two tabs
     session
@@ -279,12 +309,25 @@ fn test_close_tab() {
         .execute_typed(TabListParams {}, &mut context)
         .expect("Failed to execute tab_list tool");
 
-    let count_after = result.data.unwrap()["count"].as_u64().unwrap();
+    let data = result.data.unwrap();
+    let count_after = data["count"].as_u64().unwrap();
+    let tab_list = data["tab_list"]
+        .as_array()
+        .expect("tab_list should be present after closing");
+    let active_tabs: Vec<_> = tab_list
+        .iter()
+        .filter(|tab| tab["active"].as_bool() == Some(true))
+        .collect();
     info!("Tab count after closing: {}", count_after);
     assert_eq!(
         count_after,
         count_before - 1,
         "Should have one less tab after closing"
+    );
+    assert_eq!(
+        active_tabs.len(),
+        1,
+        "Exactly one remaining tab should be active after closing the current tab"
     );
 }
 
@@ -292,8 +335,10 @@ fn test_close_tab() {
 #[ignore]
 fn test_tab_workflow() {
     // Test a complete workflow: create multiple tabs, switch between them, list them, and close one
-    let session = BrowserSession::launch(LaunchOptions::new().headless(true))
-        .expect("Failed to launch browser");
+    let _guard = common::browser_test_guard();
+    let Some(session) = common::launch_or_skip() else {
+        return;
+    };
 
     // Start with first tab
     session

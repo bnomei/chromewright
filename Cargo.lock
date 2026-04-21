@@ -193,28 +193,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "browser-use"
-version = "0.2.3"
-dependencies = [
- "anyhow",
- "async-trait",
- "axum",
- "clap",
- "env_logger",
- "headless_chrome",
- "html2md",
- "indexmap",
- "log",
- "rmcp",
- "schemars",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "urlencoding",
-]
-
-[[package]]
 name = "bumpalo"
 version = "3.20.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -263,6 +241,28 @@ dependencies = [
  "cfg-if",
  "cpufeatures 0.3.0",
  "rand_core 0.10.1",
+]
+
+[[package]]
+name = "chromewright"
+version = "0.2.3"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "clap",
+ "env_logger",
+ "headless_chrome",
+ "html2md",
+ "indexmap",
+ "log",
+ "rmcp",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "urlencoding",
 ]
 
 [[package]]

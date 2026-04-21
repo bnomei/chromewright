@@ -67,7 +67,7 @@ Evidence:
 
 - Browser tests fail with `There are no available ports between 8000 and 9000 for debugging`.
 - The upstream `headless_chrome` launch options already support an explicit `port`.
-- `browser-use-rs` does not currently expose a launch port in `LaunchOptions`, so the repo inherits the dependency default.
+- `chromewright` does not currently expose a launch port in `LaunchOptions`, so the repo inherits the dependency default.
 
 Implication:
 

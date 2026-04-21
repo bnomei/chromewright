@@ -1,40 +1,19 @@
-use browser_use::tools::{
+mod common;
+
+use chromewright::tools::{
     HoverParams, ScrollParams, SelectParams, SnapshotParams, Tool, ToolContext, WaitCondition,
     WaitParams, hover::HoverTool, scroll::ScrollTool, select::SelectTool, snapshot::SnapshotTool,
     wait::WaitTool,
 };
-use browser_use::{BrowserSession, LaunchOptions};
 use log::info;
-
-fn launch_or_skip() -> Option<BrowserSession> {
-    match BrowserSession::launch(LaunchOptions::new().headless(true)) {
-        Ok(session) => Some(session),
-        Err(err)
-            if err
-                .to_string()
-                .contains("didn't give us a WebSocket URL before we timed out")
-                || err
-                    .to_string()
-                    .contains("Could not auto detect a chrome executable")
-                || err
-                    .to_string()
-                    .contains("Running as root without --no-sandbox is not supported") =>
-        {
-            eprintln!(
-                "Skipping browser integration test due to environment: {}",
-                err
-            );
-            None
-        }
-        Err(err) => panic!("Unexpected launch failure: {}", err),
-    }
-}
 
 #[test]
 #[ignore] // Requires Chrome to be installed
 fn test_select_tool() {
-    let session = BrowserSession::launch(LaunchOptions::new().headless(true))
-        .expect("Failed to launch browser");
+    let _guard = common::browser_test_guard();
+    let Some(session) = common::launch_or_skip() else {
+        return;
+    };
 
     // Create a page with a select dropdown
     let html = r#"
@@ -100,8 +79,10 @@ fn test_select_tool() {
 #[test]
 #[ignore]
 fn test_hover_tool() {
-    let session = BrowserSession::launch(LaunchOptions::new().headless(true))
-        .expect("Failed to launch browser");
+    let _guard = common::browser_test_guard();
+    let Some(session) = common::launch_or_skip() else {
+        return;
+    };
 
     // Create a page with a hoverable element
     let html = r#"
@@ -158,8 +139,10 @@ fn test_hover_tool() {
 #[test]
 #[ignore]
 fn test_scroll_tool_with_amount() {
-    let session = BrowserSession::launch(LaunchOptions::new().headless(true))
-        .expect("Failed to launch browser");
+    let _guard = common::browser_test_guard();
+    let Some(session) = common::launch_or_skip() else {
+        return;
+    };
 
     // Create a long page
     let html = r#"
@@ -207,8 +190,10 @@ fn test_scroll_tool_with_amount() {
 #[test]
 #[ignore]
 fn test_scroll_tool_to_bottom() {
-    let session = BrowserSession::launch(LaunchOptions::new().headless(true))
-        .expect("Failed to launch browser");
+    let _guard = common::browser_test_guard();
+    let Some(session) = common::launch_or_skip() else {
+        return;
+    };
 
     // Create a page
     let html = r#"
@@ -258,8 +243,10 @@ fn test_scroll_tool_to_bottom() {
 #[test]
 #[ignore]
 fn test_select_with_index() {
-    let session = BrowserSession::launch(LaunchOptions::new().headless(true))
-        .expect("Failed to launch browser");
+    let _guard = common::browser_test_guard();
+    let Some(session) = common::launch_or_skip() else {
+        return;
+    };
 
     // Create a page with a select dropdown
     let html = r#"
@@ -287,7 +274,7 @@ fn test_select_with_index() {
     let snapshot = snapshot_tool
         .execute_typed(SnapshotParams::default(), &mut context)
         .expect("Failed to execute snapshot tool");
-    let node_ref: browser_use::dom::NodeRef =
+    let node_ref: chromewright::dom::NodeRef =
         serde_json::from_value(snapshot.data.unwrap()["nodes"][0]["node_ref"].clone())
             .expect("node_ref should deserialize");
 
@@ -311,7 +298,8 @@ fn test_select_with_index() {
 #[test]
 #[ignore]
 fn test_wait_tool_text_contains() {
-    let Some(session) = launch_or_skip() else {
+    let _guard = common::browser_test_guard();
+    let Some(session) = common::launch_or_skip() else {
         return;
     };
 

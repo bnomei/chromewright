@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-/// Core error type for browser-use operations
+/// Core error type for chromewright operations
 #[derive(Error, Debug)]
 pub enum BrowserError {
     /// Browser launch failed
@@ -68,7 +68,7 @@ pub enum BrowserError {
     IoError(#[from] std::io::Error),
 }
 
-/// Result type alias for browser-use operations
+/// Result type alias for chromewright operations
 pub type Result<T> = std::result::Result<T, BrowserError>;
 
 /// Convert anyhow::Error from headless_chrome to BrowserError

@@ -1,36 +1,15 @@
-use browser_use::{BrowserSession, LaunchOptions};
-use log::info;
+mod common;
 
-fn launch_or_skip() -> Option<BrowserSession> {
-    match BrowserSession::launch(LaunchOptions::new().headless(true)) {
-        Ok(session) => Some(session),
-        Err(err)
-            if err
-                .to_string()
-                .contains("didn't give us a WebSocket URL before we timed out")
-                || err
-                    .to_string()
-                    .contains("Could not auto detect a chrome executable")
-                || err
-                    .to_string()
-                    .contains("Running as root without --no-sandbox is not supported") =>
-        {
-            eprintln!(
-                "Skipping browser integration test due to environment: {}",
-                err
-            );
-            None
-        }
-        Err(err) => panic!("Unexpected launch failure: {}", err),
-    }
-}
+use log::info;
 
 #[test]
 #[ignore] // Requires Chrome to be installed
 fn test_dom_extraction() {
     // Launch browser
-    let session = BrowserSession::launch(LaunchOptions::new().headless(true))
-        .expect("Failed to launch browser");
+    let _guard = common::browser_test_guard();
+    let Some(session) = common::launch_or_skip() else {
+        return;
+    };
 
     // Navigate to a simple page
     session.navigate("data:text/html,<html><body><button id='test-btn'>Click me</button><a href='#'>Link</a></body></html>")
@@ -56,8 +35,10 @@ fn test_dom_extraction() {
 #[test]
 #[ignore]
 fn test_simplified_dom_extraction() {
-    let session = BrowserSession::launch(LaunchOptions::new().headless(true))
-        .expect("Failed to launch browser");
+    let _guard = common::browser_test_guard();
+    let Some(session) = common::launch_or_skip() else {
+        return;
+    };
 
     // Page with script and style tags that should be removed
     // Use a simple HTML page
@@ -79,10 +60,12 @@ fn test_simplified_dom_extraction() {
 #[test]
 #[ignore]
 fn test_read_links() {
-    use browser_use::tools::{ReadLinksParams, Tool, ToolContext, read_links::ReadLinksTool};
+    use chromewright::tools::{ReadLinksParams, Tool, ToolContext, read_links::ReadLinksTool};
 
-    let session = BrowserSession::launch(LaunchOptions::new().headless(true))
-        .expect("Failed to launch browser");
+    let _guard = common::browser_test_guard();
+    let Some(session) = common::launch_or_skip() else {
+        return;
+    };
 
     let html = concat!(
         "<html><head><title>Links Test</title></head><body>",
@@ -143,10 +126,12 @@ fn test_read_links() {
 #[test]
 #[ignore]
 fn test_press_key_enter() {
-    use browser_use::tools::{PressKeyParams, Tool, ToolContext, press_key::PressKeyTool};
+    use chromewright::tools::{PressKeyParams, Tool, ToolContext, press_key::PressKeyTool};
 
-    let session = BrowserSession::launch(LaunchOptions::new().headless(true))
-        .expect("Failed to launch browser");
+    let _guard = common::browser_test_guard();
+    let Some(session) = common::launch_or_skip() else {
+        return;
+    };
 
     // Create a page with an input field that responds to Enter key
     let html = r#"
@@ -230,9 +215,10 @@ fn test_press_key_enter() {
 #[test]
 #[ignore]
 fn test_snapshot_tool_exposes_document_metadata_and_node_refs() {
-    use browser_use::tools::{SnapshotParams, Tool, ToolContext, snapshot::SnapshotTool};
+    use chromewright::tools::{SnapshotParams, Tool, ToolContext, snapshot::SnapshotTool};
 
-    let Some(session) = launch_or_skip() else {
+    let _guard = common::browser_test_guard();
+    let Some(session) = common::launch_or_skip() else {
         return;
     };
 
@@ -287,11 +273,12 @@ fn test_snapshot_tool_exposes_document_metadata_and_node_refs() {
 #[test]
 #[ignore]
 fn test_stale_node_ref_returns_structured_failure() {
-    use browser_use::tools::{
+    use chromewright::tools::{
         ClickParams, SnapshotParams, Tool, ToolContext, click::ClickTool, snapshot::SnapshotTool,
     };
 
-    let Some(session) = launch_or_skip() else {
+    let _guard = common::browser_test_guard();
+    let Some(session) = common::launch_or_skip() else {
         return;
     };
 
@@ -318,7 +305,7 @@ fn test_stale_node_ref_returns_structured_failure() {
     let snapshot = snapshot_tool
         .execute_typed(SnapshotParams::default(), &mut context)
         .expect("Failed to execute snapshot tool");
-    let node_ref: browser_use::dom::NodeRef =
+    let node_ref: chromewright::dom::NodeRef =
         serde_json::from_value(snapshot.data.unwrap()["nodes"][0]["node_ref"].clone())
             .expect("node_ref should deserialize");
 
@@ -356,9 +343,10 @@ fn test_stale_node_ref_returns_structured_failure() {
 #[test]
 #[ignore]
 fn test_same_origin_iframe_content_is_included_in_snapshot() {
-    use browser_use::tools::{SnapshotParams, Tool, ToolContext, snapshot::SnapshotTool};
+    use chromewright::tools::{SnapshotParams, Tool, ToolContext, snapshot::SnapshotTool};
 
-    let Some(session) = launch_or_skip() else {
+    let _guard = common::browser_test_guard();
+    let Some(session) = common::launch_or_skip() else {
         return;
     };
 

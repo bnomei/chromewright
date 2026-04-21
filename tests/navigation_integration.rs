@@ -1,39 +1,18 @@
-use browser_use::tools::{
+mod common;
+
+use chromewright::tools::{
     CloseParams, GoBackParams, GoForwardParams, Tool, ToolContext, WaitCondition, WaitParams,
     close::CloseTool, go_back::GoBackTool, go_forward::GoForwardTool, wait::WaitTool,
 };
-use browser_use::{BrowserSession, LaunchOptions};
 use log::info;
-
-fn launch_or_skip() -> Option<BrowserSession> {
-    match BrowserSession::launch(LaunchOptions::new().headless(true)) {
-        Ok(session) => Some(session),
-        Err(err)
-            if err
-                .to_string()
-                .contains("didn't give us a WebSocket URL before we timed out")
-                || err
-                    .to_string()
-                    .contains("Could not auto detect a chrome executable")
-                || err
-                    .to_string()
-                    .contains("Running as root without --no-sandbox is not supported") =>
-        {
-            eprintln!(
-                "Skipping browser integration test due to environment: {}",
-                err
-            );
-            None
-        }
-        Err(err) => panic!("Unexpected launch failure: {}", err),
-    }
-}
 
 #[test]
 #[ignore] // Requires Chrome to be installed
 fn test_go_back_tool() {
-    let session = BrowserSession::launch(LaunchOptions::new().headless(true))
-        .expect("Failed to launch browser");
+    let _guard = common::browser_test_guard();
+    let Some(session) = common::launch_or_skip() else {
+        return;
+    };
 
     // Navigate to first page
     session
@@ -86,8 +65,10 @@ fn test_go_back_tool() {
 #[test]
 #[ignore]
 fn test_go_forward_tool() {
-    let session = BrowserSession::launch(LaunchOptions::new().headless(true))
-        .expect("Failed to launch browser");
+    let _guard = common::browser_test_guard();
+    let Some(session) = common::launch_or_skip() else {
+        return;
+    };
 
     // Navigate to first page
     session
@@ -146,8 +127,10 @@ fn test_go_forward_tool() {
 #[ignore]
 fn test_navigation_workflow() {
     // Test a complete workflow: navigate to multiple pages, go back, go forward
-    let session = BrowserSession::launch(LaunchOptions::new().headless(true))
-        .expect("Failed to launch browser");
+    let _guard = common::browser_test_guard();
+    let Some(session) = common::launch_or_skip() else {
+        return;
+    };
 
     // Navigate to page 1
     session
@@ -225,8 +208,10 @@ fn test_navigation_workflow() {
 #[test]
 #[ignore]
 fn test_close_tool() {
-    let session = BrowserSession::launch(LaunchOptions::new().headless(true))
-        .expect("Failed to launch browser");
+    let _guard = common::browser_test_guard();
+    let Some(session) = common::launch_or_skip() else {
+        return;
+    };
 
     // Navigate to a page
     session
@@ -272,8 +257,10 @@ fn test_close_tool() {
 #[ignore]
 fn test_go_back_on_first_page() {
     // Test that going back on the first page doesn't crash
-    let session = BrowserSession::launch(LaunchOptions::new().headless(true))
-        .expect("Failed to launch browser");
+    let _guard = common::browser_test_guard();
+    let Some(session) = common::launch_or_skip() else {
+        return;
+    };
 
     // Navigate to only one page
     session
@@ -305,8 +292,10 @@ fn test_go_back_on_first_page() {
 #[ignore]
 fn test_go_forward_on_last_page() {
     // Test that going forward when there's no forward history doesn't crash
-    let session = BrowserSession::launch(LaunchOptions::new().headless(true))
-        .expect("Failed to launch browser");
+    let _guard = common::browser_test_guard();
+    let Some(session) = common::launch_or_skip() else {
+        return;
+    };
 
     // Navigate to a page
     session
@@ -337,7 +326,8 @@ fn test_go_forward_on_last_page() {
 #[test]
 #[ignore]
 fn test_wait_tool_navigation_settled() {
-    let Some(session) = launch_or_skip() else {
+    let _guard = common::browser_test_guard();
+    let Some(session) = common::launch_or_skip() else {
         return;
     };
 

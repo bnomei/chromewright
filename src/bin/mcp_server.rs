@@ -1,10 +1,10 @@
-//! Browser-use MCP Server
+//! Chromewright MCP Server
 //!
 //! This binary provides a Model Context Protocol (MCP) server for browser automation.
 //! It exposes browser automation tools that can be used by AI assistants and other MCP clients.
 
-use browser_use::browser::{ConnectionOptions, LaunchOptions};
-use browser_use::mcp::BrowserServer;
+use chromewright::browser::{ConnectionOptions, LaunchOptions};
+use chromewright::mcp::BrowserServer;
 use clap::{Parser, ValueEnum};
 use log::{debug, info};
 use rmcp::{ServiceExt, transport::stdio};
@@ -31,7 +31,7 @@ enum BrowserMode {
 }
 
 #[derive(Debug, Parser)]
-#[command(name = "browser-use")]
+#[command(name = "chromewright")]
 #[command(version)]
 #[command(about = "Browser automation MCP server", long_about = None)]
 struct Cli {
@@ -228,7 +228,7 @@ mod tests {
 
     #[test]
     fn test_browser_mode_defaults_to_headless_launch() {
-        let cli = Cli::try_parse_from(["browser-use"]).expect("CLI should parse");
+        let cli = Cli::try_parse_from(["chromewright"]).expect("CLI should parse");
 
         match browser_mode_from_cli(&cli) {
             BrowserMode::Launch(options) => {
@@ -244,12 +244,12 @@ mod tests {
     #[test]
     fn test_browser_mode_uses_local_launch_flags() {
         let cli = Cli::try_parse_from([
-            "browser-use",
+            "chromewright",
             "--headed",
             "--executable-path",
             "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
             "--user-data-dir",
-            "/tmp/browser-use-profile",
+            "/tmp/chromewright-profile",
             "--debug-port",
             "9333",
         ])
@@ -266,7 +266,7 @@ mod tests {
                 );
                 assert_eq!(
                     options.user_data_dir,
-                    Some(PathBuf::from("/tmp/browser-use-profile"))
+                    Some(PathBuf::from("/tmp/chromewright-profile"))
                 );
                 assert_eq!(options.debug_port, Some(9333));
             }
@@ -277,7 +277,7 @@ mod tests {
     #[test]
     fn test_browser_mode_can_connect_to_existing_websocket() {
         let cli = Cli::try_parse_from([
-            "browser-use",
+            "chromewright",
             "--ws-endpoint",
             "ws://127.0.0.1:9222/devtools/browser/test",
         ])
@@ -294,7 +294,7 @@ mod tests {
     #[test]
     fn test_ws_endpoint_conflicts_with_local_launch_flags() {
         let err = Cli::try_parse_from([
-            "browser-use",
+            "chromewright",
             "--ws-endpoint",
             "ws://127.0.0.1:9222/devtools/browser/test",
             "--headed",

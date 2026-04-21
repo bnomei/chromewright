@@ -1,4 +1,4 @@
-//! # browser-use
+//! # chromewright
 //!
 //! A Rust library for browser automation via Chrome DevTools Protocol (CDP), designed for AI agent integration.
 //!
@@ -18,17 +18,17 @@
 //!
 //! ```bash
 //! # Run a headless local browser over stdio
-//! cargo run --features mcp-server --bin mcp-server
+//! cargo run --features mcp-server --bin chromewright
 //!
 //! # Run with a visible local browser
-//! cargo run --features mcp-server --bin mcp-server -- --headed
+//! cargo run --features mcp-server --bin chromewright -- --headed
 //!
 //! # Connect to an existing Chrome DevTools WebSocket instead of launching Chrome
-//! cargo run --features mcp-server --bin mcp-server -- \
+//! cargo run --features mcp-server --bin chromewright -- \
 //!   --ws-endpoint ws://127.0.0.1:9222/devtools/browser/<id>
 //!
 //! # Serve MCP over streamable HTTP on localhost:3000/mcp
-//! cargo run --features mcp-server --bin mcp-server -- --transport http
+//! cargo run --features mcp-server --bin chromewright -- --transport http
 //! ```
 //!
 //! ## Library Usage (Advanced)
@@ -38,9 +38,9 @@
 //! ### Basic Browser Automation
 //!
 //! ```rust,no_run
-//! use browser_use::{BrowserSession, LaunchOptions};
+//! use chromewright::{BrowserSession, LaunchOptions};
 //!
-//! # fn main() -> browser_use::Result<()> {
+//! # fn main() -> chromewright::Result<()> {
 //! // Launch a browser
 //! let session = BrowserSession::launch(LaunchOptions::default())?;
 //!
@@ -57,11 +57,11 @@
 //! ### Using the Tool System
 //!
 //! ```rust,no_run
-//! use browser_use::{BrowserSession, LaunchOptions};
-//! use browser_use::tools::{ToolRegistry, ToolContext};
+//! use chromewright::{BrowserSession, LaunchOptions};
+//! use chromewright::tools::{ToolRegistry, ToolContext};
 //! use serde_json::json;
 //!
-//! # fn main() -> browser_use::Result<()> {
+//! # fn main() -> chromewright::Result<()> {
 //! let session = BrowserSession::launch(LaunchOptions::default())?;
 //! let registry = ToolRegistry::with_defaults();
 //! let mut context = ToolContext::new(&session);
@@ -87,7 +87,7 @@
 //! evaluation and filesystem-bound screenshots. Opt into those explicitly only when needed:
 //!
 //! ```rust,no_run
-//! use browser_use::tools::ToolRegistry;
+//! use chromewright::tools::ToolRegistry;
 //!
 //! let mut registry = ToolRegistry::with_defaults();
 //! registry.register_operator_tools();
@@ -106,8 +106,8 @@
 //! on fragile CSS selectors:
 //!
 //! ```rust,no_run
-//! # use browser_use::{BrowserSession, LaunchOptions};
-//! # fn main() -> browser_use::Result<()> {
+//! # use chromewright::{BrowserSession, LaunchOptions};
+//! # fn main() -> chromewright::Result<()> {
 //! # let session = BrowserSession::launch(LaunchOptions::default())?;
 //! # session.navigate("https://example.com")?;
 //! let dom = session.extract_dom()?;

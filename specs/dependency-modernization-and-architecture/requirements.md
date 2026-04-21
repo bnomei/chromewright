@@ -2,7 +2,7 @@
 
 ## Scope
 
-This spec covers the next change wave for `browser-use-rs`:
+This spec covers the next change wave for `chromewright`:
 
 - establish a trustworthy baseline
 - modernize dependencies in bounded waves
