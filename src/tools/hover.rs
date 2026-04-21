@@ -1,5 +1,7 @@
 use crate::error::{BrowserError, Result};
-use crate::tools::{Tool, ToolContext, ToolResult, resolve_target};
+use crate::tools::{
+    TargetResolution, Tool, ToolContext, ToolResult, build_document_envelope, resolve_target,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -13,6 +15,10 @@ pub struct HoverParams {
     /// Element index from DOM tree (use either this or selector, not both)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub index: Option<usize>,
+
+    /// Revision-scoped node reference from the snapshot tool
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_ref: Option<crate::dom::NodeRef>,
 }
 
 /// Tool for hovering over elements
@@ -29,14 +35,21 @@ impl Tool for HoverTool {
     }
 
     fn execute_typed(&self, params: HoverParams, context: &mut ToolContext) -> Result<ToolResult> {
-        let HoverParams { selector, index } = params;
+        let HoverParams {
+            selector,
+            index,
+            node_ref,
+        } = params;
         let target = {
-            let dom = if index.is_some() {
+            let dom = if index.is_some() || node_ref.is_some() {
                 Some(context.get_dom()?)
             } else {
                 None
             };
-            resolve_target("hover", selector, index, dom)?
+            match resolve_target("hover", selector, index, node_ref, dom)? {
+                TargetResolution::Resolved(target) => target,
+                TargetResolution::Failure(failure) => return Ok(failure),
+            }
         };
 
         // Find the element (to verify it exists)
@@ -68,14 +81,21 @@ impl Tool for HoverTool {
         };
 
         if result_json["success"].as_bool() == Some(true) {
-            Ok(ToolResult::success_with(serde_json::json!({
-                "selector": target.selector,
-                "element": {
-                    "tagName": result_json["tagName"],
-                    "id": result_json["id"],
-                    "className": result_json["className"]
-                }
-            })))
+            context.refresh_dom()?;
+            let mut payload =
+                serde_json::to_value(build_document_envelope(context, Some(&target), false)?)?;
+            if let serde_json::Value::Object(ref mut map) = payload {
+                map.insert("action".to_string(), serde_json::json!("hover"));
+                map.insert(
+                    "element".to_string(),
+                    serde_json::json!({
+                        "tagName": result_json["tagName"],
+                        "id": result_json["id"],
+                        "className": result_json["className"]
+                    }),
+                );
+            }
+            Ok(ToolResult::success_with(payload))
         } else {
             Err(BrowserError::ToolExecutionFailed {
                 tool: "hover".to_string(),

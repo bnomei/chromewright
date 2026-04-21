@@ -1,6 +1,25 @@
 use browser_use::{BrowserSession, LaunchOptions};
 use log::info;
 
+fn launch_or_skip() -> Option<BrowserSession> {
+    match BrowserSession::launch(LaunchOptions::new().headless(true)) {
+        Ok(session) => Some(session),
+        Err(err)
+            if err.to_string().contains("didn't give us a WebSocket URL before we timed out")
+                || err
+                    .to_string()
+                    .contains("Could not auto detect a chrome executable")
+                || err
+                    .to_string()
+                    .contains("Running as root without --no-sandbox is not supported") =>
+        {
+            eprintln!("Skipping browser integration test due to environment: {}", err);
+            None
+        }
+        Err(err) => panic!("Unexpected launch failure: {}", err),
+    }
+}
+
 #[test]
 #[ignore] // Requires Chrome to be installed
 fn test_dom_extraction() {
@@ -201,4 +220,169 @@ fn test_press_key_enter() {
     );
     // Note: Due to limitations with data: URLs and event handling,
     // we mainly verify that the tool executes without error
+}
+
+#[test]
+#[ignore]
+fn test_snapshot_tool_exposes_document_metadata_and_node_refs() {
+    use browser_use::tools::{SnapshotParams, Tool, ToolContext, snapshot::SnapshotTool};
+
+    let Some(session) = launch_or_skip() else {
+        return;
+    };
+
+    let html = r#"
+        <html>
+        <body>
+            <button id="save-btn">Save</button>
+            <input id="query" type="text" placeholder="Search">
+        </body>
+        </html>
+    "#;
+
+    session
+        .navigate(&format!("data:text/html,{}", html))
+        .expect("Failed to navigate");
+    session
+        .wait_for_document_ready_with_timeout(std::time::Duration::from_secs(5))
+        .expect("Failed to wait for page readiness");
+
+    let tool = SnapshotTool::default();
+    let mut context = ToolContext::new(&session);
+
+    let result = tool
+        .execute_typed(SnapshotParams::default(), &mut context)
+        .expect("Failed to execute snapshot tool");
+
+    assert!(result.success);
+    let data = result.data.unwrap();
+    let document = &data["document"];
+    let nodes = data["nodes"].as_array().expect("snapshot should return nodes");
+
+    assert!(document["document_id"].as_str().is_some());
+    assert!(document["revision"].as_str().is_some());
+    assert_eq!(document["ready_state"].as_str(), Some("complete"));
+    assert!(data["snapshot"].as_str().is_some());
+    assert!(!nodes.is_empty(), "expected actionable nodes in snapshot");
+
+    let first_ref = &nodes[0]["node_ref"];
+    assert_eq!(
+        first_ref["document_id"].as_str(),
+        document["document_id"].as_str()
+    );
+    assert_eq!(
+        first_ref["revision"].as_str(),
+        document["revision"].as_str()
+    );
+    assert!(first_ref["index"].as_u64().is_some());
+}
+
+#[test]
+#[ignore]
+fn test_stale_node_ref_returns_structured_failure() {
+    use browser_use::tools::{
+        ClickParams, SnapshotParams, Tool, ToolContext, click::ClickTool, snapshot::SnapshotTool,
+    };
+
+    let Some(session) = launch_or_skip() else {
+        return;
+    };
+
+    let html = r#"
+        <html>
+        <body>
+            <button id="change" onclick="document.getElementById('status').textContent = 'changed';">Change</button>
+            <div id="status">initial</div>
+        </body>
+        </html>
+    "#;
+
+    session
+        .navigate(&format!("data:text/html,{}", html))
+        .expect("Failed to navigate");
+    session
+        .wait_for_document_ready_with_timeout(std::time::Duration::from_secs(5))
+        .expect("Failed to wait for page readiness");
+
+    let snapshot_tool = SnapshotTool::default();
+    let click_tool = ClickTool::default();
+    let mut context = ToolContext::new(&session);
+
+    let snapshot = snapshot_tool
+        .execute_typed(SnapshotParams::default(), &mut context)
+        .expect("Failed to execute snapshot tool");
+    let node_ref: browser_use::dom::NodeRef =
+        serde_json::from_value(snapshot.data.unwrap()["nodes"][0]["node_ref"].clone())
+            .expect("node_ref should deserialize");
+
+    let first_click = click_tool
+        .execute_typed(
+            ClickParams {
+                selector: None,
+                index: None,
+                node_ref: Some(node_ref.clone()),
+            },
+            &mut context,
+        )
+        .expect("First click should succeed");
+    assert!(first_click.success);
+
+    let stale_click = click_tool
+        .execute_typed(
+            ClickParams {
+                selector: None,
+                index: None,
+                node_ref: Some(node_ref),
+            },
+            &mut context,
+        )
+        .expect("Stale node ref should return a structured tool failure");
+
+    assert!(!stale_click.success);
+    let data = stale_click.data.expect("structured failure should include data");
+    assert_eq!(data["code"].as_str(), Some("stale_node_ref"));
+    assert_eq!(stale_click.error.as_deref(), Some("Stale node reference"));
+}
+
+#[test]
+#[ignore]
+fn test_same_origin_iframe_content_is_included_in_snapshot() {
+    use browser_use::tools::{SnapshotParams, Tool, ToolContext, snapshot::SnapshotTool};
+
+    let Some(session) = launch_or_skip() else {
+        return;
+    };
+
+    let html = r#"
+        <html>
+        <body>
+            <iframe id="frame" srcdoc="<html><body><h2>Inside Frame</h2><p>Frame text</p></body></html>"></iframe>
+        </body>
+        </html>
+    "#;
+
+    session
+        .navigate(&format!("data:text/html,{}", html))
+        .expect("Failed to navigate");
+    session
+        .wait_for_document_ready_with_timeout(std::time::Duration::from_secs(5))
+        .expect("Failed to wait for page readiness");
+
+    let tool = SnapshotTool::default();
+    let mut context = ToolContext::new(&session);
+
+    let result = tool
+        .execute_typed(SnapshotParams::default(), &mut context)
+        .expect("Failed to execute snapshot tool");
+
+    assert!(result.success);
+    let data = result.data.unwrap();
+    assert!(data["snapshot"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("Inside Frame"));
+    assert_eq!(
+        data["document"]["frames"][0]["status"].as_str(),
+        Some("expanded")
+    );
 }

@@ -1,9 +1,29 @@
 use browser_use::tools::{
-    HoverParams, ScrollParams, SelectParams, Tool, ToolContext, hover::HoverTool,
-    scroll::ScrollTool, select::SelectTool,
+    HoverParams, ScrollParams, SelectParams, SnapshotParams, Tool, ToolContext, WaitCondition,
+    WaitParams, hover::HoverTool, scroll::ScrollTool, select::SelectTool,
+    snapshot::SnapshotTool, wait::WaitTool,
 };
 use browser_use::{BrowserSession, LaunchOptions};
 use log::info;
+
+fn launch_or_skip() -> Option<BrowserSession> {
+    match BrowserSession::launch(LaunchOptions::new().headless(true)) {
+        Ok(session) => Some(session),
+        Err(err)
+            if err.to_string().contains("didn't give us a WebSocket URL before we timed out")
+                || err
+                    .to_string()
+                    .contains("Could not auto detect a chrome executable")
+                || err
+                    .to_string()
+                    .contains("Running as root without --no-sandbox is not supported") =>
+        {
+            eprintln!("Skipping browser integration test due to environment: {}", err);
+            None
+        }
+        Err(err) => panic!("Unexpected launch failure: {}", err),
+    }
+}
 
 #[test]
 #[ignore] // Requires Chrome to be installed
@@ -46,6 +66,7 @@ fn test_select_tool() {
             SelectParams {
                 selector: Some("#country".to_string()),
                 index: None,
+                node_ref: None,
                 value: "uk".to_string(),
             },
             &mut context,
@@ -64,6 +85,11 @@ fn test_select_tool() {
 
     assert_eq!(data["value"].as_str(), Some("uk"));
     assert_eq!(data["selectedText"].as_str(), Some("United Kingdom"));
+    assert_eq!(data["action"].as_str(), Some("select"));
+    assert_eq!(data["target"]["selector"].as_str(), Some("#country"));
+    assert!(data["document"]["revision"].as_str().is_some());
+    assert!(data["snapshot"].as_str().is_some());
+    assert!(data["nodes"].is_array());
 }
 
 #[test]
@@ -103,6 +129,7 @@ fn test_hover_tool() {
             HoverParams {
                 selector: Some("#hover-btn".to_string()),
                 index: None,
+                node_ref: None,
             },
             &mut context,
         )
@@ -118,7 +145,9 @@ fn test_hover_tool() {
         serde_json::to_string_pretty(&data).unwrap()
     );
 
-    assert_eq!(data["selector"].as_str(), Some("#hover-btn"));
+    assert_eq!(data["action"].as_str(), Some("hover"));
+    assert_eq!(data["target"]["selector"].as_str(), Some("#hover-btn"));
+    assert_eq!(data["element"]["tagName"].as_str(), Some("BUTTON"));
 }
 
 #[test]
@@ -246,31 +275,80 @@ fn test_select_with_index() {
 
     std::thread::sleep(std::time::Duration::from_millis(500));
 
-    // First extract DOM to get indices
-    let _dom = session.extract_dom().expect("Failed to extract DOM");
-
-    // Create tool and context
+    let snapshot_tool = SnapshotTool::default();
     let tool = SelectTool::default();
     let mut context = ToolContext::new(&session);
 
-    // Try to select using index (the select element should have index 0 since it's the first interactive element)
-    let result = tool.execute_typed(
+    let snapshot = snapshot_tool
+        .execute_typed(SnapshotParams::default(), &mut context)
+        .expect("Failed to execute snapshot tool");
+    let node_ref: browser_use::dom::NodeRef =
+        serde_json::from_value(snapshot.data.unwrap()["nodes"][0]["node_ref"].clone())
+            .expect("node_ref should deserialize");
+
+    let result = tool
+        .execute_typed(
         SelectParams {
             selector: None,
-            index: Some(0),
+            index: None,
+            node_ref: Some(node_ref),
             value: "green".to_string(),
         },
         &mut context,
-    );
+    )
+    .expect("Select with node_ref should succeed");
 
-    // This might fail if DOM indexing doesn't include select elements, which is acceptable
-    // The test is mainly to verify the API works
-    if let Ok(result) = result {
-        info!(
-            "Select with index result: {}",
-            serde_json::to_string_pretty(&result.data.unwrap()).unwrap()
-        );
-    } else {
-        info!("Select with index failed (may be expected if select not indexed)");
-    }
+    assert!(result.success);
+    let data = result.data.unwrap();
+    assert_eq!(data["selectedText"].as_str(), Some("Green"));
+}
+
+#[test]
+#[ignore]
+fn test_wait_tool_text_contains() {
+    let Some(session) = launch_or_skip() else {
+        return;
+    };
+
+    let html = r#"
+        <!DOCTYPE html>
+        <html>
+        <body>
+            <div id="status">Loading</div>
+            <script>
+                setTimeout(() => {
+                    document.getElementById('status').textContent = 'Ready now';
+                }, 150);
+            </script>
+        </body>
+        </html>
+    "#;
+
+    let data_url = format!("data:text/html,{}", html);
+    session.navigate(&data_url).expect("Failed to navigate");
+
+    let tool = WaitTool::default();
+    let mut context = ToolContext::new(&session);
+
+    let result = tool
+        .execute_typed(
+            WaitParams {
+                selector: Some("#status".to_string()),
+                index: None,
+                node_ref: None,
+                condition: WaitCondition::TextContains,
+                text: Some("Ready now".to_string()),
+                value: None,
+                since_revision: None,
+                timeout_ms: 5_000,
+            },
+            &mut context,
+        )
+        .expect("Wait tool should succeed");
+
+    assert!(result.success);
+    let data = result.data.unwrap();
+    assert_eq!(data["action"].as_str(), Some("wait"));
+    assert_eq!(data["condition"].as_str(), Some("text_contains"));
+    assert!(data["document"]["revision"].as_str().is_some());
 }

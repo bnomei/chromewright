@@ -1,5 +1,5 @@
 use crate::error::{BrowserError, Result};
-use crate::tools::{Tool, ToolContext, ToolResult};
+use crate::tools::{Tool, ToolContext, ToolResult, build_document_envelope};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -31,12 +31,12 @@ impl Tool for GoBackTool {
                 reason: e.to_string(),
             })?;
 
-        // Get current URL after going back
-        let current_url = context.session.tab()?.get_url();
+        context.refresh_dom()?;
+        let mut payload = serde_json::to_value(build_document_envelope(context, None, true)?)?;
+        if let serde_json::Value::Object(ref mut map) = payload {
+            map.insert("action".to_string(), serde_json::json!("go_back"));
+        }
 
-        Ok(ToolResult::success_with(serde_json::json!({
-            "message": "Navigated back in history",
-            "url": current_url
-        })))
+        Ok(ToolResult::success_with(payload))
     }
 }

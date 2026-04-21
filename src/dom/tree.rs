@@ -1,12 +1,60 @@
 use crate::dom::element::{AriaChild, AriaNode};
 use crate::error::{BrowserError, Result};
 use headless_chrome::Tab;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+
+/// Revision-scoped reference to an actionable node in a snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+pub struct NodeRef {
+    pub document_id: String,
+    pub revision: String,
+    pub index: usize,
+}
+
+/// Metadata about an iframe encountered during extraction.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
+pub struct FrameMetadata {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub index: Option<usize>,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub document_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision: Option<String>,
+}
+
+/// Metadata for the extracted document.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
+pub struct DocumentMetadata {
+    pub document_id: String,
+    pub revision: String,
+    pub url: String,
+    pub title: String,
+    pub ready_state: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub frames: Vec<FrameMetadata>,
+}
+
+/// Agent-facing summary of one actionable node in the current snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+pub struct SnapshotNode {
+    pub node_ref: NodeRef,
+    pub index: usize,
+    pub role: String,
+    pub name: String,
+}
 
 /// Represents the ARIA snapshot of a web page
 /// Based on Playwright's AriaSnapshot structure
 #[derive(Debug, Clone)]
 pub struct DomTree {
+    /// Metadata for the extracted document.
+    pub document: DocumentMetadata,
+
     /// Root AriaNode (usually a fragment)
     pub root: AriaNode,
 
@@ -20,6 +68,37 @@ pub struct DomTree {
 /// Snapshot extraction response from JavaScript
 #[derive(Debug, serde::Deserialize)]
 struct SnapshotResponse {
+    document: DocumentMetadata,
+    root: AriaNode,
+    selectors: Vec<String>,
+    iframe_indices: Vec<usize>,
+}
+
+impl Default for SnapshotResponse {
+    fn default() -> Self {
+        Self {
+            document: DocumentMetadata::default(),
+            root: AriaNode::fragment(),
+            selectors: Vec::new(),
+            iframe_indices: Vec::new(),
+        }
+    }
+}
+
+impl Default for DomTree {
+    fn default() -> Self {
+        Self {
+            document: DocumentMetadata::default(),
+            root: AriaNode::fragment(),
+            selectors: Vec::new(),
+            iframe_indices: Vec::new(),
+        }
+    }
+}
+
+/// Snapshot extraction response from JavaScript
+#[derive(Debug, serde::Deserialize)]
+struct LegacySnapshotResponse {
     root: AriaNode,
     selectors: Vec<String>,
     #[serde(rename = "iframeIndices")]
@@ -30,6 +109,7 @@ impl DomTree {
     /// Create a new DomTree from an AriaNode
     pub fn new(root: AriaNode) -> Self {
         let mut tree = Self {
+            document: DocumentMetadata::default(),
             root,
             selectors: Vec::new(),
             iframe_indices: Vec::new(),
@@ -65,11 +145,27 @@ impl DomTree {
         })?;
 
         // Then parse the JSON string into SnapshotResponse
-        let response: SnapshotResponse = serde_json::from_str(&json_str).map_err(|e| {
-            BrowserError::DomParseFailed(format!("Failed to parse snapshot JSON: {}", e))
-        })?;
+        let response: SnapshotResponse = match serde_json::from_str(&json_str) {
+            Ok(response) => response,
+            Err(_) => {
+                let legacy: LegacySnapshotResponse =
+                    serde_json::from_str(&json_str).map_err(|e| {
+                        BrowserError::DomParseFailed(format!(
+                            "Failed to parse snapshot JSON: {}",
+                            e
+                        ))
+                    })?;
+                SnapshotResponse {
+                    document: DocumentMetadata::default(),
+                    root: legacy.root,
+                    selectors: legacy.selectors,
+                    iframe_indices: legacy.iframe_indices,
+                }
+            }
+        };
 
         Ok(Self {
+            document: response.document,
             root: response.root,
             selectors: response.selectors,
             iframe_indices: response.iframe_indices,
@@ -131,6 +227,31 @@ impl DomTree {
     /// Get CSS selector for a given index
     pub fn get_selector(&self, index: usize) -> Option<&String> {
         self.selectors.get(index).filter(|s| !s.is_empty())
+    }
+
+    /// Build a revision-scoped node reference for an actionable index.
+    pub fn node_ref_for_index(&self, index: usize) -> Option<NodeRef> {
+        self.find_node_by_index(index).map(|_| NodeRef {
+            document_id: self.document.document_id.clone(),
+            revision: self.document.revision.clone(),
+            index,
+        })
+    }
+
+    /// Collect the actionable nodes currently exposed to agents.
+    pub fn snapshot_nodes(&self) -> Vec<SnapshotNode> {
+        self.interactive_indices()
+            .into_iter()
+            .filter_map(|index| {
+                let node = self.find_node_by_index(index)?;
+                Some(SnapshotNode {
+                    node_ref: self.node_ref_for_index(index)?,
+                    index,
+                    role: node.role.clone(),
+                    name: node.name.clone(),
+                })
+            })
+            .collect()
     }
 
     /// Get all interactive element indices
@@ -262,6 +383,19 @@ mod tests {
 
         let not_found = tree.find_node_by_index(999);
         assert!(not_found.is_none());
+    }
+
+    #[test]
+    fn test_node_ref_for_index_uses_document_metadata() {
+        let root = create_test_tree();
+        let mut tree = DomTree::new(root);
+        tree.document.document_id = "doc-1".to_string();
+        tree.document.revision = "rev-7".to_string();
+
+        let node_ref = tree.node_ref_for_index(1).expect("node ref should exist");
+        assert_eq!(node_ref.document_id, "doc-1");
+        assert_eq!(node_ref.revision, "rev-7");
+        assert_eq!(node_ref.index, 1);
     }
 
     #[test]

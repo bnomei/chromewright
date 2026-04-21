@@ -2,8 +2,42 @@
 // Based on Playwright's ariaSnapshot.ts - generates ARIA-tree structure for AI consumption
 JSON.stringify((function() {
     'use strict';
-    
+
     let currentIndex = 0;
+
+    function getDocumentView(doc) {
+        return doc.defaultView || window;
+    }
+
+    function generateDocumentId(doc) {
+        const view = getDocumentView(doc);
+        if (view.crypto && typeof view.crypto.randomUUID === 'function') {
+            return view.crypto.randomUUID();
+        }
+        return 'doc-' + Math.random().toString(36).slice(2, 12);
+    }
+
+    function ensureDocumentState(doc) {
+        const view = getDocumentView(doc);
+        if (!view.__browserUseDocumentState) {
+            const state = {
+                documentId: generateDocumentId(doc),
+                revision: 1
+            };
+            const observer = new view.MutationObserver(function() {
+                state.revision += 1;
+            });
+            observer.observe(doc, {
+                subtree: true,
+                childList: true,
+                attributes: true,
+                characterData: true
+            });
+            state.observer = observer;
+            view.__browserUseDocumentState = state;
+        }
+        return view.__browserUseDocumentState;
+    }
 
     // Helper: normalize whitespace
     function normalizeWhiteSpace(text) {
@@ -16,8 +50,8 @@ JSON.stringify((function() {
         if (['STYLE', 'SCRIPT', 'NOSCRIPT', 'TEMPLATE'].includes(tagName)) {
             return true;
         }
-        
-        const style = window.getComputedStyle(element);
+
+        const style = getDocumentView(element.ownerDocument).getComputedStyle(element);
         
         // Check display: contents
         if (style.display === 'contents' && element.nodeName !== 'SLOT') {
@@ -60,7 +94,7 @@ JSON.stringify((function() {
 
     // Helper: compute element box information
     function computeBox(element) {
-        const style = window.getComputedStyle(element);
+        const style = getDocumentView(element.ownerDocument).getComputedStyle(element);
         const rect = element.getBoundingClientRect();
         const visible = rect.width > 0 && rect.height > 0;
         const inline = style.display === 'inline';
@@ -74,7 +108,7 @@ JSON.stringify((function() {
         const box = computeBox(element);
         if (!box.visible) return false;
         
-        const style = window.getComputedStyle(element);
+        const style = getDocumentView(element.ownerDocument).getComputedStyle(element);
         return style.pointerEvents !== 'none';
     }
 
@@ -137,6 +171,8 @@ JSON.stringify((function() {
 
     // Helper: get accessible name for element
     function getElementAccessibleName(element) {
+        const doc = element.ownerDocument;
+
         // Check aria-label
         const ariaLabel = element.getAttribute('aria-label');
         if (ariaLabel) return ariaLabel;
@@ -146,7 +182,7 @@ JSON.stringify((function() {
         if (labelledBy) {
             const ids = labelledBy.split(/\s+/);
             const texts = ids.map(id => {
-                const el = document.getElementById(id);
+                const el = doc.getElementById(id);
                 return el ? el.textContent : '';
             }).filter(t => t);
             if (texts.length) return texts.join(' ');
@@ -156,7 +192,7 @@ JSON.stringify((function() {
         if (element.tagName === 'INPUT' || element.tagName === 'TEXTAREA' || element.tagName === 'SELECT') {
             const id = element.id;
             if (id) {
-                const label = document.querySelector('label[for="' + id + '"]');
+                const label = doc.querySelector('label[for="' + id + '"]');
                 if (label) return label.textContent || '';
             }
             // Check if wrapped in label
@@ -264,7 +300,7 @@ JSON.stringify((function() {
     // Helper: get CSS content (::before, ::after)
     function getCSSContent(element, pseudo) {
         try {
-            const style = window.getComputedStyle(element, pseudo);
+            const style = getDocumentView(element.ownerDocument).getComputedStyle(element, pseudo);
             const content = style.content;
             if (content && content !== 'none' && content !== 'normal') {
                 // Simple extraction - remove quotes
@@ -276,40 +312,35 @@ JSON.stringify((function() {
         return '';
     }
 
-    // Compute ARIA index for element
-    function computeAriaIndex(ariaNode) {
-        // Only assign indices to visible, interactive ARIA roles
-        if (!ariaNode.box.visible) {
-            return;
-        }
-        
-        // Check if this is an interactive role that should have an index
-        const interactiveRoles = [
+    function isActionableRole(role) {
+        const actionableRoles = [
             'button', 'link', 'textbox', 'searchbox', 'checkbox', 'radio',
             'combobox', 'listbox', 'option', 'menuitem', 'menuitemcheckbox',
-            'menuitemradio', 'tab', 'tabpanel', 'slider', 'spinbutton',
-            'switch', 'img', 'article', 'region', 'navigation', 'main',
-            'complementary', 'banner', 'contentinfo', 'form', 'search',
-            'tree', 'treeitem', 'grid', 'gridcell', 'row', 'columnheader',
-            'rowheader', 'heading', 'dialog', 'alertdialog', 'alert',
-            'status', 'progressbar', 'list', 'listitem', 'generic'
+            'menuitemradio', 'tab', 'slider', 'spinbutton', 'switch',
+            'dialog', 'alertdialog'
         ];
-        
-        // Only assign index to interactive roles or elements with pointer cursor
+        return actionableRoles.includes(role);
+    }
+
+    // Compute ARIA index for element
+    function computeAriaIndex(ariaNode, allowTargeting) {
+        if (!allowTargeting || !ariaNode.box.visible) {
+            return;
+        }
+
         const hasPointerCursor = ariaNode.box.cursor === 'pointer';
-        const isInteractiveRole = interactiveRoles.includes(ariaNode.role);
+        const isInteractiveRole = isActionableRole(ariaNode.role);
         
         if (!isInteractiveRole && !hasPointerCursor) {
             return;
         }
         
-        // Assign sequential index
         ariaNode.index = currentIndex++;
     }
 
     // Convert element to AriaNode
-    function toAriaNode(element) {
-        const active = document.activeElement === element;
+    function toAriaNode(element, allowTargeting) {
+        const active = element.ownerDocument.activeElement === element;
         
         // Handle iframe specially
         if (element.tagName === 'IFRAME') {
@@ -323,7 +354,7 @@ JSON.stringify((function() {
                 receivesPointerEvents: true,
                 active: active
             };
-            computeAriaIndex(ariaNode);
+            computeAriaIndex(ariaNode, allowTargeting);
             return ariaNode;
         }
         
@@ -355,7 +386,7 @@ JSON.stringify((function() {
             active: active
         };
         
-        computeAriaIndex(result);
+        computeAriaIndex(result, allowTargeting);
         
         // Add ARIA properties based on role
         const checkedRoles = ['checkbox', 'menuitemcheckbox', 'menuitemradio', 'radio', 'switch'];
@@ -405,7 +436,7 @@ JSON.stringify((function() {
     }
 
     // Main visitor function
-    function visit(ariaNode, node, parentElementVisible, visited) {
+    function visit(ariaNode, node, parentElementVisible, visited, allowTargeting, frameReports) {
         if (visited.has(node)) return;
         visited.add(node);
         
@@ -438,23 +469,31 @@ JSON.stringify((function() {
         if (element.hasAttribute('aria-owns')) {
             const ids = element.getAttribute('aria-owns').split(/\s+/);
             for (const id of ids) {
-                const ownedElement = document.getElementById(id);
+                const ownedElement = element.ownerDocument.getElementById(id);
                 if (ownedElement) ariaChildren.push(ownedElement);
             }
         }
         
         // Convert to aria node
-        const childAriaNode = toAriaNode(element);
+        const childAriaNode = toAriaNode(element, allowTargeting);
         if (childAriaNode) {
             ariaNode.children.push(childAriaNode);
         }
         
         // Process element (add CSS content, children, etc.)
-        processElement(childAriaNode || ariaNode, element, ariaChildren, visible, visited);
+        processElement(
+            childAriaNode || ariaNode,
+            element,
+            ariaChildren,
+            visible,
+            visited,
+            allowTargeting,
+            frameReports
+        );
     }
 
-    function processElement(ariaNode, element, ariaChildren, parentElementVisible, visited) {
-        const style = window.getComputedStyle(element);
+    function processElement(ariaNode, element, ariaChildren, parentElementVisible, visited, allowTargeting, frameReports) {
+        const style = getDocumentView(element.ownerDocument).getComputedStyle(element);
         const display = style ? style.display : 'inline';
         const treatAsBlock = (display !== 'inline' || element.nodeName === 'BR') ? ' ' : '';
         
@@ -472,27 +511,27 @@ JSON.stringify((function() {
         if (element.nodeName === 'SLOT') {
             const assignedNodes = element.assignedNodes();
             for (const child of assignedNodes) {
-                visit(ariaNode, child, parentElementVisible, visited);
+                visit(ariaNode, child, parentElementVisible, visited, allowTargeting, frameReports);
             }
         } else {
             // Process regular children
             for (let child = element.firstChild; child; child = child.nextSibling) {
                 if (!child.assignedSlot) {
-                    visit(ariaNode, child, parentElementVisible, visited);
+                    visit(ariaNode, child, parentElementVisible, visited, allowTargeting, frameReports);
                 }
             }
             
             // Process shadow root
             if (element.shadowRoot) {
                 for (let child = element.shadowRoot.firstChild; child; child = child.nextSibling) {
-                    visit(ariaNode, child, parentElementVisible, visited);
+                    visit(ariaNode, child, parentElementVisible, visited, allowTargeting, frameReports);
                 }
             }
         }
         
         // Process aria-owns children
         for (const child of ariaChildren) {
-            visit(ariaNode, child, parentElementVisible, visited);
+            visit(ariaNode, child, parentElementVisible, visited, allowTargeting, frameReports);
         }
         
         // Add ::after content
@@ -521,6 +560,88 @@ JSON.stringify((function() {
                 ariaNode.props.placeholder = placeholder;
             }
         }
+
+        if (element.tagName === 'IFRAME') {
+            expandIframeContent(ariaNode, element, frameReports);
+        }
+    }
+
+    function expandIframeContent(ariaNode, iframeElement, frameReports) {
+        const report = {
+            index: ariaNode.index,
+            status: 'unavailable'
+        };
+
+        try {
+            const frameDoc = iframeElement.contentDocument;
+            const frameWindow = iframeElement.contentWindow;
+
+            if (!frameDoc || !frameWindow) {
+                ariaNode.props.frame_status = 'unavailable';
+                frameReports.push(report);
+                return;
+            }
+
+            report.url = frameWindow.location.href;
+            const frameState = ensureDocumentState(frameDoc);
+            report.document_id = frameState.documentId;
+            report.revision = String(frameState.revision);
+            report.status = 'expanded';
+
+            ariaNode.props.frame_status = 'expanded';
+            ariaNode.props.frame_url = report.url;
+
+            const frameRootElement = frameDoc.body || frameDoc.documentElement;
+            if (!frameRootElement) {
+                report.status = 'expanded_empty';
+                ariaNode.props.frame_status = 'expanded_empty';
+                frameReports.push(report);
+                return;
+            }
+
+            const frameSnapshot = {
+                role: 'fragment',
+                name: '',
+                children: [],
+                props: {},
+                element: frameRootElement,
+                box: computeBox(frameRootElement),
+                receivesPointerEvents: true
+            };
+            const frameVisited = new Set();
+            visit(frameSnapshot, frameRootElement, true, frameVisited, false, frameReports);
+            normalizeStringChildren(frameSnapshot);
+            normalizeGenericRoles(frameSnapshot);
+            ariaNode.children.push.apply(ariaNode.children, frameSnapshot.children);
+        } catch (error) {
+            report.status = 'cross_origin';
+            ariaNode.props.frame_status = 'cross_origin';
+        }
+
+        frameReports.push(report);
+    }
+
+    function buildRevisionToken(documentState, frameReports) {
+        const parts = ['main:' + documentState.revision];
+        for (const frame of frameReports) {
+            if (frame.document_id && frame.revision) {
+                parts.push((frame.index !== undefined ? frame.index : 'frame') + ':' + frame.document_id + ':' + frame.revision);
+            } else {
+                parts.push((frame.index !== undefined ? frame.index : 'frame') + ':' + frame.status);
+            }
+        }
+        return parts.join('|');
+    }
+
+    function buildDocumentMetadata(doc, documentState, frameReports) {
+        return {
+            document_id: documentState.documentId,
+            revision: buildRevisionToken(documentState, frameReports),
+            url: doc.location.href,
+            title: doc.title || '',
+            ready_state: doc.readyState,
+            frames: frameReports
+        };
     }
 
     // Normalize string children
@@ -649,6 +770,7 @@ JSON.stringify((function() {
 
     // Build CSS selector for element
     function buildSelector(element) {
+        const doc = element.ownerDocument;
         if (element.id) {
             return '#' + element.id;
         }
@@ -656,7 +778,7 @@ JSON.stringify((function() {
         const path = [];
         let current = element;
         
-        while (current && current !== document.body) {
+        while (current && current !== doc.body) {
             let selector = current.tagName.toLowerCase();
             
             if (current.className && typeof current.className === 'string') {
@@ -687,6 +809,8 @@ JSON.stringify((function() {
     try {
         const rootElement = document.body || document.documentElement;
         const visited = new Set();
+        const frameReports = [];
+        const documentState = ensureDocumentState(document);
         
         // Reset index counter
         currentIndex = 0;
@@ -703,7 +827,7 @@ JSON.stringify((function() {
         };
         
         // Visit the DOM tree
-        visit(snapshot, rootElement, true, visited);
+        visit(snapshot, rootElement, true, visited, true, frameReports);
         
         // Normalize
         normalizeStringChildren(snapshot);
@@ -718,17 +842,26 @@ JSON.stringify((function() {
         const serialized = serializeAriaNode(snapshot);
         
         return {
+            document: buildDocumentMetadata(document, documentState, frameReports),
             root: serialized,
             selectors: selectors,
-            iframeIndices: iframeIndices
+            iframe_indices: iframeIndices
         };
         
     } catch (error) {
         return {
+            document: {
+                document_id: '',
+                revision: '',
+                url: document.location.href,
+                title: document.title || '',
+                ready_state: document.readyState,
+                frames: []
+            },
             error: error.toString(),
             root: { role: 'fragment', name: '', children: [], props: {}, box_info: { visible: false } },
             selectors: [],
-            iframeIndices: []
+            iframe_indices: []
         };
     }
 })())

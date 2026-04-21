@@ -6,6 +6,7 @@ use headless_chrome::{Browser, Tab};
 use std::ffi::OsStr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU16, Ordering};
+use std::time::Instant;
 use std::time::Duration;
 
 const DEBUG_PORT_START: u16 = 40_000;
@@ -196,7 +197,77 @@ impl BrowserSession {
             .wait_until_navigated()
             .map_err(|e| BrowserError::NavigationFailed(format!("Navigation timeout: {}", e)))?;
 
+        self.wait_for_document_ready_with_timeout(Duration::from_secs(30))?;
+
         Ok(())
+    }
+
+    /// Read the current document ready state from the active tab.
+    pub fn document_ready_state(&self) -> Result<String> {
+        let result = self
+            .tab()?
+            .evaluate("document.readyState", false)
+            .map_err(|e| BrowserError::NavigationFailed(format!("Failed to read readyState: {}", e)))?;
+
+        let ready_state = result
+            .value
+            .and_then(|value| value.as_str().map(str::to_string))
+            .ok_or_else(|| {
+                BrowserError::NavigationFailed(
+                    "Browser did not return a document.readyState value".to_string(),
+                )
+            })?;
+
+        Ok(ready_state)
+    }
+
+    /// Wait for the current document to reach the `complete` ready state.
+    pub fn wait_for_document_ready_with_timeout(&self, timeout: Duration) -> Result<()> {
+        let start = Instant::now();
+        loop {
+            let ready_state = self.document_ready_state()?;
+            if ready_state == "complete" {
+                return Ok(());
+            }
+
+            if start.elapsed() >= timeout {
+                return Err(BrowserError::Timeout(format!(
+                    "Document did not reach readyState=complete within {} ms",
+                    timeout.as_millis()
+                )));
+            }
+
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    fn wait_for_history_settle(&self, previous_url: &str, timeout: Duration) -> Result<()> {
+        let start = Instant::now();
+        let mut observed_navigation = false;
+
+        loop {
+            let current_url = self.tab()?.get_url();
+            if current_url != previous_url {
+                observed_navigation = true;
+            }
+
+            let ready_state = self.document_ready_state()?;
+            let elapsed = start.elapsed();
+            let grace_period = Duration::from_millis(500);
+
+            if ready_state == "complete" && (observed_navigation || elapsed >= grace_period) {
+                return Ok(());
+            }
+
+            if elapsed >= timeout {
+                return Err(BrowserError::Timeout(format!(
+                    "History navigation did not settle within {} ms",
+                    timeout.as_millis()
+                )));
+            }
+
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
 
     /// Extract the DOM tree from the active tab
@@ -242,6 +313,7 @@ impl BrowserSession {
 
     /// Navigate back in browser history
     pub fn go_back(&self) -> Result<()> {
+        let previous_url = self.tab()?.get_url();
         let go_back_js = r#"
             (function() {
                 window.history.back();
@@ -252,15 +324,14 @@ impl BrowserSession {
         self.tab()?
             .evaluate(go_back_js, false)
             .map_err(|e| BrowserError::NavigationFailed(format!("Failed to go back: {}", e)))?;
-
-        // Wait a moment for navigation
-        std::thread::sleep(std::time::Duration::from_millis(300));
+        self.wait_for_history_settle(&previous_url, Duration::from_secs(5))?;
 
         Ok(())
     }
 
     /// Navigate forward in browser history
     pub fn go_forward(&self) -> Result<()> {
+        let previous_url = self.tab()?.get_url();
         let go_forward_js = r#"
             (function() {
                 window.history.forward();
@@ -271,9 +342,7 @@ impl BrowserSession {
         self.tab()?
             .evaluate(go_forward_js, false)
             .map_err(|e| BrowserError::NavigationFailed(format!("Failed to go forward: {}", e)))?;
-
-        // Wait a moment for navigation
-        std::thread::sleep(std::time::Duration::from_millis(300));
+        self.wait_for_history_settle(&previous_url, Duration::from_secs(5))?;
 
         Ok(())
     }

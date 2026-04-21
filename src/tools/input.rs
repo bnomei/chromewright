@@ -1,6 +1,7 @@
 use crate::error::{BrowserError, Result};
-use crate::tools::snapshot::{RenderMode, render_aria_tree};
-use crate::tools::{Tool, ToolContext, ToolResult, resolve_target};
+use crate::tools::{
+    TargetResolution, Tool, ToolContext, ToolResult, build_document_envelope, resolve_target,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -13,6 +14,10 @@ pub struct InputParams {
     /// Element index from DOM tree (use either this or selector, not both)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub index: Option<usize>,
+
+    /// Revision-scoped node reference from the snapshot tool
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_ref: Option<crate::dom::NodeRef>,
 
     /// Text to type into the element
     pub text: String,
@@ -36,16 +41,20 @@ impl Tool for InputTool {
         let InputParams {
             selector,
             index,
+            node_ref,
             text,
             clear,
         } = params;
         let target = {
-            let dom = if index.is_some() {
+            let dom = if index.is_some() || node_ref.is_some() {
                 Some(context.get_dom()?)
             } else {
                 None
             };
-            resolve_target("input", selector, index, dom)?
+            match resolve_target("input", selector, index, node_ref, dom)? {
+                TargetResolution::Resolved(target) => target,
+                TargetResolution::Failure(failure) => return Ok(failure),
+            }
         };
 
         let tab = context.session.tab()?;
@@ -67,15 +76,14 @@ impl Tool for InputTool {
                 reason: e.to_string(),
             })?;
 
-        context.invalidate_dom();
-        let snapshot = {
-            let dom = context.get_dom()?;
-            render_aria_tree(&dom.root, RenderMode::Ai, None)
-        };
-
-        let result_json = serde_json::json!({
-            "snapshot": snapshot
-        });
+        context.refresh_dom()?;
+        let mut result_json =
+            serde_json::to_value(build_document_envelope(context, Some(&target), true)?)?;
+        if let serde_json::Value::Object(ref mut map) = result_json {
+            map.insert("action".to_string(), serde_json::json!("input"));
+            map.insert("text".to_string(), serde_json::json!(text));
+            map.insert("clear".to_string(), serde_json::json!(clear));
+        }
 
         Ok(ToolResult::success_with(result_json))
     }

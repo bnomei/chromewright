@@ -1,9 +1,28 @@
 use browser_use::tools::{
-    CloseParams, GoBackParams, GoForwardParams, Tool, ToolContext, close::CloseTool,
-    go_back::GoBackTool, go_forward::GoForwardTool,
+    CloseParams, GoBackParams, GoForwardParams, Tool, ToolContext, WaitCondition, WaitParams,
+    close::CloseTool, go_back::GoBackTool, go_forward::GoForwardTool, wait::WaitTool,
 };
 use browser_use::{BrowserSession, LaunchOptions};
 use log::info;
+
+fn launch_or_skip() -> Option<BrowserSession> {
+    match BrowserSession::launch(LaunchOptions::new().headless(true)) {
+        Ok(session) => Some(session),
+        Err(err)
+            if err.to_string().contains("didn't give us a WebSocket URL before we timed out")
+                || err
+                    .to_string()
+                    .contains("Could not auto detect a chrome executable")
+                || err
+                    .to_string()
+                    .contains("Running as root without --no-sandbox is not supported") =>
+        {
+            eprintln!("Skipping browser integration test due to environment: {}", err);
+            None
+        }
+        Err(err) => panic!("Unexpected launch failure: {}", err),
+    }
+}
 
 #[test]
 #[ignore] // Requires Chrome to be installed
@@ -48,7 +67,9 @@ fn test_go_back_tool() {
         serde_json::to_string_pretty(&data).unwrap()
     );
 
-    assert_eq!(data["message"].as_str(), Some("Navigated back in history"));
+    assert_eq!(data["action"].as_str(), Some("go_back"));
+    assert!(data["document"]["revision"].as_str().is_some());
+    assert!(data["snapshot"].as_str().is_some());
 
     std::thread::sleep(std::time::Duration::from_millis(500));
 
@@ -105,10 +126,9 @@ fn test_go_forward_tool() {
         serde_json::to_string_pretty(&data).unwrap()
     );
 
-    assert_eq!(
-        data["message"].as_str(),
-        Some("Navigated forward in history")
-    );
+    assert_eq!(data["action"].as_str(), Some("go_forward"));
+    assert!(data["document"]["revision"].as_str().is_some());
+    assert!(data["snapshot"].as_str().is_some());
 
     std::thread::sleep(std::time::Duration::from_millis(500));
 
@@ -307,4 +327,40 @@ fn test_go_forward_on_last_page() {
         "Go forward on last page result: {}",
         serde_json::to_string_pretty(&result.data.unwrap()).unwrap()
     );
+}
+
+#[test]
+#[ignore]
+fn test_wait_tool_navigation_settled() {
+    let Some(session) = launch_or_skip() else {
+        return;
+    };
+
+    session
+        .navigate("data:text/html,<html><body><h1>Settled</h1></body></html>")
+        .expect("Failed to navigate");
+
+    let tool = WaitTool::default();
+    let mut context = ToolContext::new(&session);
+
+    let result = tool
+        .execute_typed(
+            WaitParams {
+                selector: None,
+                index: None,
+                node_ref: None,
+                condition: WaitCondition::NavigationSettled,
+                text: None,
+                value: None,
+                since_revision: None,
+                timeout_ms: 5_000,
+            },
+            &mut context,
+        )
+        .expect("Wait tool should succeed");
+
+    assert!(result.success);
+    let data = result.data.unwrap();
+    assert_eq!(data["condition"].as_str(), Some("navigation_settled"));
+    assert_eq!(data["document"]["ready_state"].as_str(), Some("complete"));
 }

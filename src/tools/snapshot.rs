@@ -1,6 +1,6 @@
 use crate::dom::{AriaChild, AriaNode, yaml_escape_key_if_needed, yaml_escape_value_if_needed};
 use crate::error::Result;
-use crate::tools::{Tool, ToolContext, ToolResult};
+use crate::tools::{Tool, ToolContext, ToolResult, build_document_envelope};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -28,29 +28,12 @@ impl Tool for SnapshotTool {
         params: SnapshotParams,
         context: &mut ToolContext,
     ) -> Result<ToolResult> {
-        // Get or extract the DOM tree
-        let dom = context.get_dom()?;
+        let mut envelope = build_document_envelope(context, None, true)?;
+        if params.incremental {
+            envelope.snapshot = envelope.snapshot.take();
+        }
 
-        // Generate YAML snapshot
-        let yaml_snapshot = render_aria_tree(&dom.root, RenderMode::Ai, None);
-
-        // Count interactive elements
-        let interactive_count = dom.count_interactive();
-
-        let result = if params.incremental {
-            // TODO: Implement incremental snapshots
-            serde_json::json!({
-                "full": yaml_snapshot,
-                "interactive_count": interactive_count,
-            })
-        } else {
-            serde_json::json!({
-                "snapshot": yaml_snapshot,
-                "interactive_count": interactive_count,
-            })
-        };
-
-        Ok(ToolResult::success_with(result))
+        Ok(ToolResult::success_with(envelope))
     }
 }
 

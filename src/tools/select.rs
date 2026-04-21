@@ -1,5 +1,7 @@
 use crate::error::{BrowserError, Result};
-use crate::tools::{Tool, ToolContext, ToolResult, resolve_target};
+use crate::tools::{
+    TargetResolution, Tool, ToolContext, ToolResult, build_document_envelope, resolve_target,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -13,6 +15,10 @@ pub struct SelectParams {
     /// Element index from DOM tree (use either this or selector, not both)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub index: Option<usize>,
+
+    /// Revision-scoped node reference from the snapshot tool
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_ref: Option<crate::dom::NodeRef>,
 
     /// Value to select in the dropdown
     pub value: String,
@@ -35,15 +41,19 @@ impl Tool for SelectTool {
         let SelectParams {
             selector,
             index,
+            node_ref,
             value,
         } = params;
         let target = {
-            let dom = if index.is_some() {
+            let dom = if index.is_some() || node_ref.is_some() {
                 Some(context.get_dom()?)
             } else {
                 None
             };
-            resolve_target("select", selector, index, dom)?
+            match resolve_target("select", selector, index, node_ref, dom)? {
+                TargetResolution::Resolved(target) => target,
+                TargetResolution::Failure(failure) => return Ok(failure),
+            }
         };
 
         let select_config = serde_json::json!({
@@ -74,11 +84,18 @@ impl Tool for SelectTool {
         };
 
         if result_json["success"].as_bool() == Some(true) {
-            Ok(ToolResult::success_with(serde_json::json!({
-                "selector": target.selector,
-                "value": value,
-                "selectedText": result_json["selectedText"]
-            })))
+            context.refresh_dom()?;
+            let mut payload =
+                serde_json::to_value(build_document_envelope(context, Some(&target), true)?)?;
+            if let serde_json::Value::Object(ref mut map) = payload {
+                map.insert("action".to_string(), serde_json::json!("select"));
+                map.insert("value".to_string(), serde_json::json!(value));
+                map.insert(
+                    "selectedText".to_string(),
+                    result_json["selectedText"].clone(),
+                );
+            }
+            Ok(ToolResult::success_with(payload))
         } else {
             Err(BrowserError::ToolExecutionFailed {
                 tool: "select".to_string(),

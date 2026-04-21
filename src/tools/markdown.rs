@@ -4,6 +4,7 @@ use crate::tools::readability_script::READABILITY_SCRIPT;
 use crate::tools::{Tool, ToolContext, ToolResult};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::time::{Duration, Instant};
 
 /// Parameters for getting markdown content with pagination support
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -49,10 +50,11 @@ impl Tool for GetMarkdownTool {
         params: GetMarkdownParams,
         context: &mut ToolContext,
     ) -> Result<ToolResult> {
-        // Wait for network idle with a timeout
-        // Since headless_chrome doesn't have a direct network idle wait,
-        // we add a small delay to let dynamic content load
-        std::thread::sleep(std::time::Duration::from_millis(1000));
+        context
+            .session
+            .wait_for_document_ready_with_timeout(std::time::Duration::from_secs(5))
+            .ok();
+        wait_for_markdown_settle(context, Duration::from_secs(2))?;
 
         // Inject Readability.js script and the conversion script
         // Use 'var' instead of 'const' to allow redeclaration on subsequent calls
@@ -168,6 +170,41 @@ impl Tool for GetMarkdownTool {
             "excerpt": extraction_result.excerpt,
             "siteName": extraction_result.site_name,
         })))
+    }
+}
+
+fn wait_for_markdown_settle(context: &ToolContext, timeout: Duration) -> Result<()> {
+    let start = Instant::now();
+    let mut previous_len: Option<u64> = None;
+    let mut stable_polls = 0_u8;
+
+    loop {
+        let result = context
+            .session
+            .tab()?
+            .evaluate(
+                "(() => (document.body && document.body.innerText ? document.body.innerText.length : 0))()",
+                false,
+            )
+            .map_err(|e| BrowserError::EvaluationFailed(e.to_string()))?;
+        let current_len = result.value.and_then(|value| value.as_u64()).unwrap_or(0);
+
+        if previous_len == Some(current_len) {
+            stable_polls += 1;
+        } else {
+            previous_len = Some(current_len);
+            stable_polls = 0;
+        }
+
+        if stable_polls >= 2 {
+            return Ok(());
+        }
+
+        if start.elapsed() >= timeout {
+            return Ok(());
+        }
+
+        std::thread::sleep(Duration::from_millis(100));
     }
 }
 

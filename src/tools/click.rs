@@ -1,5 +1,7 @@
 use crate::error::{BrowserError, Result};
-use crate::tools::{Tool, ToolContext, ToolResult, resolve_target};
+use crate::tools::{
+    TargetResolution, Tool, ToolContext, ToolResult, build_document_envelope, resolve_target,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -13,6 +15,10 @@ pub struct ClickParams {
     /// Element index from DOM tree (use either this or selector, not both)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub index: Option<usize>,
+
+    /// Revision-scoped node reference from the snapshot tool
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_ref: Option<crate::dom::NodeRef>,
 }
 
 /// Tool for clicking elements
@@ -27,14 +33,21 @@ impl Tool for ClickTool {
     }
 
     fn execute_typed(&self, params: ClickParams, context: &mut ToolContext) -> Result<ToolResult> {
-        let ClickParams { selector, index } = params;
+        let ClickParams {
+            selector,
+            index,
+            node_ref,
+        } = params;
         let target = {
-            let dom = if index.is_some() {
+            let dom = if index.is_some() || node_ref.is_some() {
                 Some(context.get_dom()?)
             } else {
                 None
             };
-            resolve_target("click", selector, index, dom)?
+            match resolve_target("click", selector, index, node_ref, dom)? {
+                TargetResolution::Resolved(target) => target,
+                TargetResolution::Failure(failure) => return Ok(failure),
+            }
         };
 
         let tab = context.session.tab()?;
@@ -46,18 +59,11 @@ impl Tool for ClickTool {
                 reason: e.to_string(),
             })?;
 
-        let result = if let Some(index) = target.index {
-            serde_json::json!({
-                "index": index,
-                "selector": target.selector,
-                "method": target.method(),
-            })
-        } else {
-            serde_json::json!({
-                "selector": target.selector,
-                "method": target.method(),
-            })
-        };
+        context.refresh_dom()?;
+        let mut result = serde_json::to_value(build_document_envelope(context, Some(&target), true)?)?;
+        if let serde_json::Value::Object(ref mut map) = result {
+            map.insert("action".to_string(), serde_json::json!("click"));
+        }
 
         Ok(ToolResult::success_with(result))
     }
