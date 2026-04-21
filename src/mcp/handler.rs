@@ -1,6 +1,6 @@
 //! ServerHandler implementation for BrowserSession
 
-use crate::browser::BrowserSession;
+use crate::browser::{BrowserSession, ConnectionOptions};
 use log::debug;
 use rmcp::{
     ServerHandler,
@@ -21,15 +21,19 @@ pub struct BrowserServer {
 }
 
 impl BrowserServer {
+    fn from_session(session: BrowserSession) -> Self {
+        Self {
+            session: Arc::new(Mutex::new(session)),
+            tool_router: Self::tool_router(),
+        }
+    }
+
     /// Create a new browser server with default launch options
     pub fn new() -> Result<Self, String> {
         let session =
             BrowserSession::new().map_err(|e| format!("Failed to launch browser: {}", e))?;
 
-        Ok(Self {
-            session: Arc::new(Mutex::new(session)),
-            tool_router: Self::tool_router(),
-        })
+        Ok(Self::from_session(session))
     }
 
     /// Create a new browser server with custom launch options
@@ -37,10 +41,15 @@ impl BrowserServer {
         let session = BrowserSession::launch(options)
             .map_err(|e| format!("Failed to launch browser: {}", e))?;
 
-        Ok(Self {
-            session: Arc::new(Mutex::new(session)),
-            tool_router: Self::tool_router(),
-        })
+        Ok(Self::from_session(session))
+    }
+
+    /// Create a browser server by connecting to an existing WebSocket endpoint.
+    pub fn connect(options: ConnectionOptions) -> Result<Self, String> {
+        let session = BrowserSession::connect(options)
+            .map_err(|e| format!("Failed to connect browser session: {}", e))?;
+
+        Ok(Self::from_session(session))
     }
 
     /// Get a reference to the browser session (blocking lock)

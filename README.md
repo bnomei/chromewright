@@ -35,12 +35,32 @@ let dom = session.extract_dom()?;
 Run the built-in MCP server for AI-driven automation:
 
 ```bash
-# Headless mode
-cargo run --bin mcp-server
+# Headless local browser over stdio
+cargo run --features mcp-server --bin mcp-server
 
-# Visible browser
-cargo run --bin mcp-server -- --headed
+# Visible local browser over stdio
+cargo run --features mcp-server --bin mcp-server -- --headed
+
+# Connect to an existing Chrome DevTools WebSocket instead of launching Chrome
+cargo run --features mcp-server --bin mcp-server -- \
+  --ws-endpoint ws://127.0.0.1:9222/devtools/browser/<id>
+
+# Expose streamable HTTP transport on localhost:3000/mcp
+cargo run --features mcp-server --bin mcp-server -- --transport http
 ```
+
+Supported browser-mode flags:
+
+- `--headed`
+- `--executable-path <PATH>`
+- `--user-data-dir <DIR>`
+- `--debug-port <PORT>`
+- `--ws-endpoint <URL>` for remote browser connections
+
+Supported transports:
+
+- `stdio` (default)
+- `http` via streamable HTTP on `--port` and `--http-path`
 
 ## Features
 

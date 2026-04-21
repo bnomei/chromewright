@@ -17,11 +17,18 @@
 //! ### Running the MCP Server
 //!
 //! ```bash
-//! # Run headless browser
-//! cargo run --bin mcp-server
+//! # Run a headless local browser over stdio
+//! cargo run --features mcp-server --bin mcp-server
 //!
-//! # Run with visible browser (useful for debugging)
-//! cargo run --bin mcp-server -- --headed
+//! # Run with a visible local browser
+//! cargo run --features mcp-server --bin mcp-server -- --headed
+//!
+//! # Connect to an existing Chrome DevTools WebSocket instead of launching Chrome
+//! cargo run --features mcp-server --bin mcp-server -- \
+//!   --ws-endpoint ws://127.0.0.1:9222/devtools/browser/<id>
+//!
+//! # Serve MCP over streamable HTTP on localhost:3000/mcp
+//! cargo run --features mcp-server --bin mcp-server -- --transport http
 //! ```
 //!
 //! ## Library Usage (Advanced)

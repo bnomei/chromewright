@@ -24,20 +24,6 @@ Meta:
 
 ## Todo
 
-- [ ] T002: Make the CLI contract honest (owner: unassigned) (scope: `src/bin/mcp_server.rs`, `src/browser/`, `README.md`, `tests/`) (depends: T001)
-  - Covers: R002, R007
-  - Context: The binary currently parses `--executable-path`, `--cdp-endpoint`, `--ws-endpoint`, `--user-data-dir`, and `--log-file`, but only `headless` is applied. The public surface must either be wired through or reduced.
-  - Reuse_targets: `BrowserSession::connect(...)`, `LaunchOptions`, existing CLI parsing
-  - Autonomy: standard
-  - Risk: medium
-  - Complexity: medium
-  - Verification_mode: mayor
-  - Verification_status: pending
-  - DoD: every retained CLI flag is honored end-to-end or removed from the interface and docs.
-  - Validation: `cargo check --all-features --all-targets --locked`, `cargo test --locked`
-  - Escalate if: retaining both remote-connect and local-launch modes creates an unclear user contract that needs a product decision.
-  - Notes: Close with one atomic commit before any dependency refreshes.
-
 - [ ] T003: Refresh compatible dependencies inside current major lines (owner: unassigned) (scope: `Cargo.toml`, `Cargo.lock`) (depends: T001, T002)
   - Covers: R002, R003
   - Context: Most direct dependencies are already on current major versions. The low-risk wave is to refresh lockfile-compatible crates and any same-major manifest ranges before attempting the `rmcp` major jump.
@@ -97,6 +83,14 @@ Meta:
   - Notes: Close with one atomic commit focused on tool-layer cleanup.
 
 ## Done
+
+- [x] T002: Make the CLI contract honest (owner: mayor) (scope: `src/bin/mcp_server.rs`, `src/browser/`, `README.md`, `tests/`) (depends: T001)
+  - Covers: R002, R007
+  - Verification_mode: mayor
+  - Verification_status: passed
+  - DoD: every retained CLI flag is honored end-to-end or removed from the interface and docs.
+  - Validation: `cargo test --locked --all-features`, `cargo check --all-features --all-targets --locked`
+  - Notes: Wired the CLI to either launch a local browser or connect to an existing DevTools WebSocket, removed unsupported flags and SSE mode from the binary surface, and updated the public docs/examples to match the supported contract.
 
 - [x] T001: Stabilize the browser-launch baseline (owner: mayor) (scope: `src/browser/`, `tests/`, `Cargo.toml`) (depends: -)
   - Covers: R001, R002, R004

@@ -3,117 +3,132 @@
 //! This binary provides a Model Context Protocol (MCP) server for browser automation.
 //! It exposes browser automation tools that can be used by AI assistants and other MCP clients.
 
-use browser_use::browser::LaunchOptions;
+use browser_use::browser::{ConnectionOptions, LaunchOptions};
 use browser_use::mcp::BrowserServer;
 use clap::{Parser, ValueEnum};
 use log::{debug, info};
 use rmcp::{ServiceExt, transport::stdio};
 use std::io::{stdin, stdout};
+use std::path::PathBuf;
 
 #[cfg(feature = "mcp-server")]
 use rmcp::transport::{
-    sse_server::{SseServer, SseServerConfig},
     streamable_http_server::{StreamableHttpService, session::local::LocalSessionManager},
 };
-
-#[cfg(feature = "mcp-server")]
-use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum Transport {
     /// Standard input/output transport (default)
     Stdio,
-    /// Server-Sent Events transport
-    Sse,
     /// HTTP streamable transport
     Http,
 }
 
-#[derive(Parser)]
+#[derive(Debug, Clone)]
+enum BrowserMode {
+    Launch(LaunchOptions),
+    Connect(ConnectionOptions),
+}
+
+#[derive(Debug, Parser)]
 #[command(name = "browser-use")]
 #[command(version)]
 #[command(about = "Browser automation MCP server", long_about = None)]
 struct Cli {
     /// Launch browser in headed mode (default: headless)
-    #[arg(long, short = 'H')]
+    #[arg(long, short = 'H', conflicts_with = "ws_endpoint")]
     headed: bool,
 
     /// Path to custom browser executable
-    #[arg(long, value_name = "PATH")]
-    executable_path: Option<String>,
-
-    /// CDP endpoint URL for remote browser connection
-    #[arg(long, value_name = "URL")]
-    cdp_endpoint: Option<String>,
+    #[arg(long, value_name = "PATH", conflicts_with = "ws_endpoint")]
+    executable_path: Option<PathBuf>,
 
     /// WebSocket endpoint URL for remote browser connection
-    #[arg(long, value_name = "URL")]
+    #[arg(
+        long,
+        value_name = "URL",
+        conflicts_with_all = ["headed", "executable_path", "user_data_dir", "debug_port"]
+    )]
     ws_endpoint: Option<String>,
 
     /// Persistent browser profile directory
-    #[arg(long, value_name = "DIR")]
-    user_data_dir: Option<String>,
+    #[arg(long, value_name = "DIR", conflicts_with = "ws_endpoint")]
+    user_data_dir: Option<PathBuf>,
+
+    /// Explicit DevTools debugging port for locally launched browsers
+    #[arg(long, value_name = "PORT", conflicts_with = "ws_endpoint")]
+    debug_port: Option<u16>,
 
     /// Transport type to use
     #[arg(long, short = 't', value_enum, default_value = "stdio")]
     transport: Transport,
 
-    /// Port for SSE or HTTP transport (default: 3000)
+    /// Port for HTTP transport (default: 3000)
     #[arg(long, short = 'p', default_value = "3000")]
     port: u16,
-
-    /// SSE endpoint path (default: /sse)
-    #[arg(long, default_value = "/sse")]
-    sse_path: String,
-
-    /// SSE POST path for messages (default: /message)
-    #[arg(long, default_value = "/message")]
-    sse_post_path: String,
 
     /// HTTP streamable endpoint path (default: /mcp)
     #[arg(long, default_value = "/mcp")]
     http_path: String,
+}
 
-    /// Log file path for stdio mode (default: browser-use-mcp.log)
-    #[arg(long, default_value = "browser-use-mcp.log")]
-    log_file: String,
+fn browser_mode_from_cli(cli: &Cli) -> BrowserMode {
+    if let Some(ws_endpoint) = &cli.ws_endpoint {
+        return BrowserMode::Connect(ConnectionOptions::new(ws_endpoint.clone()));
+    }
+
+    BrowserMode::Launch(LaunchOptions {
+        headless: !cli.headed,
+        chrome_path: cli.executable_path.clone(),
+        user_data_dir: cli.user_data_dir.clone(),
+        debug_port: cli.debug_port,
+        ..Default::default()
+    })
+}
+
+fn create_browser_server(mode: &BrowserMode) -> Result<BrowserServer, String> {
+    match mode {
+        BrowserMode::Launch(options) => BrowserServer::with_options(options.clone()),
+        BrowserMode::Connect(options) => BrowserServer::connect(options.clone()),
+    }
 }
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
-
-    // Configure browser launch options
-    let options = LaunchOptions {
-        headless: !cli.headed,
-        ..Default::default()
-    };
+    let browser_mode = browser_mode_from_cli(&cli);
 
     info!("Browser-use MCP Server v{}", env!("CARGO_PKG_VERSION"));
-    info!(
-        "Browser mode: {}",
-        if options.headless {
-            "headless"
-        } else {
-            "headed"
+    match &browser_mode {
+        BrowserMode::Launch(options) => {
+            info!(
+                "Browser mode: {}",
+                if options.headless {
+                    "headless"
+                } else {
+                    "headed"
+                }
+            );
+
+            if let Some(ref path) = options.chrome_path {
+                info!("Browser executable: {}", path.display());
+            }
+
+            if let Some(ref dir) = options.user_data_dir {
+                info!("User data directory: {}", dir.display());
+            }
+
+            if let Some(port) = options.debug_port {
+                info!("DevTools port: {}", port);
+            } else {
+                info!("DevTools port: auto");
+            }
         }
-    );
-
-    if let Some(ref path) = cli.executable_path {
-        info!("Browser executable: {}", path);
-    }
-
-    if let Some(ref endpoint) = cli.cdp_endpoint {
-        info!("CDP endpoint: {}", endpoint);
-    }
-
-    if let Some(ref endpoint) = cli.ws_endpoint {
-        info!("WebSocket endpoint: {}", endpoint);
-    }
-
-    if let Some(ref dir) = cli.user_data_dir {
-        info!("User data directory: {}", dir);
+        BrowserMode::Connect(options) => {
+            info!("Browser mode: connect");
+            info!("WebSocket endpoint: {}", options.ws_url);
+        }
     }
 
     // Route to appropriate transport
@@ -122,7 +137,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             info!("Transport: stdio");
             info!("Ready to accept MCP connections via stdio");
             let (_read, _write) = (stdin(), stdout());
-            let service = BrowserServer::with_options(options.clone())
+            let service = create_browser_server(&browser_mode)
                 .map_err(|e| format!("Failed to create browser server: {}", e))?;
             let server = service.serve(stdio()).await?;
 
@@ -171,51 +186,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 debug!("Server quit with reason: {:?}", quit_reason);
             }
         }
-        Transport::Sse => {
-            info!("Transport: SSE");
-            info!("Port: {}", cli.port);
-            info!("SSE path: {}", cli.sse_path);
-            info!("SSE POST path: {}", cli.sse_post_path);
-
-            let bind_addr = format!("127.0.0.1:{}", cli.port);
-
-            // Create SSE server configuration
-            let config = SseServerConfig {
-                bind: bind_addr.parse()?,
-                sse_path: cli.sse_path.clone(),
-                post_path: cli.sse_post_path.clone(),
-                ct: CancellationToken::new(),
-                sse_keep_alive: None,
-            };
-
-            // Create SSE server and router
-            let (sse_server, router) = SseServer::new(config);
-
-            info!(
-                "Ready to accept MCP connections at http://{}{}",
-                bind_addr, cli.sse_path
-            );
-
-            // Register service factory for each connection
-            let _cancellation_token = sse_server.with_service(move || {
-                BrowserServer::with_options(options.clone())
-                    .expect("Failed to create browser server")
-            });
-
-            // Start HTTP server with SSE router
-            let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
-            axum::serve(listener, router.into_make_service()).await?;
-        }
         Transport::Http => {
             info!("Transport: HTTP streamable");
             info!("Port: {}", cli.port);
             info!("HTTP path: {}", cli.http_path);
 
             let bind_addr = format!("127.0.0.1:{}", cli.port);
+            let browser_mode = browser_mode.clone();
 
             // Create service factory closure
             let service_factory = move || {
-                BrowserServer::with_options(options.clone())
+                create_browser_server(&browser_mode)
                     .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
             };
 
@@ -238,4 +219,88 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::error::ErrorKind;
+
+    #[test]
+    fn test_browser_mode_defaults_to_headless_launch() {
+        let cli = Cli::try_parse_from(["browser-use"]).expect("CLI should parse");
+
+        match browser_mode_from_cli(&cli) {
+            BrowserMode::Launch(options) => {
+                assert!(options.headless);
+                assert_eq!(options.chrome_path, None);
+                assert_eq!(options.user_data_dir, None);
+                assert_eq!(options.debug_port, None);
+            }
+            BrowserMode::Connect(_) => panic!("expected local launch mode"),
+        }
+    }
+
+    #[test]
+    fn test_browser_mode_uses_local_launch_flags() {
+        let cli = Cli::try_parse_from([
+            "browser-use",
+            "--headed",
+            "--executable-path",
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            "--user-data-dir",
+            "/tmp/browser-use-profile",
+            "--debug-port",
+            "9333",
+        ])
+        .expect("CLI should parse");
+
+        match browser_mode_from_cli(&cli) {
+            BrowserMode::Launch(options) => {
+                assert!(!options.headless);
+                assert_eq!(
+                    options.chrome_path,
+                    Some(PathBuf::from(
+                        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+                    ))
+                );
+                assert_eq!(
+                    options.user_data_dir,
+                    Some(PathBuf::from("/tmp/browser-use-profile"))
+                );
+                assert_eq!(options.debug_port, Some(9333));
+            }
+            BrowserMode::Connect(_) => panic!("expected local launch mode"),
+        }
+    }
+
+    #[test]
+    fn test_browser_mode_can_connect_to_existing_websocket() {
+        let cli = Cli::try_parse_from([
+            "browser-use",
+            "--ws-endpoint",
+            "ws://127.0.0.1:9222/devtools/browser/test",
+        ])
+        .expect("CLI should parse");
+
+        match browser_mode_from_cli(&cli) {
+            BrowserMode::Connect(options) => {
+                assert_eq!(options.ws_url, "ws://127.0.0.1:9222/devtools/browser/test");
+            }
+            BrowserMode::Launch(_) => panic!("expected remote connect mode"),
+        }
+    }
+
+    #[test]
+    fn test_ws_endpoint_conflicts_with_local_launch_flags() {
+        let err = Cli::try_parse_from([
+            "browser-use",
+            "--ws-endpoint",
+            "ws://127.0.0.1:9222/devtools/browser/test",
+            "--headed",
+        ])
+        .expect_err("CLI should reject conflicting browser modes");
+
+        assert_eq!(err.kind(), ErrorKind::ArgumentConflict);
+    }
 }
