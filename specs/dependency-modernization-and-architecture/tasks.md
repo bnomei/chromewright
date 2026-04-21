@@ -24,20 +24,6 @@ Meta:
 
 ## Todo
 
-- [ ] T001: Stabilize the browser-launch baseline (owner: unassigned) (scope: `src/browser/`, `tests/`, `Cargo.toml`) (depends: -)
-  - Covers: R001, R002, R004
-  - Context: Ignored browser tests currently fail before exercising browser behavior because `headless_chrome` defaults to scanning ports `8000..9000`, and the repo does not expose an explicit launch port. The first execution step must make this path deterministic enough that browser tests become a useful signal.
-  - Reuse_targets: `headless_chrome::LaunchOptions.port`, existing `LaunchOptions` and `BrowserSession::launch(...)` wiring
-  - Autonomy: standard
-  - Risk: medium
-  - Complexity: medium
-  - Verification_mode: mayor
-  - Verification_status: pending
-  - DoD: launch configuration supports deterministic debugging-port behavior, and the relevant ignored browser-launch tests are either green or precisely environment-gated.
-  - Validation: `cargo test --locked`, `cargo test --locked -- --ignored --lib`
-  - Escalate if: a reliable launch fix requires a platform-specific Chrome path or environment contract that should become user-facing.
-  - Notes: Close with one atomic commit before any dependency version changes.
-
 - [ ] T002: Make the CLI contract honest (owner: unassigned) (scope: `src/bin/mcp_server.rs`, `src/browser/`, `README.md`, `tests/`) (depends: T001)
   - Covers: R002, R007
   - Context: The binary currently parses `--executable-path`, `--cdp-endpoint`, `--ws-endpoint`, `--user-data-dir`, and `--log-file`, but only `headless` is applied. The public surface must either be wired through or reduced.
@@ -111,6 +97,14 @@ Meta:
   - Notes: Close with one atomic commit focused on tool-layer cleanup.
 
 ## Done
+
+- [x] T001: Stabilize the browser-launch baseline (owner: mayor) (scope: `src/browser/`, `tests/`, `Cargo.toml`) (depends: -)
+  - Covers: R001, R002, R004
+  - Verification_mode: mayor
+  - Verification_status: passed
+  - DoD: launch configuration supports deterministic debugging-port behavior, and the relevant ignored browser-launch tests are either green or precisely environment-gated.
+  - Validation: `cargo test --locked`, `cargo test --locked --lib -- --ignored`
+  - Notes: Added repo-owned DevTools port selection instead of inheriting the dependency's `8000..9000` scan, and made ignored browser-launch tests skip only on recognized environment launch failures.
 
 - [x] P000: Capture baseline evidence and write the staged execution spec (owner: mayor) (scope: `specs/dependency-modernization-and-architecture/`) (depends: -)
   - Covers: R001, R002, R003

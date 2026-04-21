@@ -18,6 +18,10 @@ pub struct LaunchOptions {
     /// User data directory for browser profile
     pub user_data_dir: Option<PathBuf>,
 
+    /// DevTools debugging port for the launched browser.
+    /// If not provided, the library chooses an available local port.
+    pub debug_port: Option<u16>,
+
     /// Enable sandbox mode (default: true)
     pub sandbox: bool,
 
@@ -33,6 +37,7 @@ impl Default for LaunchOptions {
             window_width: 1280,
             window_height: 720,
             user_data_dir: None,
+            debug_port: None,
             sandbox: true,
             launch_timeout: 30000,
         }
@@ -67,6 +72,12 @@ impl LaunchOptions {
     /// Builder method: set user data directory
     pub fn user_data_dir(mut self, dir: PathBuf) -> Self {
         self.user_data_dir = Some(dir);
+        self
+    }
+
+    /// Builder method: set DevTools debugging port
+    pub fn debug_port(mut self, port: u16) -> Self {
+        self.debug_port = Some(port);
         self
     }
 
@@ -119,6 +130,7 @@ mod tests {
         assert!(opts.headless);
         assert_eq!(opts.window_width, 1280);
         assert_eq!(opts.window_height, 720);
+        assert_eq!(opts.debug_port, None);
         assert!(opts.sandbox);
         assert_eq!(opts.launch_timeout, 30000);
     }
@@ -128,12 +140,14 @@ mod tests {
         let opts = LaunchOptions::new()
             .headless(false)
             .window_size(1920, 1080)
+            .debug_port(9222)
             .sandbox(false)
             .launch_timeout(60000);
 
         assert!(!opts.headless);
         assert_eq!(opts.window_width, 1920);
         assert_eq!(opts.window_height, 1080);
+        assert_eq!(opts.debug_port, Some(9222));
         assert!(!opts.sandbox);
         assert_eq!(opts.launch_timeout, 60000);
     }

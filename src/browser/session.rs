@@ -5,7 +5,12 @@ use crate::tools::{ToolContext, ToolRegistry};
 use headless_chrome::{Browser, Tab};
 use std::ffi::OsStr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::Duration;
+
+const DEBUG_PORT_START: u16 = 40_000;
+const DEBUG_PORT_END: u16 = 59_999;
+static DEBUG_PORT_COUNTER: AtomicU16 = AtomicU16::new(DEBUG_PORT_START);
 
 /// Wrapper for Tab and Element to maintain proper lifetime relationships
 pub struct TabElement<'a> {
@@ -53,6 +58,11 @@ impl BrowserSession {
         if let Some(dir) = options.user_data_dir {
             launch_opts.user_data_dir = Some(dir);
         }
+
+        launch_opts.port = Some(match options.debug_port {
+            Some(port) => port,
+            None => choose_debug_port(),
+        });
 
         // Set sandbox mode
         launch_opts.sandbox = options.sandbox;
@@ -287,9 +297,27 @@ impl Default for BrowserSession {
     }
 }
 
+fn choose_debug_port() -> u16 {
+    let span = DEBUG_PORT_END - DEBUG_PORT_START + 1;
+    let offset = DEBUG_PORT_COUNTER.fetch_add(1, Ordering::Relaxed) % span;
+    DEBUG_PORT_START + offset
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::browser::launch_error_is_environmental;
+
+    fn launch_or_skip(result: Result<BrowserSession>) -> Option<BrowserSession> {
+        match result {
+            Ok(session) => Some(session),
+            Err(err) if launch_error_is_environmental(&err) => {
+                eprintln!("Skipping browser launch test due to environment: {}", err);
+                None
+            }
+            Err(err) => panic!("Unexpected launch failure: {}", err),
+        }
+    }
 
     #[test]
     fn test_launch_options_builder() {
@@ -309,10 +337,22 @@ mod tests {
     }
 
     #[test]
+    fn test_choose_debug_port_advances_within_expected_range() {
+        let first = choose_debug_port();
+        let second = choose_debug_port();
+
+        assert!((DEBUG_PORT_START..=DEBUG_PORT_END).contains(&first));
+        assert!((DEBUG_PORT_START..=DEBUG_PORT_END).contains(&second));
+        assert_ne!(first, second);
+    }
+
+    #[test]
     #[ignore]
     fn test_get_active_tab() {
-        let session = BrowserSession::launch(LaunchOptions::new().headless(true))
-            .expect("Failed to launch browser");
+        let Some(session) = launch_or_skip(BrowserSession::launch(LaunchOptions::new().headless(true)))
+        else {
+            return;
+        };
 
         let tab = session.get_active_tab();
         assert!(tab.is_ok());
@@ -322,15 +362,20 @@ mod tests {
     #[test]
     #[ignore] // Ignore by default, run with: cargo test -- --ignored
     fn test_launch_browser() {
-        let result = BrowserSession::launch(LaunchOptions::new().headless(true));
-        assert!(result.is_ok());
+        let Some(_session) =
+            launch_or_skip(BrowserSession::launch(LaunchOptions::new().headless(true)))
+        else {
+            return;
+        };
     }
 
     #[test]
     #[ignore]
     fn test_navigate() {
-        let session = BrowserSession::launch(LaunchOptions::new().headless(true))
-            .expect("Failed to launch browser");
+        let Some(session) = launch_or_skip(BrowserSession::launch(LaunchOptions::new().headless(true)))
+        else {
+            return;
+        };
 
         let result = session.navigate("about:blank");
         assert!(result.is_ok());
@@ -339,8 +384,11 @@ mod tests {
     #[test]
     #[ignore]
     fn test_new_tab() {
-        let mut session = BrowserSession::launch(LaunchOptions::new().headless(true))
-            .expect("Failed to launch browser");
+        let Some(mut session) =
+            launch_or_skip(BrowserSession::launch(LaunchOptions::new().headless(true)))
+        else {
+            return;
+        };
 
         let result = session.new_tab();
         assert!(result.is_ok());
