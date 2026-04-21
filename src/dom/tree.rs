@@ -475,4 +475,94 @@ mod tests {
             _ => panic!("Expected node child"),
         }
     }
+
+    #[test]
+    fn test_get_selector_and_snapshot_nodes() {
+        let root = create_test_tree();
+        let mut tree = DomTree::new(root);
+        tree.document.document_id = "doc-1".to_string();
+        tree.document.revision = "rev-2".to_string();
+        tree.selectors = vec!["button.primary".to_string(), "a[href='/next']".to_string()];
+
+        assert_eq!(
+            tree.get_selector(0).map(String::as_str),
+            Some("button.primary")
+        );
+        assert_eq!(
+            tree.get_selector(1).map(String::as_str),
+            Some("a[href='/next']")
+        );
+        assert_eq!(tree.get_selector(99), None);
+        assert_eq!(tree.count_interactive(), 2);
+
+        let snapshot_nodes = tree.snapshot_nodes();
+        assert_eq!(snapshot_nodes.len(), 2);
+        assert_eq!(snapshot_nodes[0].index, 0);
+        assert_eq!(snapshot_nodes[0].role, "button");
+        assert_eq!(snapshot_nodes[0].name, "Click me");
+        assert_eq!(snapshot_nodes[0].node_ref.document_id, "doc-1");
+        assert_eq!(snapshot_nodes[0].node_ref.revision, "rev-2");
+        assert_eq!(snapshot_nodes[1].index, 1);
+        assert_eq!(snapshot_nodes[1].role, "link");
+    }
+
+    #[test]
+    fn test_rebuild_maps_tracks_iframe_indices() {
+        let mut root = AriaNode::fragment();
+        root.children.push(AriaChild::Node(Box::new(
+            AriaNode::new("iframe", "Embedded").with_index(3),
+        )));
+
+        let tree = DomTree::new(root);
+
+        assert_eq!(tree.selectors.len(), 4);
+        assert_eq!(tree.get_iframe_indices(), &[3]);
+    }
+
+    #[test]
+    fn test_to_json_serializes_tree() {
+        let tree = DomTree::new(create_test_tree());
+        let json = tree.to_json().expect("tree should serialize");
+
+        assert!(json.contains("\"button\""));
+        assert!(json.contains("\"Click me\""));
+    }
+
+    #[test]
+    fn test_assemble_with_iframes_merges_snapshot_and_offsets_nested_iframes() {
+        let mut main_root = AriaNode::fragment();
+        main_root.children.push(AriaChild::Node(Box::new(
+            AriaNode::new("iframe", "Outer Frame").with_index(0),
+        )));
+
+        let mut nested_root = AriaNode::fragment();
+        nested_root.children.push(AriaChild::Node(Box::new(
+            AriaNode::new("button", "Inside iframe").with_index(0),
+        )));
+        nested_root.children.push(AriaChild::Node(Box::new(
+            AriaNode::new("iframe", "Nested Frame").with_index(1),
+        )));
+
+        let mut main = DomTree::new(main_root);
+        main.selectors = vec!["#outer-frame".to_string()];
+
+        let mut nested = DomTree::new(nested_root);
+        nested.selectors = vec!["#inside-button".to_string(), "#nested-frame".to_string()];
+
+        let assembled = main.assemble_with_iframes(|index| {
+            if index == 0 {
+                Some(nested.clone())
+            } else {
+                None
+            }
+        });
+
+        let iframe_node = assembled
+            .find_node_by_index(0)
+            .expect("iframe should exist");
+        assert_eq!(iframe_node.children.len(), 2);
+        assert!(assembled.selectors.contains(&"#nested-frame".to_string()));
+        assert!(assembled.get_iframe_indices().contains(&0));
+        assert!(assembled.get_iframe_indices().contains(&2));
+    }
 }

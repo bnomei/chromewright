@@ -595,6 +595,19 @@ mod tests {
     }
 
     #[test]
+    fn test_tool_result_success_with_and_failure_with_store_structured_payloads() {
+        let success = ToolResult::success_with(serde_json::json!({"ok": true}));
+        assert!(success.success);
+        assert_eq!(success.data, Some(serde_json::json!({"ok": true})));
+        assert_eq!(success.error, None);
+
+        let failure = ToolResult::failure_with("Boom", serde_json::json!({"code": "boom"}));
+        assert!(!failure.success);
+        assert_eq!(failure.error.as_deref(), Some("Boom"));
+        assert_eq!(failure.data, Some(serde_json::json!({"code": "boom"})));
+    }
+
+    #[test]
     fn test_default_registry_excludes_operator_tools() {
         let registry = ToolRegistry::with_defaults();
 
@@ -611,6 +624,17 @@ mod tests {
         assert!(registry.has("snapshot"));
         assert!(registry.has("evaluate"));
         assert!(registry.has("screenshot"));
+    }
+
+    #[test]
+    fn test_registry_list_names_count_and_get_are_consistent() {
+        let registry = ToolRegistry::with_defaults();
+        let names = registry.list_names();
+
+        assert_eq!(registry.count(), names.len());
+        assert!(names.contains(&"snapshot".to_string()));
+        assert!(registry.get("snapshot").is_some());
+        assert!(registry.get("missing").is_none());
     }
 
     #[test]

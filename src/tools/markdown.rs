@@ -273,3 +273,93 @@ struct ExtractionResult {
     #[serde(default)]
     error: Option<String>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_entry(full_markdown: &str) -> MarkdownCacheEntry {
+        MarkdownCacheEntry {
+            document_id: "doc-1".to_string(),
+            revision: "rev-1".to_string(),
+            title: "Example Title".to_string(),
+            url: "https://example.com".to_string(),
+            byline: "Example Author".to_string(),
+            excerpt: "Example excerpt".to_string(),
+            site_name: "Example Site".to_string(),
+            full_markdown: full_markdown.to_string(),
+        }
+    }
+
+    #[test]
+    fn test_get_markdown_params_default() {
+        let params = GetMarkdownParams::default();
+
+        assert_eq!(params.page, 1);
+        assert_eq!(params.page_size, 100_000);
+    }
+
+    #[test]
+    fn test_paginate_markdown_first_page_includes_title_and_more_pages_notice() {
+        let entry = sample_entry("abcdefghij");
+        let output = paginate_markdown(
+            &entry,
+            &GetMarkdownParams {
+                page: 1,
+                page_size: 4,
+            },
+        );
+
+        assert_eq!(output.current_page, 1);
+        assert_eq!(output.total_pages, 3);
+        assert!(output.has_more_pages);
+        assert!(output.markdown.starts_with("# Example Title\n\nabcd"));
+        assert!(output.markdown.contains("Page 1 of 3"));
+        assert!(output.markdown.contains("There are 2 more page(s)"));
+        assert_eq!(output.length, output.markdown.len());
+        assert_eq!(output.byline, "Example Author");
+        assert_eq!(output.excerpt, "Example excerpt");
+        assert_eq!(output.site_name, "Example Site");
+    }
+
+    #[test]
+    fn test_paginate_markdown_clamps_to_last_page_without_title_prefix() {
+        let entry = sample_entry("abcdefghij");
+        let output = paginate_markdown(
+            &entry,
+            &GetMarkdownParams {
+                page: 99,
+                page_size: 4,
+            },
+        );
+
+        assert_eq!(output.current_page, 3);
+        assert_eq!(output.total_pages, 3);
+        assert!(!output.has_more_pages);
+        assert!(!output.markdown.starts_with("# Example Title"));
+        assert!(output.markdown.starts_with("ij"));
+        assert!(
+            output
+                .markdown
+                .contains("Page 3 of 3. This is the last page.")
+        );
+    }
+
+    #[test]
+    fn test_paginate_markdown_empty_content_still_returns_single_page() {
+        let entry = sample_entry("");
+        let output = paginate_markdown(
+            &entry,
+            &GetMarkdownParams {
+                page: 1,
+                page_size: 4,
+            },
+        );
+
+        assert_eq!(output.current_page, 1);
+        assert_eq!(output.total_pages, 1);
+        assert!(!output.has_more_pages);
+        assert_eq!(output.markdown, "# Example Title\n\n");
+        assert_eq!(output.length, output.markdown.len());
+    }
+}

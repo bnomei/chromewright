@@ -310,3 +310,132 @@ fn condition_matches(
             .unwrap_or(false),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_wait_params_defaults() {
+        let params: WaitParams =
+            serde_json::from_value(json!({})).expect("params should deserialize");
+
+        assert_eq!(params.condition, WaitCondition::Present);
+        assert_eq!(params.timeout_ms, 30_000);
+        assert!(params.selector.is_none());
+        assert!(params.text.is_none());
+        assert!(params.value.is_none());
+    }
+
+    #[test]
+    fn test_validate_wait_condition_requires_text_and_value() {
+        let text_error = validate_wait_condition(&WaitCondition::TextContains, None, None)
+            .expect_err("text_contains without text should fail");
+        assert!(matches!(text_error, BrowserError::InvalidArgument(_)));
+        assert!(text_error.to_string().contains("wait.text"));
+
+        let value_error = validate_wait_condition(&WaitCondition::ValueEquals, None, None)
+            .expect_err("value_equals without value should fail");
+        assert!(matches!(value_error, BrowserError::InvalidArgument(_)));
+        assert!(value_error.to_string().contains("wait.value"));
+
+        validate_wait_condition(&WaitCondition::Present, None, None)
+            .expect("present should not require extra arguments");
+        validate_wait_condition(&WaitCondition::TextContains, Some("hello"), None)
+            .expect("text_contains should accept text");
+        validate_wait_condition(&WaitCondition::ValueEquals, None, Some("abc"))
+            .expect("value_equals should accept value");
+    }
+
+    #[test]
+    fn test_condition_name_covers_all_wait_conditions() {
+        let cases = [
+            (WaitCondition::NavigationSettled, "navigation_settled"),
+            (WaitCondition::Present, "present"),
+            (WaitCondition::Visible, "visible"),
+            (WaitCondition::Enabled, "enabled"),
+            (WaitCondition::Editable, "editable"),
+            (WaitCondition::TextContains, "text_contains"),
+            (WaitCondition::ValueEquals, "value_equals"),
+            (WaitCondition::RevisionChanged, "revision_changed"),
+        ];
+
+        for (condition, expected) in cases {
+            assert_eq!(condition_name(&condition), expected);
+        }
+    }
+
+    #[test]
+    fn test_condition_matches_for_supported_wait_conditions() {
+        let state = json!({
+            "present": true,
+            "visible": true,
+            "enabled": true,
+            "editable": false,
+            "text": "hello world",
+            "value": "expected",
+        });
+
+        assert!(condition_matches(
+            &WaitCondition::Present,
+            &state,
+            None,
+            None
+        ));
+        assert!(condition_matches(
+            &WaitCondition::Visible,
+            &state,
+            None,
+            None
+        ));
+        assert!(condition_matches(
+            &WaitCondition::Enabled,
+            &state,
+            None,
+            None
+        ));
+        assert!(!condition_matches(
+            &WaitCondition::Editable,
+            &state,
+            None,
+            None
+        ));
+        assert!(condition_matches(
+            &WaitCondition::TextContains,
+            &state,
+            Some("hello"),
+            None
+        ));
+        assert!(!condition_matches(
+            &WaitCondition::TextContains,
+            &state,
+            Some("missing"),
+            None
+        ));
+        assert!(condition_matches(
+            &WaitCondition::ValueEquals,
+            &state,
+            None,
+            Some("expected")
+        ));
+        assert!(!condition_matches(
+            &WaitCondition::ValueEquals,
+            &state,
+            None,
+            Some("other")
+        ));
+        assert!(!condition_matches(
+            &WaitCondition::NavigationSettled,
+            &state,
+            None,
+            None
+        ));
+        assert!(!condition_matches(
+            &WaitCondition::RevisionChanged,
+            &state,
+            None,
+            None
+        ));
+    }
+}
