@@ -45,14 +45,12 @@ impl Tool for CloseTabTool {
             .unwrap_or(0);
 
         // Close the active tab
+        context.session.clear_active_tab_hint()?;
         active_tab.close(true).map_err(|e| {
             crate::error::BrowserError::TabOperationFailed(format!("Failed to close tab: {}", e))
         })?;
 
-        let message = format!(
-            "Closed tab [{}]: {} ({})",
-            current_index, tab_title, tab_url
-        );
+        let message = close_tab_message(current_index, &tab_title, &tab_url);
 
         Ok(ToolResult::success_with(CloseTabOutput {
             index: current_index,
@@ -60,5 +58,22 @@ impl Tool for CloseTabTool {
             title: tab_title,
             url: tab_url,
         }))
+    }
+}
+
+fn close_tab_message(index: usize, title: &str, url: &str) -> String {
+    format!("Closed tab [{}]: {} ({})", index, title, url)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_close_tab_message_includes_index_title_and_url() {
+        assert_eq!(
+            close_tab_message(3, "Docs", "https://example.com"),
+            "Closed tab [3]: Docs (https://example.com)"
+        );
     }
 }

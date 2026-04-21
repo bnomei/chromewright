@@ -5,7 +5,7 @@ use crate::tools::readability_script::READABILITY_SCRIPT;
 use crate::tools::{Tool, ToolContext, ToolResult};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 /// Parameters for getting markdown content with pagination support
@@ -70,7 +70,10 @@ impl Tool for GetMarkdownTool {
     ) -> Result<ToolResult> {
         let document = context.session.document_metadata()?;
         if let Some(entry) = context.session.markdown_cache_entry(&document)? {
-            return Ok(ToolResult::success_with(paginate_markdown(&entry, &params)));
+            return Ok(ToolResult::success_with(paginate_markdown(
+                entry.as_ref(),
+                &params,
+            )));
         }
 
         if document.ready_state != "complete" {
@@ -83,7 +86,10 @@ impl Tool for GetMarkdownTool {
 
         let document = context.session.document_metadata()?;
         if let Some(entry) = context.session.markdown_cache_entry(&document)? {
-            return Ok(ToolResult::success_with(paginate_markdown(&entry, &params)));
+            return Ok(ToolResult::success_with(paginate_markdown(
+                entry.as_ref(),
+                &params,
+            )));
         }
 
         let extraction_result = extract_markdown(context)?;
@@ -97,7 +103,7 @@ impl Tool for GetMarkdownTool {
             });
         }
 
-        let entry = MarkdownCacheEntry {
+        let entry = Arc::new(MarkdownCacheEntry {
             document_id: document.document_id,
             revision: document.revision,
             title: extraction_result.title,
@@ -105,11 +111,14 @@ impl Tool for GetMarkdownTool {
             byline: extraction_result.byline,
             excerpt: extraction_result.excerpt,
             site_name: extraction_result.site_name,
-            full_markdown: convert_html_to_markdown(&extraction_result.content),
-        };
-        context.session.store_markdown_cache(entry.clone())?;
+            full_markdown: Arc::<str>::from(convert_html_to_markdown(&extraction_result.content)),
+        });
+        context.session.store_markdown_cache(Arc::clone(&entry))?;
 
-        Ok(ToolResult::success_with(paginate_markdown(&entry, &params)))
+        Ok(ToolResult::success_with(paginate_markdown(
+            entry.as_ref(),
+            &params,
+        )))
     }
 }
 
@@ -126,9 +135,8 @@ fn markdown_extraction_script() -> &'static str {
 }
 
 fn extract_markdown(context: &ToolContext) -> Result<ExtractionResult> {
-    let result = context
-        .session
-        .tab()?
+    let tab = context.session.tab()?;
+    let result = tab
         .evaluate(markdown_extraction_script(), false)
         .map_err(|e| BrowserError::EvaluationFailed(e.to_string()))?;
 
@@ -212,16 +220,15 @@ fn paginate_markdown(entry: &MarkdownCacheEntry, params: &GetMarkdownParams) -> 
 }
 
 fn wait_for_markdown_settle(context: &ToolContext, timeout: Duration) -> Result<()> {
+    let tab = context.session.tab()?;
     let start = Instant::now();
     let mut previous_len: Option<u64> = None;
     let mut stable_polls = 0_u8;
 
     loop {
-        let result = context
-            .session
-            .tab()?
+        let result = tab
             .evaluate(
-                "(() => (document.body && document.body.innerText ? document.body.innerText.length : 0))()",
+                "(() => (document.body && document.body.textContent ? document.body.textContent.length : 0))()",
                 false,
             )
             .map_err(|e| BrowserError::EvaluationFailed(e.to_string()))?;
@@ -287,7 +294,7 @@ mod tests {
             byline: "Example Author".to_string(),
             excerpt: "Example excerpt".to_string(),
             site_name: "Example Site".to_string(),
-            full_markdown: full_markdown.to_string(),
+            full_markdown: Arc::<str>::from(full_markdown),
         }
     }
 

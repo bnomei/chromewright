@@ -92,30 +92,30 @@ macro_rules! register_mcp_tools {
 // Register all MCP tools using the macro
 register_mcp_tools! {
     // ---- Navigation and Browser Flow ----
-    browser_navigate => tools::navigate::NavigateTool, "Navigate to a specified URL in the browser";
-    browser_go_back => tools::go_back::GoBackTool, "Navigate back in browser history";
-    browser_go_forward => tools::go_forward::GoForwardTool, "Navigate forward in browser history";
-    browser_close => tools::close::CloseTool, "Close the browser when the task is complete";
+    browser_navigate => tools::navigate::NavigateTool, "Open a URL. Next: wait or snapshot.";
+    browser_go_back => tools::go_back::GoBackTool, "Go back in history. Next: wait or snapshot.";
+    browser_go_forward => tools::go_forward::GoForwardTool, "Go forward in history. Next: wait or snapshot.";
+    browser_close => tools::close::CloseTool, "Close the browser when the task is done.";
 
     // ---- Page Content and Extraction ----
-    browser_get_markdown => tools::markdown::GetMarkdownTool, "Get the markdown content of the current page (use this tool only for information extraction; for interaction use the snapshot tool instead)";
-    browser_snapshot => tools::snapshot::SnapshotTool, "Get a snapshot of the current page with revision-scoped node refs and actionable elements for interaction";
+    browser_get_markdown => tools::markdown::GetMarkdownTool, "Read page content as markdown. Extraction only; use snapshot for actions.";
+    browser_snapshot => tools::snapshot::SnapshotTool, "Capture page state and node_refs for actions. Next: click, input, select, hover, wait.";
     // browser_get_text => tools::extract::ExtractContentTool, "Extract text or HTML content from the page or an element";
 
     // ---- Interaction ----
-    browser_click => tools::click::ClickTool, "Click on an element specified by CSS selector, index, or snapshot node_ref";
-    browser_hover => tools::hover::HoverTool, "Hover over an element specified by CSS selector, index, or snapshot node_ref";
-    browser_select => tools::select::SelectTool, "Select an option in a dropdown element by CSS selector, index, or snapshot node_ref";
-    browser_input_fill => tools::input::InputTool, "Type text into an input element specified by CSS selector, index, or snapshot node_ref";
-    browser_press_key => tools::press_key::PressKeyTool, "Press a key on the keyboard";
-    browser_scroll => tools::scroll::ScrollTool, "Scroll the page by a specified amount or to the bottom";
-    browser_wait => tools::wait::WaitTool, "Wait for navigation settle, revision changes, or node state predicates on the page";
+    browser_click => tools::click::ClickTool, "Activate an element. Usually after snapshot; next wait or snapshot.";
+    browser_hover => tools::hover::HoverTool, "Reveal hover state. Usually after snapshot; next snapshot or click.";
+    browser_select => tools::select::SelectTool, "Choose a dropdown value. Usually after snapshot; next wait or snapshot.";
+    browser_input_fill => tools::input::InputTool, "Type into an input. Usually after snapshot; next press_key, click, or wait.";
+    browser_press_key => tools::press_key::PressKeyTool, "Press a keyboard key. Next: snapshot or wait if page state may change.";
+    browser_scroll => tools::scroll::ScrollTool, "Scroll the page. Next: snapshot for newly revealed content.";
+    browser_wait => tools::wait::WaitTool, "Pause for load, revision change, or node state. Use after actions or before rereading.";
 
     // ---- Tab Management ----
-    browser_new_tab => tools::new_tab::NewTabTool, "Open a new tab and navigate to the specified URL";
-    browser_tab_list => tools::tab_list::TabListTool, "Get the list of all browser tabs with their titles and URLs";
-    browser_switch_tab => tools::switch_tab::SwitchTabTool, "Switch to a specific tab by index";
-    browser_close_tab => tools::close_tab::CloseTabTool, "Close the current active tab";
+    browser_new_tab => tools::new_tab::NewTabTool, "Open a URL in a new tab. Next: tab_list, switch_tab, or snapshot.";
+    browser_tab_list => tools::tab_list::TabListTool, "List tabs so you can choose a switch_tab target.";
+    browser_switch_tab => tools::switch_tab::SwitchTabTool, "Activate a tab by index. Usually after tab_list; next snapshot.";
+    browser_close_tab => tools::close_tab::CloseTabTool, "Close the active tab. Next: tab_list or switch_tab if work continues.";
 }
 
 #[cfg(test)]
@@ -124,6 +124,9 @@ mod tests {
     use crate::mcp::BrowserServer;
     use crate::tools::ToolResult as InternalToolResult;
     use serde_json::json;
+    use std::collections::HashMap;
+
+    const MAX_TOOL_DESCRIPTION_LEN: usize = 96;
 
     #[test]
     fn test_convert_result_preserves_structured_success() {
@@ -229,5 +232,75 @@ mod tests {
             non_object_output_schema.is_empty(),
             "MCP tools with non-object output_schema: {non_object_output_schema:?}"
         );
+    }
+
+    #[test]
+    fn test_mcp_tool_descriptions_are_concise() {
+        let tools = BrowserServer::tool_router().list_all();
+
+        let problems: Vec<String> = tools
+            .iter()
+            .filter_map(|tool| {
+                let description = tool.description.as_deref().unwrap_or("").trim();
+                let char_count = description.chars().count();
+
+                if description.is_empty() {
+                    Some(format!("{} is missing a description", tool.name))
+                } else if char_count > MAX_TOOL_DESCRIPTION_LEN {
+                    Some(format!(
+                        "{} description is {} chars: {}",
+                        tool.name, char_count, description
+                    ))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        assert!(
+            problems.is_empty(),
+            "MCP tool descriptions must stay concise: {problems:?}"
+        );
+    }
+
+    #[test]
+    fn test_mcp_tool_descriptions_keep_orchestration_hints() {
+        let descriptions: HashMap<String, String> = BrowserServer::tool_router()
+            .list_all()
+            .into_iter()
+            .map(|tool| {
+                (
+                    tool.name.to_string(),
+                    tool.description.as_deref().unwrap_or("").to_string(),
+                )
+            })
+            .collect();
+
+        let expectations = [
+            ("browser_get_markdown", ["snapshot"].as_slice()),
+            (
+                "browser_snapshot",
+                ["node_refs", "click", "wait"].as_slice(),
+            ),
+            ("browser_click", ["snapshot", "wait"].as_slice()),
+            ("browser_input_fill", ["snapshot", "press_key"].as_slice()),
+            ("browser_select", ["snapshot", "wait"].as_slice()),
+            ("browser_new_tab", ["tab_list", "switch_tab"].as_slice()),
+            ("browser_tab_list", ["switch_tab"].as_slice()),
+            ("browser_switch_tab", ["tab_list", "snapshot"].as_slice()),
+        ];
+
+        for (tool_name, keywords) in expectations {
+            let description = descriptions
+                .get(tool_name)
+                .unwrap_or_else(|| panic!("missing description for {tool_name}"));
+
+            for keyword in keywords {
+                assert!(
+                    description.contains(keyword),
+                    "{tool_name} description should mention '{keyword}', got: {description}"
+                );
+            }
+        }
     }
 }

@@ -4,8 +4,10 @@ use crate::tools::{
     DocumentEnvelopeOptions, TargetResolution, Tool, ToolContext, ToolResult,
     build_document_envelope, resolve_target,
 };
+use headless_chrome::Tab;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const WAIT_NODE_STATE_JS: &str = r#"
@@ -145,13 +147,22 @@ impl Tool for WaitTool {
                 }))
             }
             WaitCondition::RevisionChanged => {
+                let active_tab = context.session.tab()?;
                 let baseline = match params.since_revision {
                     Some(revision) => revision,
-                    None => context.session.document_metadata()?.revision,
+                    None => {
+                        context
+                            .session
+                            .document_metadata_for_tab(&active_tab)?
+                            .revision
+                    }
                 };
 
                 loop {
-                    let current_revision = context.session.document_metadata()?.revision;
+                    let current_revision = context
+                        .session
+                        .document_metadata_for_tab(&active_tab)?
+                        .revision;
                     if current_revision != baseline {
                         context.invalidate_dom();
                         return Ok(ToolResult::success_with(WaitOutput {
@@ -201,9 +212,10 @@ impl Tool for WaitTool {
                     params.text.as_deref(),
                     params.value.as_deref(),
                 )?;
+                let active_tab = context.session.tab()?;
 
                 loop {
-                    let state = evaluate_node_state(context, &target.selector)?;
+                    let state = evaluate_node_state(&active_tab, &target.selector)?;
                     if condition_matches(
                         &condition,
                         &state,
@@ -269,17 +281,17 @@ fn condition_name(condition: &WaitCondition) -> &'static str {
     }
 }
 
-fn evaluate_node_state(context: &ToolContext, selector: &str) -> Result<serde_json::Value> {
+fn evaluate_node_state(tab: &Arc<Tab>, selector: &str) -> Result<serde_json::Value> {
     let config = serde_json::json!({
         "selector": selector,
     });
     let js = WAIT_NODE_STATE_JS.replace("__WAIT_CONFIG__", &config.to_string());
-    let result = context.session.tab()?.evaluate(&js, false).map_err(|e| {
-        BrowserError::ToolExecutionFailed {
+    let result = tab
+        .evaluate(&js, false)
+        .map_err(|e| BrowserError::ToolExecutionFailed {
             tool: "wait".to_string(),
             reason: e.to_string(),
-        }
-    })?;
+        })?;
 
     if let Some(serde_json::Value::String(json_str)) = result.value {
         serde_json::from_str(&json_str).map_err(BrowserError::from)

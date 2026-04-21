@@ -70,27 +70,66 @@ impl Tool for TabListTool {
 
         // Build summary text
         let active_index = tab_list.iter().position(|t| t.active).unwrap_or(0);
-        let active_info = &tab_list[active_index];
 
-        let summary = if !tab_list.is_empty() {
-            let all_tabs_str = tab_list
-                .iter()
-                .map(|tab| format!("[{}] Title: {} (URL: {})", tab.index, tab.title, tab.url))
-                .collect::<Vec<_>>()
-                .join("\n");
-
-            format!(
-                "Current Tab: [{}] {}\nAll Tabs:\n{}",
-                active_index, active_info.title, all_tabs_str
-            )
-        } else {
-            "No tabs available".to_string()
-        };
+        let summary = summarize_tab_list(&tab_list, active_index);
 
         Ok(ToolResult::success_with(TabListOutput {
             count: tab_list.len(),
             summary,
             tab_list,
         }))
+    }
+}
+
+fn summarize_tab_list(tab_list: &[TabInfo], active_index: usize) -> String {
+    if tab_list.is_empty() {
+        return "No tabs available".to_string();
+    }
+
+    let active_info = &tab_list[active_index];
+    let all_tabs_str = tab_list
+        .iter()
+        .map(|tab| format!("[{}] Title: {} (URL: {})", tab.index, tab.title, tab.url))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    format!(
+        "Current Tab: [{}] {}\nAll Tabs:\n{}",
+        active_index, active_info.title, all_tabs_str
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_summarize_tab_list_includes_active_tab_and_all_tabs() {
+        let summary = summarize_tab_list(
+            &[
+                TabInfo {
+                    index: 0,
+                    active: false,
+                    title: "First".to_string(),
+                    url: "https://first.example".to_string(),
+                },
+                TabInfo {
+                    index: 1,
+                    active: true,
+                    title: "Second".to_string(),
+                    url: "https://second.example".to_string(),
+                },
+            ],
+            1,
+        );
+
+        assert!(summary.contains("Current Tab: [1] Second"));
+        assert!(summary.contains("[0] Title: First"));
+        assert!(summary.contains("[1] Title: Second"));
+    }
+
+    #[test]
+    fn test_summarize_tab_list_handles_empty_list() {
+        assert_eq!(summarize_tab_list(&[], 0), "No tabs available");
     }
 }

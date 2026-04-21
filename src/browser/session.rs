@@ -28,7 +28,7 @@ pub(crate) struct MarkdownCacheEntry {
     pub byline: String,
     pub excerpt: String,
     pub site_name: String,
-    pub full_markdown: String,
+    pub full_markdown: Arc<str>,
 }
 
 /// Browser session that manages a Chrome/Chromium instance
@@ -43,48 +43,13 @@ pub struct BrowserSession {
     active_tab_hint: RwLock<Option<Arc<Tab>>>,
 
     /// Cache the most recent markdown extraction by document revision.
-    markdown_cache: Mutex<Option<MarkdownCacheEntry>>,
+    markdown_cache: Mutex<Option<Arc<MarkdownCacheEntry>>>,
 }
 
 impl BrowserSession {
     /// Launch a new browser instance with the given options
     pub fn launch(options: LaunchOptions) -> Result<Self> {
-        let mut launch_opts = headless_chrome::LaunchOptions::default();
-
-        // Ignore default arguments to prevent detection by anti-bot services
-        launch_opts
-            .ignore_default_args
-            .push(OsStr::new("--enable-automation"));
-        launch_opts
-            .args
-            .push(OsStr::new("--disable-blink-features=AutomationControlled"));
-
-        // Set the browser's idle timeout to 1 hour (default is 30 seconds) to prevent the session from closing too soon
-        launch_opts.idle_browser_timeout = Duration::from_secs(60 * 60);
-
-        // Configure headless mode
-        launch_opts.headless = options.headless;
-
-        // Set window size
-        launch_opts.window_size = Some((options.window_width, options.window_height));
-
-        // Set Chrome binary path if provided
-        if let Some(path) = options.chrome_path {
-            launch_opts.path = Some(path);
-        }
-
-        // Set user data directory if provided
-        if let Some(dir) = options.user_data_dir {
-            launch_opts.user_data_dir = Some(dir);
-        }
-
-        launch_opts.port = Some(match options.debug_port {
-            Some(port) => port,
-            None => choose_debug_port(),
-        });
-
-        // Set sandbox mode
-        launch_opts.sandbox = options.sandbox;
+        let launch_opts = build_launch_options(options);
 
         // Launch browser
         let browser =
@@ -148,7 +113,7 @@ impl BrowserSession {
 
     /// Get the currently active tab by checking the document visibility and focus state
     pub fn get_active_tab(&self) -> Result<Arc<Tab>> {
-        if let Some(tab) = self.cached_active_tab()? {
+        if let Some(tab) = self.active_tab_hint()? {
             return Ok(tab);
         }
 
@@ -251,28 +216,36 @@ impl BrowserSession {
 
     /// Read document metadata from the active tab without rebuilding the full DOM snapshot.
     pub fn document_metadata(&self) -> Result<DocumentMetadata> {
-        DocumentMetadata::from_tab(&self.tab()?)
+        let tab = self.tab()?;
+        self.document_metadata_for_tab(&tab)
+    }
+
+    /// Read document metadata from the provided tab without rebuilding the full DOM snapshot.
+    pub(crate) fn document_metadata_for_tab(&self, tab: &Arc<Tab>) -> Result<DocumentMetadata> {
+        DocumentMetadata::from_tab(tab)
     }
 
     /// Wait for navigation to complete
     pub fn wait_for_navigation(&self) -> Result<()> {
-        self.tab()?
-            .wait_until_navigated()
+        let tab = self.tab()?;
+        tab.wait_until_navigated()
             .map_err(|e| BrowserError::NavigationFailed(format!("Navigation timeout: {}", e)))?;
 
-        self.wait_for_document_ready_with_timeout(Duration::from_secs(30))?;
+        self.wait_for_document_ready_with_tab(&tab, Duration::from_secs(30))?;
 
         Ok(())
     }
 
     /// Read the current document ready state from the active tab.
     pub fn document_ready_state(&self) -> Result<String> {
-        let result = self
-            .tab()?
-            .evaluate("document.readyState", false)
-            .map_err(|e| {
-                BrowserError::NavigationFailed(format!("Failed to read readyState: {}", e))
-            })?;
+        let tab = self.tab()?;
+        self.document_ready_state_for_tab(&tab)
+    }
+
+    fn document_ready_state_for_tab(&self, tab: &Arc<Tab>) -> Result<String> {
+        let result = tab.evaluate("document.readyState", false).map_err(|e| {
+            BrowserError::NavigationFailed(format!("Failed to read readyState: {}", e))
+        })?;
 
         let ready_state = result
             .value
@@ -288,9 +261,14 @@ impl BrowserSession {
 
     /// Wait for the current document to reach the `complete` ready state.
     pub fn wait_for_document_ready_with_timeout(&self, timeout: Duration) -> Result<()> {
+        let tab = self.tab()?;
+        self.wait_for_document_ready_with_tab(&tab, timeout)
+    }
+
+    fn wait_for_document_ready_with_tab(&self, tab: &Arc<Tab>, timeout: Duration) -> Result<()> {
         let start = Instant::now();
         loop {
-            let ready_state = self.document_ready_state()?;
+            let ready_state = self.document_ready_state_for_tab(tab)?;
             if ready_state == "complete" {
                 return Ok(());
             }
@@ -306,17 +284,22 @@ impl BrowserSession {
         }
     }
 
-    fn wait_for_history_settle(&self, previous_url: &str, timeout: Duration) -> Result<()> {
+    fn wait_for_history_settle(
+        &self,
+        tab: &Arc<Tab>,
+        previous_url: &str,
+        timeout: Duration,
+    ) -> Result<()> {
         let start = Instant::now();
         let mut observed_navigation = false;
 
         loop {
-            let current_url = self.tab()?.get_url();
+            let current_url = tab.get_url();
             if current_url != previous_url {
                 observed_navigation = true;
             }
 
-            let ready_state = self.document_ready_state()?;
+            let ready_state = self.document_ready_state_for_tab(tab)?;
             let elapsed = start.elapsed();
             let grace_period = Duration::from_millis(500);
 
@@ -337,12 +320,14 @@ impl BrowserSession {
 
     /// Extract the DOM tree from the active tab
     pub fn extract_dom(&self) -> Result<DomTree> {
-        DomTree::from_tab(&self.tab()?)
+        let tab = self.tab()?;
+        DomTree::from_tab(&tab)
     }
 
     /// Extract the DOM tree with a custom ref prefix (for iframe handling)
     pub fn extract_dom_with_prefix(&self, prefix: &str) -> Result<DomTree> {
-        DomTree::from_tab_with_prefix(&self.tab()?, prefix)
+        let tab = self.tab()?;
+        DomTree::from_tab_with_prefix(&tab, prefix)
     }
 
     /// Find an element by CSS selector using the provided tab
@@ -376,21 +361,14 @@ impl BrowserSession {
         self.tool_registry.execute(name, params, &mut context)
     }
 
-    fn cached_active_tab(&self) -> Result<Option<Arc<Tab>>> {
-        let cached = self
+    fn active_tab_hint(&self) -> Result<Option<Arc<Tab>>> {
+        Ok(self
             .active_tab_hint
             .read()
             .map_err(|e| {
                 BrowserError::TabOperationFailed(format!("Failed to read active tab hint: {}", e))
             })?
-            .clone();
-
-        let Some(cached) = cached else {
-            return Ok(None);
-        };
-
-        let tabs = self.get_tabs()?;
-        Ok(tabs.into_iter().find(|tab| Arc::ptr_eq(tab, &cached)))
+            .clone())
     }
 
     pub(crate) fn set_active_tab_hint(&self, tab: Option<Arc<Tab>>) -> Result<()> {
@@ -407,7 +385,7 @@ impl BrowserSession {
     pub(crate) fn markdown_cache_entry(
         &self,
         document: &DocumentMetadata,
-    ) -> Result<Option<MarkdownCacheEntry>> {
+    ) -> Result<Option<Arc<MarkdownCacheEntry>>> {
         let guard = self
             .markdown_cache
             .lock()
@@ -418,11 +396,11 @@ impl BrowserSession {
 
         Ok(guard.as_ref().and_then(|entry| {
             (entry.document_id == document.document_id && entry.revision == document.revision)
-                .then_some(entry.clone())
+                .then_some(Arc::clone(entry))
         }))
     }
 
-    pub(crate) fn store_markdown_cache(&self, entry: MarkdownCacheEntry) -> Result<()> {
+    pub(crate) fn store_markdown_cache(&self, entry: Arc<MarkdownCacheEntry>) -> Result<()> {
         *self
             .markdown_cache
             .lock()
@@ -435,7 +413,8 @@ impl BrowserSession {
 
     /// Navigate back in browser history
     pub fn go_back(&self) -> Result<()> {
-        let previous_url = self.tab()?.get_url();
+        let tab = self.tab()?;
+        let previous_url = tab.get_url();
         let go_back_js = r#"
             (function() {
                 window.history.back();
@@ -443,17 +422,17 @@ impl BrowserSession {
             })()
         "#;
 
-        self.tab()?
-            .evaluate(go_back_js, false)
+        tab.evaluate(go_back_js, false)
             .map_err(|e| BrowserError::NavigationFailed(format!("Failed to go back: {}", e)))?;
-        self.wait_for_history_settle(&previous_url, Duration::from_secs(5))?;
+        self.wait_for_history_settle(&tab, &previous_url, Duration::from_secs(5))?;
 
         Ok(())
     }
 
     /// Navigate forward in browser history
     pub fn go_forward(&self) -> Result<()> {
-        let previous_url = self.tab()?.get_url();
+        let tab = self.tab()?;
+        let previous_url = tab.get_url();
         let go_forward_js = r#"
             (function() {
                 window.history.forward();
@@ -461,10 +440,9 @@ impl BrowserSession {
             })()
         "#;
 
-        self.tab()?
-            .evaluate(go_forward_js, false)
+        tab.evaluate(go_forward_js, false)
             .map_err(|e| BrowserError::NavigationFailed(format!("Failed to go forward: {}", e)))?;
-        self.wait_for_history_settle(&previous_url, Duration::from_secs(5))?;
+        self.wait_for_history_settle(&tab, &previous_url, Duration::from_secs(5))?;
 
         Ok(())
     }
@@ -492,6 +470,35 @@ fn choose_debug_port() -> u16 {
     let span = DEBUG_PORT_END - DEBUG_PORT_START + 1;
     let offset = DEBUG_PORT_COUNTER.fetch_add(1, Ordering::Relaxed) % span;
     DEBUG_PORT_START + offset
+}
+
+fn build_launch_options(options: LaunchOptions) -> headless_chrome::LaunchOptions<'static> {
+    let mut launch_opts = headless_chrome::LaunchOptions::default();
+
+    // Ignore default arguments to prevent detection by anti-bot services
+    launch_opts
+        .ignore_default_args
+        .push(OsStr::new("--enable-automation"));
+    launch_opts
+        .args
+        .push(OsStr::new("--disable-blink-features=AutomationControlled"));
+
+    // Keep the browser alive long enough for agent-driven sessions.
+    launch_opts.idle_browser_timeout = Duration::from_secs(60 * 60);
+    launch_opts.headless = options.headless;
+    launch_opts.window_size = Some((options.window_width, options.window_height));
+    launch_opts.port = Some(options.debug_port.unwrap_or_else(choose_debug_port));
+    launch_opts.sandbox = options.sandbox;
+
+    if let Some(path) = options.chrome_path {
+        launch_opts.path = Some(path);
+    }
+
+    if let Some(dir) = options.user_data_dir {
+        launch_opts.user_data_dir = Some(dir);
+    }
+
+    launch_opts
 }
 
 #[cfg(test)]
@@ -535,6 +542,58 @@ mod tests {
         assert!((DEBUG_PORT_START..=DEBUG_PORT_END).contains(&first));
         assert!((DEBUG_PORT_START..=DEBUG_PORT_END).contains(&second));
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn test_build_launch_options_maps_browser_settings() {
+        let options = LaunchOptions::new()
+            .headless(false)
+            .window_size(1024, 768)
+            .sandbox(false)
+            .debug_port(45555)
+            .chrome_path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome".into())
+            .user_data_dir("/tmp/chromewright-test".into());
+
+        let launch_opts = build_launch_options(options);
+
+        assert!(!launch_opts.headless);
+        assert_eq!(launch_opts.window_size, Some((1024, 768)));
+        assert_eq!(launch_opts.port, Some(45555));
+        assert!(!launch_opts.sandbox);
+        assert_eq!(
+            launch_opts.path.as_deref(),
+            Some(std::path::Path::new(
+                "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+            ))
+        );
+        assert_eq!(
+            launch_opts.user_data_dir.as_deref(),
+            Some(std::path::Path::new("/tmp/chromewright-test"))
+        );
+        assert_eq!(
+            launch_opts.idle_browser_timeout,
+            Duration::from_secs(60 * 60)
+        );
+        assert!(
+            launch_opts
+                .ignore_default_args
+                .iter()
+                .any(|arg| *arg == OsStr::new("--enable-automation"))
+        );
+        assert!(
+            launch_opts
+                .args
+                .iter()
+                .any(|arg| { *arg == OsStr::new("--disable-blink-features=AutomationControlled") })
+        );
+    }
+
+    #[test]
+    fn test_build_launch_options_chooses_debug_port_when_missing() {
+        let launch_opts = build_launch_options(LaunchOptions::new());
+        let port = launch_opts.port.expect("port should be assigned");
+
+        assert!((DEBUG_PORT_START..=DEBUG_PORT_END).contains(&port));
     }
 
     #[test]

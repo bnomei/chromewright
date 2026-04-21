@@ -46,36 +46,28 @@ impl Tool for SwitchTabTool {
             )));
         }
 
-        // Note: We can't directly call session.switch_tab() because we only have &BrowserSession
-        // Instead, we'll need to work with the browser directly
-        // However, since this requires mutable access to the session, we need to handle this differently
-
         // Get the tab at the specified index
         let target_tab = tabs[params.index].clone();
 
-        // Activate the tab
-        target_tab.activate().map_err(|e| {
-            crate::error::BrowserError::TabOperationFailed(format!(
-                "Failed to activate tab {}: {}",
-                params.index, e
-            ))
-        })?;
+        // Activate the tab and keep the session hint coherent.
+        context.session.activate_tab(&target_tab)?;
 
         // Get updated tab info
         let title = target_tab.get_title().unwrap_or_default();
         let url = target_tab.get_url();
 
         // Build tab list summary
-        let mut tab_list_str = String::new();
-        for (idx, tab) in tabs.iter().enumerate() {
-            let tab_title = tab.get_title().unwrap_or_default();
-            let tab_url = tab.get_url();
-            tab_list_str.push_str(&format!("[{}] {} ({})\n", idx, tab_title, tab_url));
-        }
-
-        let summary = format!(
-            "Switched to tab {}\nAll Tabs:\n{}",
-            params.index, tab_list_str
+        let summary = format_switch_summary(
+            params.index,
+            &tabs
+                .iter()
+                .enumerate()
+                .map(|(idx, tab)| TabSummaryLine {
+                    index: idx,
+                    title: tab.get_title().unwrap_or_default(),
+                    url: tab.get_url(),
+                })
+                .collect::<Vec<_>>(),
         );
 
         Ok(ToolResult::success_with(SwitchTabOutput {
@@ -84,5 +76,50 @@ impl Tool for SwitchTabTool {
             title,
             url,
         }))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TabSummaryLine {
+    index: usize,
+    title: String,
+    url: String,
+}
+
+fn format_switch_summary(index: usize, tabs: &[TabSummaryLine]) -> String {
+    let tab_list_str = tabs
+        .iter()
+        .map(|tab| format!("[{}] {} ({})", tab.index, tab.title, tab.url))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    format!("Switched to tab {}\nAll Tabs:\n{}\n", index, tab_list_str)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_switch_summary_lists_all_tabs() {
+        let summary = format_switch_summary(
+            2,
+            &[
+                TabSummaryLine {
+                    index: 0,
+                    title: "First".to_string(),
+                    url: "https://first.example".to_string(),
+                },
+                TabSummaryLine {
+                    index: 2,
+                    title: "Second".to_string(),
+                    url: "https://second.example".to_string(),
+                },
+            ],
+        );
+
+        assert!(summary.contains("Switched to tab 2"));
+        assert!(summary.contains("[0] First"));
+        assert!(summary.contains("[2] Second"));
     }
 }

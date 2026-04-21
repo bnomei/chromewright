@@ -86,47 +86,114 @@ impl Tool for HoverTool {
                 reason: e.to_string(),
             })?;
 
-        // Parse the JSON string returned by JavaScript
-        let result_json: serde_json::Value = if let Some(serde_json::Value::String(json_str)) =
-            result.value
-        {
-            serde_json::from_str(&json_str)
-                .unwrap_or(serde_json::json!({"success": false, "error": "Failed to parse result"}))
-        } else {
-            result
-                .value
-                .unwrap_or(serde_json::json!({"success": false, "error": "No result returned"}))
-        };
-
-        if result_json["success"].as_bool() == Some(true) {
-            context.invalidate_dom();
-            Ok(ToolResult::success_with(HoverOutput {
-                envelope: build_document_envelope(
-                    context,
-                    Some(&target),
-                    DocumentEnvelopeOptions::minimal(),
-                )?,
-                action: "hover".to_string(),
-                element: HoverElement {
-                    tag_name: result_json["tagName"]
-                        .as_str()
-                        .unwrap_or_default()
-                        .to_string(),
-                    id: result_json["id"].as_str().unwrap_or_default().to_string(),
-                    class_name: result_json["className"]
-                        .as_str()
-                        .unwrap_or_default()
-                        .to_string(),
-                },
-            }))
-        } else {
-            Err(BrowserError::ToolExecutionFailed {
+        match parse_hover_result(result.value)? {
+            HoverParseResult::Success(element) => {
+                context.invalidate_dom();
+                Ok(ToolResult::success_with(HoverOutput {
+                    envelope: build_document_envelope(
+                        context,
+                        Some(&target),
+                        DocumentEnvelopeOptions::minimal(),
+                    )?,
+                    action: "hover".to_string(),
+                    element,
+                }))
+            }
+            HoverParseResult::Failure(reason) => Err(BrowserError::ToolExecutionFailed {
                 tool: "hover".to_string(),
-                reason: result_json["error"]
-                    .as_str()
-                    .unwrap_or("Unknown error")
-                    .to_string(),
-            })
+                reason,
+            }),
         }
+    }
+}
+
+enum HoverParseResult {
+    Success(HoverElement),
+    Failure(String),
+}
+
+fn parse_hover_result(value: Option<serde_json::Value>) -> Result<HoverParseResult> {
+    let result_json = decode_tool_result_json(
+        value,
+        serde_json::json!({"success": false, "error": "No result returned"}),
+    )?;
+
+    if result_json["success"].as_bool() == Some(true) {
+        Ok(HoverParseResult::Success(HoverElement {
+            tag_name: result_json["tagName"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+            id: result_json["id"].as_str().unwrap_or_default().to_string(),
+            class_name: result_json["className"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+        }))
+    } else {
+        Ok(HoverParseResult::Failure(
+            result_json["error"]
+                .as_str()
+                .unwrap_or("Unknown error")
+                .to_string(),
+        ))
+    }
+}
+
+fn decode_tool_result_json(
+    value: Option<serde_json::Value>,
+    fallback: serde_json::Value,
+) -> Result<serde_json::Value> {
+    if let Some(serde_json::Value::String(json_str)) = value {
+        serde_json::from_str(&json_str).map_err(BrowserError::from)
+    } else {
+        Ok(value.unwrap_or(fallback))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_hover_result_success() {
+        let result = parse_hover_result(Some(serde_json::Value::String(
+            r#"{"success":true,"tagName":"BUTTON","id":"save","className":"primary"}"#.to_string(),
+        )))
+        .expect("hover result should parse");
+
+        match result {
+            HoverParseResult::Success(element) => {
+                assert_eq!(element.tag_name, "BUTTON");
+                assert_eq!(element.id, "save");
+                assert_eq!(element.class_name, "primary");
+            }
+            HoverParseResult::Failure(reason) => panic!("unexpected failure: {reason}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_hover_result_failure_uses_error_message() {
+        let result = parse_hover_result(Some(serde_json::json!({
+            "success": false,
+            "error": "Element not found"
+        })))
+        .expect("hover result should parse");
+
+        match result {
+            HoverParseResult::Failure(reason) => assert_eq!(reason, "Element not found"),
+            HoverParseResult::Success(_) => panic!("expected failure"),
+        }
+    }
+
+    #[test]
+    fn test_decode_tool_result_json_rejects_invalid_json_string() {
+        let error = decode_tool_result_json(
+            Some(serde_json::Value::String("not-json".to_string())),
+            serde_json::json!({}),
+        )
+        .expect_err("invalid JSON should fail");
+
+        assert!(matches!(error, BrowserError::JsonError(_)));
     }
 }

@@ -72,6 +72,24 @@ mod tests {
     }
 
     #[test]
+    fn test_launch_error_is_environmental_matches_known_messages() {
+        assert!(launch_error_is_environmental(
+            &crate::error::BrowserError::LaunchFailed(
+                "Chrome launched, but didn't give us a WebSocket URL before we timed out"
+                    .to_string(),
+            ),
+        ));
+        assert!(launch_error_is_environmental(
+            &crate::error::BrowserError::ChromeError(
+                "Could not auto detect a chrome executable".to_string(),
+            ),
+        ));
+        assert!(!launch_error_is_environmental(
+            &crate::error::BrowserError::NavigationFailed("something else".to_string()),
+        ));
+    }
+
+    #[test]
     #[ignore]
     fn test_init() {
         let Some(_session) = launch_or_skip(init()) else {

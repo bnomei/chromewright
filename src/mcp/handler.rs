@@ -73,7 +73,29 @@ impl Drop for BrowserServer {
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for BrowserServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
-            .with_instructions("Browser-use MCP Server")
+        server_info()
+    }
+}
+
+fn server_info() -> ServerInfo {
+    ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+        .with_instructions("Browser-use MCP Server")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::server_info;
+
+    #[test]
+    fn test_server_info_enables_tools_and_instructions() {
+        let info = server_info();
+
+        assert!(
+            info.instructions
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Browser-use MCP Server")
+        );
+        assert!(info.capabilities.tools.is_some());
     }
 }

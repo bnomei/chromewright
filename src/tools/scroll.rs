@@ -49,37 +49,37 @@ impl Tool for ScrollTool {
                 reason: e.to_string(),
             })?;
 
-        // Parse the JSON string returned by JavaScript
-        let result_json: serde_json::Value =
-            if let Some(serde_json::Value::String(json_str)) = result.value {
-                serde_json::from_str(&json_str)
-                    .unwrap_or(serde_json::json!({"actualScroll": 0, "isAtBottom": false}))
-            } else {
-                result
-                    .value
-                    .unwrap_or(serde_json::json!({"actualScroll": 0, "isAtBottom": false}))
-            };
+        Ok(ToolResult::success_with(parse_scroll_output(result.value)))
+    }
+}
 
-        let actual_scroll = result_json["actualScroll"].as_i64().unwrap_or(0);
-        let is_at_bottom = result_json["isAtBottom"].as_bool().unwrap_or(false);
+fn parse_scroll_output(value: Option<serde_json::Value>) -> ScrollOutput {
+    let result_json: serde_json::Value = if let Some(serde_json::Value::String(json_str)) = value {
+        serde_json::from_str(&json_str)
+            .unwrap_or(serde_json::json!({"actualScroll": 0, "isAtBottom": false}))
+    } else {
+        value.unwrap_or(serde_json::json!({"actualScroll": 0, "isAtBottom": false}))
+    };
 
-        let message = if is_at_bottom {
-            format!(
-                "Scrolled {} pixels. Reached the bottom of the page.",
-                actual_scroll
-            )
-        } else {
-            format!(
-                "Scrolled {} pixels. Did not reach the bottom of the page.",
-                actual_scroll
-            )
-        };
+    let actual_scroll = result_json["actualScroll"].as_i64().unwrap_or(0);
+    let is_at_bottom = result_json["isAtBottom"].as_bool().unwrap_or(false);
 
-        Ok(ToolResult::success_with(ScrollOutput {
-            scrolled: actual_scroll,
-            is_at_bottom,
-            message,
-        }))
+    let message = if is_at_bottom {
+        format!(
+            "Scrolled {} pixels. Reached the bottom of the page.",
+            actual_scroll
+        )
+    } else {
+        format!(
+            "Scrolled {} pixels. Did not reach the bottom of the page.",
+            actual_scroll
+        )
+    };
+
+    ScrollOutput {
+        scrolled: actual_scroll,
+        is_at_bottom,
+        message,
     }
 }
 
@@ -113,5 +113,25 @@ mod tests {
 
         let params: ScrollParams = serde_json::from_value(json).unwrap();
         assert_eq!(params.amount, None);
+    }
+
+    #[test]
+    fn test_parse_scroll_output_from_string_payload() {
+        let output = parse_scroll_output(Some(serde_json::Value::String(
+            r#"{"actualScroll":420,"isAtBottom":true}"#.to_string(),
+        )));
+
+        assert_eq!(output.scrolled, 420);
+        assert!(output.is_at_bottom);
+        assert!(output.message.contains("Reached the bottom"));
+    }
+
+    #[test]
+    fn test_parse_scroll_output_falls_back_for_invalid_payload() {
+        let output = parse_scroll_output(Some(serde_json::Value::String("not json".to_string())));
+
+        assert_eq!(output.scrolled, 0);
+        assert!(!output.is_at_bottom);
+        assert!(output.message.contains("Did not reach the bottom"));
     }
 }

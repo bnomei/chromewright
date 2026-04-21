@@ -83,41 +83,63 @@ impl Tool for SelectTool {
                 reason: e.to_string(),
             })?;
 
-        // Parse the JSON string returned by JavaScript
-        let result_json: serde_json::Value = if let Some(serde_json::Value::String(json_str)) =
-            result.value
-        {
-            serde_json::from_str(&json_str)
-                .unwrap_or(serde_json::json!({"success": false, "error": "Failed to parse result"}))
-        } else {
-            result
-                .value
-                .unwrap_or(serde_json::json!({"success": false, "error": "No result returned"}))
-        };
-
-        if result_json["success"].as_bool() == Some(true) {
-            context.invalidate_dom();
-            Ok(ToolResult::success_with(SelectOutput {
-                envelope: build_document_envelope(
-                    context,
-                    Some(&target),
-                    DocumentEnvelopeOptions::minimal(),
-                )?,
-                action: "select".to_string(),
-                value,
-                selected_text: result_json["selectedText"]
-                    .as_str()
-                    .map(ToString::to_string),
-            }))
-        } else {
-            Err(BrowserError::ToolExecutionFailed {
+        match parse_select_result(result.value)? {
+            SelectParseResult::Success(selected_text) => {
+                context.invalidate_dom();
+                Ok(ToolResult::success_with(SelectOutput {
+                    envelope: build_document_envelope(
+                        context,
+                        Some(&target),
+                        DocumentEnvelopeOptions::minimal(),
+                    )?,
+                    action: "select".to_string(),
+                    value,
+                    selected_text,
+                }))
+            }
+            SelectParseResult::Failure(reason) => Err(BrowserError::ToolExecutionFailed {
                 tool: "select".to_string(),
-                reason: result_json["error"]
-                    .as_str()
-                    .unwrap_or("Unknown error")
-                    .to_string(),
-            })
+                reason,
+            }),
         }
+    }
+}
+
+enum SelectParseResult {
+    Success(Option<String>),
+    Failure(String),
+}
+
+fn parse_select_result(value: Option<serde_json::Value>) -> Result<SelectParseResult> {
+    let result_json = decode_tool_result_json(
+        value,
+        serde_json::json!({"success": false, "error": "No result returned"}),
+    )?;
+
+    if result_json["success"].as_bool() == Some(true) {
+        Ok(SelectParseResult::Success(
+            result_json["selectedText"]
+                .as_str()
+                .map(ToString::to_string),
+        ))
+    } else {
+        Ok(SelectParseResult::Failure(
+            result_json["error"]
+                .as_str()
+                .unwrap_or("Unknown error")
+                .to_string(),
+        ))
+    }
+}
+
+fn decode_tool_result_json(
+    value: Option<serde_json::Value>,
+    fallback: serde_json::Value,
+) -> Result<serde_json::Value> {
+    if let Some(serde_json::Value::String(json_str)) = value {
+        serde_json::from_str(&json_str).map_err(BrowserError::from)
+    } else {
+        Ok(value.unwrap_or(fallback))
     }
 }
 
@@ -149,5 +171,47 @@ mod tests {
         assert_eq!(params.selector, None);
         assert_eq!(params.index, Some(5));
         assert_eq!(params.value, "option2");
+    }
+
+    #[test]
+    fn test_parse_select_result_success() {
+        let result = parse_select_result(Some(serde_json::Value::String(
+            r#"{"success":true,"selectedText":"United Kingdom"}"#.to_string(),
+        )))
+        .expect("select result should parse");
+
+        match result {
+            SelectParseResult::Success(selected_text) => {
+                assert_eq!(selected_text.as_deref(), Some("United Kingdom"));
+            }
+            SelectParseResult::Failure(reason) => panic!("unexpected failure: {reason}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_select_result_failure_uses_error_message() {
+        let result = parse_select_result(Some(serde_json::json!({
+            "success": false,
+            "error": "Element is not a SELECT element"
+        })))
+        .expect("select result should parse");
+
+        match result {
+            SelectParseResult::Failure(reason) => {
+                assert_eq!(reason, "Element is not a SELECT element");
+            }
+            SelectParseResult::Success(_) => panic!("expected failure"),
+        }
+    }
+
+    #[test]
+    fn test_decode_tool_result_json_rejects_invalid_json_string() {
+        let error = decode_tool_result_json(
+            Some(serde_json::Value::String("not-json".to_string())),
+            serde_json::json!({}),
+        )
+        .expect_err("invalid JSON should fail");
+
+        assert!(matches!(error, BrowserError::JsonError(_)));
     }
 }
