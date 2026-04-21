@@ -24,21 +24,6 @@ Meta:
 
 ## Todo
 
-- [ ] T003: Refresh compatible dependencies inside current major lines (owner: unassigned) (scope: `Cargo.toml`, `Cargo.lock`) (depends: T001, T002)
-  - Covers: R002, R003
-  - Context: Most direct dependencies are already on current major versions. The low-risk wave is to refresh lockfile-compatible crates and any same-major manifest ranges before attempting the `rmcp` major jump.
-  - Reuse_targets: current dependency ranges already present in `Cargo.toml`
-  - Autonomy: standard
-  - Risk: low
-  - Complexity: medium
-  - Bundle_with: T006
-  - Verification_mode: mayor
-  - Verification_status: pending
-  - DoD: compatible dependency updates land cleanly and the baseline remains green.
-  - Validation: `cargo test --locked`, `cargo check --all-features --all-targets --locked`
-  - Escalate if: a supposedly compatible update changes public behavior or forces a Rust/MSRV decision.
-  - Notes: Close with one atomic commit dedicated to low-risk dependency refreshes.
-
 - [ ] T004: Upgrade `rmcp` to `1.5.x` and resolve transport fallout (owner: unassigned) (scope: `Cargo.toml`, `Cargo.lock`, `src/mcp/`, `src/bin/mcp_server.rs`, `README.md`) (depends: T003)
   - Covers: R002, R003, R005
   - Context: Upstream `rmcp` `1.x` changed server patterns and removed built-in SSE transport support. This repo currently depends on `transport-sse-server` and uses the `0.8` API shape. The recommended default is to keep stdio and streamable HTTP and remove SSE mode during the migration unless the user explicitly wants SSE preserved.
@@ -91,6 +76,14 @@ Meta:
   - DoD: every retained CLI flag is honored end-to-end or removed from the interface and docs.
   - Validation: `cargo test --locked --all-features`, `cargo check --all-features --all-targets --locked`
   - Notes: Wired the CLI to either launch a local browser or connect to an existing DevTools WebSocket, removed unsupported flags and SSE mode from the binary surface, and updated the public docs/examples to match the supported contract.
+
+- [x] T003: Refresh compatible dependencies inside current major lines (owner: mayor) (scope: `Cargo.toml`, `Cargo.lock`) (depends: T001, T002)
+  - Covers: R002, R003
+  - Verification_mode: mayor
+  - Verification_status: passed
+  - DoD: compatible dependency updates land cleanly and the baseline remains green.
+  - Validation: `cargo update`, `cargo test --locked --all-features`, `cargo check --all-features --all-targets --locked`
+  - Notes: Refreshed the lockfile to current same-major releases including `headless_chrome 1.0.21`, `axum 0.8.9`, `tokio 1.52.1`, `clap 4.6.1`, `env_logger 0.11.10`, `schemars 1.2.1`, `indexmap 2.14.0`, `serde_json 1.0.149`, and `thiserror 2.0.18`. `Cargo.toml` did not need edits because the existing semver ranges already admitted these updates.
 
 - [x] T001: Stabilize the browser-launch baseline (owner: mayor) (scope: `src/browser/`, `tests/`, `Cargo.toml`) (depends: -)
   - Covers: R001, R002, R004
