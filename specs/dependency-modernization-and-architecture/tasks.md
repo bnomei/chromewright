@@ -24,20 +24,6 @@ Meta:
 
 ## Todo
 
-- [ ] T005: Preserve structured MCP outputs (owner: unassigned) (scope: `src/mcp/`, `src/tools/`, `tests/`) (depends: T004)
-  - Covers: R002, R006
-  - Context: The current MCP adapter converts internal JSON results into prettified text, which throws away structure that clients could consume directly. After the `rmcp` upgrade, move this seam to structured outputs with text fallback only when necessary.
-  - Reuse_targets: internal `ToolResult`, RMCP structured result helpers, JSON wrappers where appropriate
-  - Autonomy: standard
-  - Risk: medium
-  - Complexity: medium
-  - Verification_mode: mayor
-  - Verification_status: pending
-  - DoD: tool results remain readable to humans but are not text-only by construction.
-  - Validation: `cargo test --locked`, targeted MCP result conversion tests if added
-  - Escalate if: an MCP client compatibility requirement forces a dual-format response policy.
-  - Notes: Close with one atomic commit after validation is green.
-
 - [ ] T006: Perform focused structural cleanup in the tool layer (owner: unassigned) (scope: `src/browser/`, `src/tools/`, `tests/`) (depends: T003)
   - Covers: R002, R008
   - Context: The tool layer repeats selector/index validation and target resolution across several tools. `input` can also reuse a cached DOM after mutation when index-based lookup was used, which can return stale snapshots. Limit this wave to seams that directly improve correctness and future upgrade cost.
@@ -77,6 +63,14 @@ Meta:
   - DoD: repo builds and tests on `rmcp` `1.5.x`; transport surface is intentional and documented.
   - Validation: `cargo update -p rmcp --precise 1.5.0`, `cargo check --all-features --all-targets --locked`, `cargo test --locked --all-features`
   - Notes: Migrated to `rmcp 1.5.0`, removed the leftover `transport-sse-server` feature flag from the manifest, dropped the now-unused direct `tokio-util` dependency, and updated the MCP server glue to the 1.5 router and `ServerInfo::new(...).with_instructions(...)` conventions. The T002 CLI cleanup meant no further user-facing transport changes were needed here.
+
+- [x] T005: Preserve structured MCP outputs (owner: mayor) (scope: `src/mcp/`, `src/tools/`, `tests/`) (depends: T004)
+  - Covers: R002, R006
+  - Verification_mode: mayor
+  - Verification_status: passed
+  - DoD: tool results remain readable to humans but are not text-only by construction.
+  - Validation: `cargo test --locked --all-features`, `cargo check --all-features --all-targets --locked`
+  - Notes: Changed the MCP adapter to emit `structured_content` for successful JSON payloads, `structured_error` payloads for tool-level failures, and `_meta` for preserved tool metadata. Added focused adapter tests to lock in structured success, structured error, and text-only success behavior.
 
 - [x] T001: Stabilize the browser-launch baseline (owner: mayor) (scope: `src/browser/`, `tests/`, `Cargo.toml`) (depends: -)
   - Covers: R001, R002, R004

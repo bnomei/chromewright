@@ -9,22 +9,42 @@ use crate::tools::{self, Tool, ToolContext, ToolResult as InternalToolResult};
 use rmcp::{
     ErrorData as McpError,
     handler::server::wrapper::Parameters,
-    model::{CallToolResult, Content},
+    model::{CallToolResult, Content, Meta},
     tool, tool_router,
 };
 
+fn with_metadata(result: CallToolResult, metadata: std::collections::HashMap<String, serde_json::Value>) -> CallToolResult {
+    if metadata.is_empty() {
+        return result;
+    }
+
+    result.with_meta(Some(Meta(metadata.into_iter().collect())))
+}
+
 /// Convert internal ToolResult to MCP CallToolResult
 fn convert_result(result: InternalToolResult) -> Result<CallToolResult, McpError> {
-    if result.success {
-        let text = if let Some(data) = result.data {
-            serde_json::to_string_pretty(&data).unwrap_or_else(|_| data.to_string())
+    let InternalToolResult {
+        success,
+        data,
+        error,
+        metadata,
+    } = result;
+
+    if success {
+        let result = if let Some(data) = data {
+            CallToolResult::structured(data)
         } else {
-            "Success".to_string()
+            CallToolResult::success(vec![Content::text("Success")])
         };
-        Ok(CallToolResult::success(vec![Content::text(text)]))
+
+        Ok(with_metadata(result, metadata))
     } else {
-        let error_msg = result.error.unwrap_or_else(|| "Unknown error".to_string());
-        Err(McpError::internal_error(error_msg, None))
+        let error_msg = error.unwrap_or_else(|| "Unknown error".to_string());
+        let result = CallToolResult::structured_error(serde_json::json!({
+            "error": error_msg,
+        }));
+
+        Ok(with_metadata(result, metadata))
     }
 }
 
@@ -80,4 +100,84 @@ register_mcp_tools! {
     browser_tab_list => tools::tab_list::TabListTool, "Get the list of all browser tabs with their titles and URLs";
     browser_switch_tab => tools::switch_tab::SwitchTabTool, "Switch to a specific tab by index";
     browser_close_tab => tools::close_tab::CloseTabTool, "Close the current active tab";
+}
+
+#[cfg(test)]
+mod tests {
+    use super::convert_result;
+    use crate::tools::ToolResult as InternalToolResult;
+    use serde_json::json;
+
+    #[test]
+    fn test_convert_result_preserves_structured_success() {
+        let result = convert_result(
+            InternalToolResult::success(Some(json!({
+                "url": "https://example.com",
+                "title": "Example Domain",
+            })))
+            .with_metadata("duration_ms", json!(12)),
+        )
+        .expect("success result should convert");
+
+        assert_eq!(
+            result.structured_content,
+            Some(json!({
+                "url": "https://example.com",
+                "title": "Example Domain",
+            }))
+        );
+        assert_eq!(result.is_error, Some(false));
+        assert_eq!(result.meta.as_ref().unwrap().0.get("duration_ms"), Some(&json!(12)));
+
+        let text = result
+            .content
+            .first()
+            .and_then(|content| content.as_text())
+            .map(|content| content.text.as_str())
+            .expect("structured result should keep text fallback");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(text).expect("text fallback should be JSON"),
+            json!({
+                "url": "https://example.com",
+                "title": "Example Domain",
+            })
+        );
+    }
+
+    #[test]
+    fn test_convert_result_uses_structured_tool_error() {
+        let result = convert_result(
+            InternalToolResult::failure("Element not found")
+                .with_metadata("tool", json!("browser_click")),
+        )
+        .expect("tool failures should stay in CallToolResult");
+
+        assert_eq!(
+            result.structured_content,
+            Some(json!({
+                "error": "Element not found",
+            }))
+        );
+        assert_eq!(result.is_error, Some(true));
+        assert_eq!(
+            result.meta.as_ref().unwrap().0.get("tool"),
+            Some(&json!("browser_click"))
+        );
+    }
+
+    #[test]
+    fn test_convert_result_without_data_keeps_text_success() {
+        let result =
+            convert_result(InternalToolResult::success(None)).expect("empty success should convert");
+
+        assert_eq!(result.structured_content, None);
+        assert_eq!(result.is_error, Some(false));
+
+        let text = result
+            .content
+            .first()
+            .and_then(|content| content.as_text())
+            .map(|content| content.text.as_ref());
+        assert_eq!(text, Some("Success"));
+    }
 }
