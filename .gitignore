@@ -1,3 +1,16 @@
-/target
-/example/**
+.DS_Store
+
+# Rust build artifacts
+/target/
+**/*.rs.bk
+*.pdb
+
+# Release packaging output
+/dist/
+/*.crate
+
+# Local tool state
 /.frigg/
+
+docs/
+specs/
