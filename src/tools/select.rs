@@ -1,5 +1,5 @@
 use crate::error::{BrowserError, Result};
-use crate::tools::{Tool, ToolContext, ToolResult};
+use crate::tools::{Tool, ToolContext, ToolResult, resolve_target};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -32,39 +32,22 @@ impl Tool for SelectTool {
     }
 
     fn execute_typed(&self, params: SelectParams, context: &mut ToolContext) -> Result<ToolResult> {
-        // Validate that exactly one selector method is provided
-        match (&params.selector, &params.index) {
-            (Some(_), Some(_)) => {
-                return Err(BrowserError::ToolExecutionFailed {
-                    tool: "select".to_string(),
-                    reason: "Cannot specify both 'selector' and 'index'. Use one or the other."
-                        .to_string(),
-                });
-            }
-            (None, None) => {
-                return Err(BrowserError::ToolExecutionFailed {
-                    tool: "select".to_string(),
-                    reason: "Must specify either 'selector' or 'index'.".to_string(),
-                });
-            }
-            _ => {}
-        }
-
-        let css_selector = if let Some(selector) = params.selector {
-            selector
-        } else if let Some(index) = params.index {
-            let dom = context.get_dom()?;
-            let selector = dom.get_selector(index).ok_or_else(|| {
-                BrowserError::ElementNotFound(format!("No element with index {}", index))
-            })?;
-            selector.clone()
-        } else {
-            unreachable!("Validation above ensures one field is Some")
+        let SelectParams {
+            selector,
+            index,
+            value,
+        } = params;
+        let target = {
+            let dom = if index.is_some() {
+                Some(context.get_dom()?)
+            } else {
+                None
+            };
+            resolve_target("select", selector, index, dom)?
         };
-        let value = params.value;
 
         let select_config = serde_json::json!({
-            "selector": css_selector,
+            "selector": target.selector,
             "value": value,
         });
         let select_js = SELECT_JS.replace("__SELECT_CONFIG__", &select_config.to_string());
@@ -92,7 +75,7 @@ impl Tool for SelectTool {
 
         if result_json["success"].as_bool() == Some(true) {
             Ok(ToolResult::success_with(serde_json::json!({
-                "selector": css_selector,
+                "selector": target.selector,
                 "value": value,
                 "selectedText": result_json["selectedText"]
             })))

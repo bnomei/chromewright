@@ -1,6 +1,6 @@
 use crate::error::{BrowserError, Result};
 use crate::tools::snapshot::{RenderMode, render_aria_tree};
-use crate::tools::{Tool, ToolContext, ToolResult};
+use crate::tools::{Tool, ToolContext, ToolResult, resolve_target};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -33,56 +33,41 @@ impl Tool for InputTool {
     }
 
     fn execute_typed(&self, params: InputParams, context: &mut ToolContext) -> Result<ToolResult> {
-        // Validate that exactly one selector method is provided
-        match (&params.selector, &params.index) {
-            (Some(_), Some(_)) => {
-                return Err(BrowserError::ToolExecutionFailed {
-                    tool: "input".to_string(),
-                    reason: "Cannot specify both 'selector' and 'index'. Use one or the other."
-                        .to_string(),
-                });
-            }
-            (None, None) => {
-                return Err(BrowserError::ToolExecutionFailed {
-                    tool: "input".to_string(),
-                    reason: "Must specify either 'selector' or 'index'.".to_string(),
-                });
-            }
-            _ => {}
-        }
-
-        // Get the CSS selector (either directly or from index)
-        let css_selector = if let Some(selector) = params.selector.clone() {
-            selector
-        } else if let Some(index) = params.index {
-            let dom = context.get_dom()?;
-            let selector = dom.get_selector(index).ok_or_else(|| {
-                BrowserError::ElementNotFound(format!("No element with index {}", index))
-            })?;
-            selector.clone()
-        } else {
-            unreachable!("Validation above ensures one field is Some")
+        let InputParams {
+            selector,
+            index,
+            text,
+            clear,
+        } = params;
+        let target = {
+            let dom = if index.is_some() {
+                Some(context.get_dom()?)
+            } else {
+                None
+            };
+            resolve_target("input", selector, index, dom)?
         };
 
         let tab = context.session.tab()?;
-        let element = context.session.find_element(&tab, &css_selector)?;
+        let element = context.session.find_element(&tab, &target.selector)?;
 
-        if params.clear {
+        if clear {
             element.click().ok(); // Focus
             // Clear with Ctrl+A and Delete
             tab.press_key("End").ok();
-            for _ in 0..params.text.len() + 100 {
+            for _ in 0..text.len() + 100 {
                 tab.press_key("Backspace").ok();
             }
         }
 
         element
-            .type_into(&params.text)
+            .type_into(&text)
             .map_err(|e| BrowserError::ToolExecutionFailed {
                 tool: "input".to_string(),
                 reason: e.to_string(),
             })?;
 
+        context.invalidate_dom();
         let snapshot = {
             let dom = context.get_dom()?;
             render_aria_tree(&dom.root, RenderMode::Ai, None)

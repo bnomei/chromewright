@@ -1,5 +1,5 @@
 use crate::error::{BrowserError, Result};
-use crate::tools::{Tool, ToolContext, ToolResult};
+use crate::tools::{Tool, ToolContext, ToolResult, resolve_target};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -27,65 +27,38 @@ impl Tool for ClickTool {
     }
 
     fn execute_typed(&self, params: ClickParams, context: &mut ToolContext) -> Result<ToolResult> {
-        // Validate that exactly one selector method is provided
-        match (&params.selector, &params.index) {
-            (Some(_), Some(_)) => {
-                return Err(BrowserError::ToolExecutionFailed {
-                    tool: "click".to_string(),
-                    reason: "Cannot specify both 'selector' and 'index'. Use one or the other."
-                        .to_string(),
-                });
-            }
-            (None, None) => {
-                return Err(BrowserError::ToolExecutionFailed {
-                    tool: "click".to_string(),
-                    reason: "Must specify either 'selector' or 'index'.".to_string(),
-                });
-            }
-            _ => {}
-        }
-
-        if let Some(selector) = params.selector {
-            // CSS selector path
-            let tab = context.session.tab()?;
-            let element = context.session.find_element(&tab, &selector)?;
-            element
-                .click()
-                .map_err(|e| BrowserError::ToolExecutionFailed {
-                    tool: "click".to_string(),
-                    reason: e.to_string(),
-                })?;
-
-            Ok(ToolResult::success_with(serde_json::json!({
-                "selector": selector,
-                "method": "css"
-            })))
-        } else if let Some(index) = params.index {
-            // Index path - convert index to CSS selector
-            let css_selector = {
-                let dom = context.get_dom()?;
-                let selector = dom.get_selector(index).ok_or_else(|| {
-                    BrowserError::ElementNotFound(format!("No element with index {}", index))
-                })?;
-                selector.clone()
+        let ClickParams { selector, index } = params;
+        let target = {
+            let dom = if index.is_some() {
+                Some(context.get_dom()?)
+            } else {
+                None
             };
+            resolve_target("click", selector, index, dom)?
+        };
 
-            let tab = context.session.tab()?;
-            let element = context.session.find_element(&tab, &css_selector)?;
-            element
-                .click()
-                .map_err(|e| BrowserError::ToolExecutionFailed {
-                    tool: "click".to_string(),
-                    reason: e.to_string(),
-                })?;
+        let tab = context.session.tab()?;
+        let element = context.session.find_element(&tab, &target.selector)?;
+        element
+            .click()
+            .map_err(|e| BrowserError::ToolExecutionFailed {
+                tool: "click".to_string(),
+                reason: e.to_string(),
+            })?;
 
-            Ok(ToolResult::success_with(serde_json::json!({
+        let result = if let Some(index) = target.index {
+            serde_json::json!({
                 "index": index,
-                "selector": css_selector,
-                "method": "index"
-            })))
+                "selector": target.selector,
+                "method": target.method(),
+            })
         } else {
-            unreachable!("Validation above ensures one field is Some")
-        }
+            serde_json::json!({
+                "selector": target.selector,
+                "method": target.method(),
+            })
+        };
+
+        Ok(ToolResult::success_with(result))
     }
 }

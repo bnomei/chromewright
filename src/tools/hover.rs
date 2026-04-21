@@ -1,5 +1,5 @@
 use crate::error::{BrowserError, Result};
-use crate::tools::{Tool, ToolContext, ToolResult};
+use crate::tools::{Tool, ToolContext, ToolResult, resolve_target};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -29,41 +29,21 @@ impl Tool for HoverTool {
     }
 
     fn execute_typed(&self, params: HoverParams, context: &mut ToolContext) -> Result<ToolResult> {
-        // Validate that exactly one selector method is provided
-        match (&params.selector, &params.index) {
-            (Some(_), Some(_)) => {
-                return Err(BrowserError::ToolExecutionFailed {
-                    tool: "hover".to_string(),
-                    reason: "Cannot specify both 'selector' and 'index'. Use one or the other."
-                        .to_string(),
-                });
-            }
-            (None, None) => {
-                return Err(BrowserError::ToolExecutionFailed {
-                    tool: "hover".to_string(),
-                    reason: "Must specify either 'selector' or 'index'.".to_string(),
-                });
-            }
-            _ => {}
-        }
-
-        let css_selector = if let Some(selector) = params.selector {
-            selector
-        } else if let Some(index) = params.index {
-            let dom = context.get_dom()?;
-            let selector = dom.get_selector(index).ok_or_else(|| {
-                BrowserError::ElementNotFound(format!("No element with index {}", index))
-            })?;
-            selector.clone()
-        } else {
-            unreachable!("Validation above ensures one field is Some")
+        let HoverParams { selector, index } = params;
+        let target = {
+            let dom = if index.is_some() {
+                Some(context.get_dom()?)
+            } else {
+                None
+            };
+            resolve_target("hover", selector, index, dom)?
         };
 
         // Find the element (to verify it exists)
 
         // Scroll into view if needed, then hover
         let selector_json =
-            serde_json::to_string(&css_selector).expect("serializing CSS selector never fails");
+            serde_json::to_string(&target.selector).expect("serializing CSS selector never fails");
         let hover_js = HOVER_JS.replace("__SELECTOR__", &selector_json);
 
         let result = context
@@ -89,7 +69,7 @@ impl Tool for HoverTool {
 
         if result_json["success"].as_bool() == Some(true) {
             Ok(ToolResult::success_with(serde_json::json!({
-                "selector": css_selector,
+                "selector": target.selector,
                 "element": {
                     "tagName": result_json["tagName"],
                     "id": result_json["id"],

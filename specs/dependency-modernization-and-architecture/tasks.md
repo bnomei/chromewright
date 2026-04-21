@@ -24,20 +24,6 @@ Meta:
 
 ## Todo
 
-- [ ] T006: Perform focused structural cleanup in the tool layer (owner: unassigned) (scope: `src/browser/`, `src/tools/`, `tests/`) (depends: T003)
-  - Covers: R002, R008
-  - Context: The tool layer repeats selector/index validation and target resolution across several tools. `input` can also reuse a cached DOM after mutation when index-based lookup was used, which can return stale snapshots. Limit this wave to seams that directly improve correctness and future upgrade cost.
-  - Reuse_targets: `ToolContext`, `DomTree::get_selector(...)`, duplicated validation blocks in `click`, `hover`, `input`, and `select`
-  - Autonomy: standard
-  - Risk: medium
-  - Complexity: medium
-  - Verification_mode: mayor
-  - Verification_status: pending
-  - DoD: duplicated target resolution is consolidated, DOM invalidation rules are explicit, and tests cover the changed behavior.
-  - Validation: `cargo test --locked`, `cargo check --all-features --all-targets --locked`
-  - Escalate if: the cleanup grows into a broad redesign instead of a bounded correctness/maintainability pass.
-  - Notes: Close with one atomic commit focused on tool-layer cleanup.
-
 ## Done
 
 - [x] T002: Make the CLI contract honest (owner: mayor) (scope: `src/bin/mcp_server.rs`, `src/browser/`, `README.md`, `tests/`) (depends: T001)
@@ -71,6 +57,14 @@ Meta:
   - DoD: tool results remain readable to humans but are not text-only by construction.
   - Validation: `cargo test --locked --all-features`, `cargo check --all-features --all-targets --locked`
   - Notes: Changed the MCP adapter to emit `structured_content` for successful JSON payloads, `structured_error` payloads for tool-level failures, and `_meta` for preserved tool metadata. Added focused adapter tests to lock in structured success, structured error, and text-only success behavior.
+
+- [x] T006: Perform focused structural cleanup in the tool layer (owner: mayor) (scope: `src/browser/`, `src/tools/`, `tests/`) (depends: T003)
+  - Covers: R002, R008
+  - Verification_mode: mayor
+  - Verification_status: passed
+  - DoD: duplicated target resolution is consolidated, DOM invalidation rules are explicit, and tests cover the changed behavior.
+  - Validation: `cargo test --locked --all-features`, `cargo check --all-features --all-targets --locked`
+  - Notes: Consolidated selector-vs-index validation and index-to-selector resolution into a shared `resolve_target(...)` helper used by `click`, `hover`, `input`, and `select`. Added targeted helper tests and made `ToolContext` expose explicit DOM invalidation so `input` refreshes the DOM before returning its post-type snapshot.
 
 - [x] T001: Stabilize the browser-launch baseline (owner: mayor) (scope: `src/browser/`, `tests/`, `Cargo.toml`) (depends: -)
   - Covers: R001, R002, R004

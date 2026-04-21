@@ -54,6 +54,7 @@ pub use wait::WaitParams;
 use crate::browser::BrowserSession;
 use crate::dom::DomTree;
 use crate::error::Result;
+use crate::error::BrowserError;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -84,12 +85,66 @@ impl<'a> ToolContext<'a> {
         }
     }
 
+    /// Invalidate the cached DOM tree after a mutation.
+    pub fn invalidate_dom(&mut self) {
+        self.dom_tree = None;
+    }
+
     /// Get or extract the DOM tree
     pub fn get_dom(&mut self) -> Result<&DomTree> {
         if self.dom_tree.is_none() {
             self.dom_tree = Some(self.session.extract_dom()?);
         }
         Ok(self.dom_tree.as_ref().unwrap())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResolvedTarget {
+    pub selector: String,
+    pub index: Option<usize>,
+}
+
+impl ResolvedTarget {
+    pub fn method(&self) -> &'static str {
+        if self.index.is_some() { "index" } else { "css" }
+    }
+}
+
+pub(crate) fn resolve_target(
+    tool: &str,
+    selector: Option<String>,
+    index: Option<usize>,
+    dom: Option<&DomTree>,
+) -> Result<ResolvedTarget> {
+    match (selector, index) {
+        (Some(_), Some(_)) => Err(BrowserError::ToolExecutionFailed {
+            tool: tool.to_string(),
+            reason: "Cannot specify both 'selector' and 'index'. Use one or the other."
+                .to_string(),
+        }),
+        (None, None) => Err(BrowserError::ToolExecutionFailed {
+            tool: tool.to_string(),
+            reason: "Must specify either 'selector' or 'index'.".to_string(),
+        }),
+        (Some(selector), None) => Ok(ResolvedTarget {
+            selector,
+            index: None,
+        }),
+        (None, Some(index)) => {
+            let dom = dom.ok_or_else(|| BrowserError::ToolExecutionFailed {
+                tool: tool.to_string(),
+                reason: "DOM tree is required to resolve an element index.".to_string(),
+            })?;
+            let selector = dom.get_selector(index).ok_or_else(|| {
+                BrowserError::ElementNotFound(format!("No element with index {}", index))
+            })?;
+
+            Ok(ResolvedTarget {
+                selector: selector.clone(),
+                index: Some(index),
+            })
+        }
     }
 }
 
@@ -302,6 +357,7 @@ impl Default for ToolRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dom::{AriaChild, AriaNode};
 
     #[test]
     fn test_tool_result_success() {
@@ -324,5 +380,64 @@ mod tests {
         let result = ToolResult::success(None).with_metadata("duration_ms", serde_json::json!(100));
 
         assert!(result.metadata.contains_key("duration_ms"));
+    }
+
+    fn sample_dom() -> DomTree {
+        let root = AriaNode::fragment().with_child(AriaChild::Node(Box::new(
+            AriaNode::new("button", "Submit")
+                .with_index(1)
+                .with_box(true, Some("pointer".to_string())),
+        )));
+        let mut dom = DomTree::new(root);
+        dom.selectors = vec![String::new(), "#submit".to_string()];
+        dom
+    }
+
+    #[test]
+    fn test_resolve_target_prefers_css_selector() {
+        let target = resolve_target("click", Some("#submit".to_string()), None, None)
+            .expect("selector target should resolve");
+
+        assert_eq!(
+            target,
+            ResolvedTarget {
+                selector: "#submit".to_string(),
+                index: None,
+            }
+        );
+        assert_eq!(target.method(), "css");
+    }
+
+    #[test]
+    fn test_resolve_target_resolves_index_via_dom() {
+        let dom = sample_dom();
+        let target = resolve_target("click", None, Some(1), Some(&dom))
+            .expect("index target should resolve against DOM");
+
+        assert_eq!(
+            target,
+            ResolvedTarget {
+                selector: "#submit".to_string(),
+                index: Some(1),
+            }
+        );
+        assert_eq!(target.method(), "index");
+    }
+
+    #[test]
+    fn test_resolve_target_rejects_invalid_combinations() {
+        let both = resolve_target("click", Some("#submit".to_string()), Some(1), None);
+        assert!(matches!(both, Err(BrowserError::ToolExecutionFailed { .. })));
+
+        let neither = resolve_target("click", None, None, None);
+        assert!(matches!(neither, Err(BrowserError::ToolExecutionFailed { .. })));
+    }
+
+    #[test]
+    fn test_resolve_target_errors_for_missing_index() {
+        let dom = sample_dom();
+        let result = resolve_target("click", None, Some(9), Some(&dom));
+
+        assert!(matches!(result, Err(BrowserError::ElementNotFound(_))));
     }
 }
