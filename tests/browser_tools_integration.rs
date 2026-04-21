@@ -1,7 +1,7 @@
 use browser_use::tools::{
     HoverParams, ScrollParams, SelectParams, SnapshotParams, Tool, ToolContext, WaitCondition,
-    WaitParams, hover::HoverTool, scroll::ScrollTool, select::SelectTool,
-    snapshot::SnapshotTool, wait::WaitTool,
+    WaitParams, hover::HoverTool, scroll::ScrollTool, select::SelectTool, snapshot::SnapshotTool,
+    wait::WaitTool,
 };
 use browser_use::{BrowserSession, LaunchOptions};
 use log::info;
@@ -10,7 +10,9 @@ fn launch_or_skip() -> Option<BrowserSession> {
     match BrowserSession::launch(LaunchOptions::new().headless(true)) {
         Ok(session) => Some(session),
         Err(err)
-            if err.to_string().contains("didn't give us a WebSocket URL before we timed out")
+            if err
+                .to_string()
+                .contains("didn't give us a WebSocket URL before we timed out")
                 || err
                     .to_string()
                     .contains("Could not auto detect a chrome executable")
@@ -18,7 +20,10 @@ fn launch_or_skip() -> Option<BrowserSession> {
                     .to_string()
                     .contains("Running as root without --no-sandbox is not supported") =>
         {
-            eprintln!("Skipping browser integration test due to environment: {}", err);
+            eprintln!(
+                "Skipping browser integration test due to environment: {}",
+                err
+            );
             None
         }
         Err(err) => panic!("Unexpected launch failure: {}", err),
@@ -88,8 +93,8 @@ fn test_select_tool() {
     assert_eq!(data["action"].as_str(), Some("select"));
     assert_eq!(data["target"]["selector"].as_str(), Some("#country"));
     assert!(data["document"]["revision"].as_str().is_some());
-    assert!(data["snapshot"].as_str().is_some());
-    assert!(data["nodes"].is_array());
+    assert!(data["snapshot"].is_null());
+    assert!(data["nodes"].is_null());
 }
 
 #[test]
@@ -288,15 +293,15 @@ fn test_select_with_index() {
 
     let result = tool
         .execute_typed(
-        SelectParams {
-            selector: None,
-            index: None,
-            node_ref: Some(node_ref),
-            value: "green".to_string(),
-        },
-        &mut context,
-    )
-    .expect("Select with node_ref should succeed");
+            SelectParams {
+                selector: None,
+                index: None,
+                node_ref: Some(node_ref),
+                value: "green".to_string(),
+            },
+            &mut context,
+        )
+        .expect("Select with node_ref should succeed");
 
     assert!(result.success);
     let data = result.data.unwrap();

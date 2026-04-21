@@ -1,13 +1,13 @@
 use crate::browser::config::{ConnectionOptions, LaunchOptions};
-use crate::dom::DomTree;
+use crate::dom::{DocumentMetadata, DomTree};
 use crate::error::{BrowserError, Result};
 use crate::tools::{ToolContext, ToolRegistry};
 use headless_chrome::{Browser, Tab};
 use std::ffi::OsStr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU16, Ordering};
-use std::time::Instant;
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
+use std::time::Instant;
 
 const DEBUG_PORT_START: u16 = 40_000;
 const DEBUG_PORT_END: u16 = 59_999;
@@ -19,6 +19,18 @@ pub struct TabElement<'a> {
     pub element: headless_chrome::Element<'a>,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct MarkdownCacheEntry {
+    pub document_id: String,
+    pub revision: String,
+    pub title: String,
+    pub url: String,
+    pub byline: String,
+    pub excerpt: String,
+    pub site_name: String,
+    pub full_markdown: String,
+}
+
 /// Browser session that manages a Chrome/Chromium instance
 pub struct BrowserSession {
     /// The underlying headless_chrome Browser instance
@@ -26,6 +38,12 @@ pub struct BrowserSession {
 
     /// Tool registry for executing browser automation tools
     tool_registry: ToolRegistry,
+
+    /// Best-effort active-tab hint to avoid repeated cross-tab probing on steady-state calls.
+    active_tab_hint: RwLock<Option<Arc<Tab>>>,
+
+    /// Cache the most recent markdown extraction by document revision.
+    markdown_cache: Mutex<Option<MarkdownCacheEntry>>,
 }
 
 impl BrowserSession {
@@ -72,13 +90,15 @@ impl BrowserSession {
         let browser =
             Browser::new(launch_opts).map_err(|e| BrowserError::LaunchFailed(e.to_string()))?;
 
-        browser
+        let initial_tab = browser
             .new_tab()
             .map_err(|e| BrowserError::LaunchFailed(format!("Failed to create tab: {}", e)))?;
 
         Ok(Self {
             browser,
             tool_registry: ToolRegistry::with_defaults(),
+            active_tab_hint: RwLock::new(Some(initial_tab)),
+            markdown_cache: Mutex::new(None),
         })
     }
 
@@ -90,6 +110,8 @@ impl BrowserSession {
         Ok(Self {
             browser,
             tool_registry: ToolRegistry::with_defaults(),
+            active_tab_hint: RwLock::new(None),
+            markdown_cache: Mutex::new(None),
         })
     }
 
@@ -108,6 +130,7 @@ impl BrowserSession {
         let tab = self.browser.new_tab().map_err(|e| {
             BrowserError::TabOperationFailed(format!("Failed to create tab: {}", e))
         })?;
+        self.set_active_tab_hint(Some(tab.clone()))?;
         Ok(tab)
     }
 
@@ -125,6 +148,10 @@ impl BrowserSession {
 
     /// Get the currently active tab by checking the document visibility and focus state
     pub fn get_active_tab(&self) -> Result<Arc<Tab>> {
+        if let Some(tab) = self.cached_active_tab()? {
+            return Ok(tab);
+        }
+
         let tabs = self.get_tabs()?;
 
         // First pass: check for both visibility and focus (strongest signal)
@@ -137,6 +164,7 @@ impl BrowserSession {
                 Ok(remote_object) => {
                     if let Some(value) = remote_object.value {
                         if value.as_bool().unwrap_or(false) {
+                            self.set_active_tab_hint(Some(tab.clone()))?;
                             return Ok(tab.clone());
                         }
                     }
@@ -155,6 +183,7 @@ impl BrowserSession {
                 Ok(remote_object) => {
                     if let Some(value) = remote_object.value {
                         if value.as_bool().unwrap_or(false) {
+                            self.set_active_tab_hint(Some(tab.clone()))?;
                             return Ok(tab.clone());
                         }
                     }
@@ -170,7 +199,9 @@ impl BrowserSession {
 
     /// Close the active tab
     pub fn close_active_tab(&mut self) -> Result<()> {
-        self.tab()?
+        let active_tab = self.tab()?;
+        self.clear_active_tab_hint()?;
+        active_tab
             .close(true)
             .map_err(|e| BrowserError::TabOperationFailed(format!("Failed to close tab: {}", e)))?;
 
@@ -182,6 +213,33 @@ impl BrowserSession {
         &self.browser
     }
 
+    /// Activate the provided tab and remember it as the active-tab hint.
+    pub fn activate_tab(&self, tab: &Arc<Tab>) -> Result<()> {
+        tab.activate().map_err(|e| {
+            BrowserError::TabOperationFailed(format!("Failed to activate tab: {}", e))
+        })?;
+        self.set_active_tab_hint(Some(tab.clone()))?;
+        Ok(())
+    }
+
+    /// Open a new tab, navigate to the URL, wait for the initial load, and mark it active.
+    pub fn open_tab(&self, url: &str) -> Result<Arc<Tab>> {
+        let tab = self.browser.new_tab().map_err(|e| {
+            BrowserError::TabOperationFailed(format!("Failed to create tab: {}", e))
+        })?;
+
+        tab.navigate_to(url).map_err(|e| {
+            BrowserError::NavigationFailed(format!("Failed to navigate to {}: {}", url, e))
+        })?;
+
+        tab.wait_until_navigated().map_err(|e| {
+            BrowserError::NavigationFailed(format!("Navigation to {} did not complete: {}", url, e))
+        })?;
+
+        self.activate_tab(&tab)?;
+        Ok(tab)
+    }
+
     /// Navigate to a URL using the active tab
     pub fn navigate(&self, url: &str) -> Result<()> {
         self.tab()?.navigate_to(url).map_err(|e| {
@@ -189,6 +247,11 @@ impl BrowserSession {
         })?;
 
         Ok(())
+    }
+
+    /// Read document metadata from the active tab without rebuilding the full DOM snapshot.
+    pub fn document_metadata(&self) -> Result<DocumentMetadata> {
+        DocumentMetadata::from_tab(&self.tab()?)
     }
 
     /// Wait for navigation to complete
@@ -207,7 +270,9 @@ impl BrowserSession {
         let result = self
             .tab()?
             .evaluate("document.readyState", false)
-            .map_err(|e| BrowserError::NavigationFailed(format!("Failed to read readyState: {}", e)))?;
+            .map_err(|e| {
+                BrowserError::NavigationFailed(format!("Failed to read readyState: {}", e))
+            })?;
 
         let ready_state = result
             .value
@@ -309,6 +374,63 @@ impl BrowserSession {
     ) -> Result<crate::tools::ToolResult> {
         let mut context = ToolContext::new(self);
         self.tool_registry.execute(name, params, &mut context)
+    }
+
+    fn cached_active_tab(&self) -> Result<Option<Arc<Tab>>> {
+        let cached = self
+            .active_tab_hint
+            .read()
+            .map_err(|e| {
+                BrowserError::TabOperationFailed(format!("Failed to read active tab hint: {}", e))
+            })?
+            .clone();
+
+        let Some(cached) = cached else {
+            return Ok(None);
+        };
+
+        let tabs = self.get_tabs()?;
+        Ok(tabs.into_iter().find(|tab| Arc::ptr_eq(tab, &cached)))
+    }
+
+    pub(crate) fn set_active_tab_hint(&self, tab: Option<Arc<Tab>>) -> Result<()> {
+        *self.active_tab_hint.write().map_err(|e| {
+            BrowserError::TabOperationFailed(format!("Failed to write active tab hint: {}", e))
+        })? = tab;
+        Ok(())
+    }
+
+    pub(crate) fn clear_active_tab_hint(&self) -> Result<()> {
+        self.set_active_tab_hint(None)
+    }
+
+    pub(crate) fn markdown_cache_entry(
+        &self,
+        document: &DocumentMetadata,
+    ) -> Result<Option<MarkdownCacheEntry>> {
+        let guard = self
+            .markdown_cache
+            .lock()
+            .map_err(|e| BrowserError::ToolExecutionFailed {
+                tool: "get_markdown".to_string(),
+                reason: format!("Failed to read markdown cache: {}", e),
+            })?;
+
+        Ok(guard.as_ref().and_then(|entry| {
+            (entry.document_id == document.document_id && entry.revision == document.revision)
+                .then_some(entry.clone())
+        }))
+    }
+
+    pub(crate) fn store_markdown_cache(&self, entry: MarkdownCacheEntry) -> Result<()> {
+        *self
+            .markdown_cache
+            .lock()
+            .map_err(|e| BrowserError::ToolExecutionFailed {
+                tool: "get_markdown".to_string(),
+                reason: format!("Failed to write markdown cache: {}", e),
+            })? = Some(entry);
+        Ok(())
     }
 
     /// Navigate back in browser history
@@ -418,7 +540,8 @@ mod tests {
     #[test]
     #[ignore]
     fn test_get_active_tab() {
-        let Some(session) = launch_or_skip(BrowserSession::launch(LaunchOptions::new().headless(true)))
+        let Some(session) =
+            launch_or_skip(BrowserSession::launch(LaunchOptions::new().headless(true)))
         else {
             return;
         };
@@ -441,7 +564,8 @@ mod tests {
     #[test]
     #[ignore]
     fn test_navigate() {
-        let Some(session) = launch_or_skip(BrowserSession::launch(LaunchOptions::new().headless(true)))
+        let Some(session) =
+            launch_or_skip(BrowserSession::launch(LaunchOptions::new().headless(true)))
         else {
             return;
         };

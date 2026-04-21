@@ -1,6 +1,7 @@
 use crate::error::{BrowserError, Result};
 use crate::tools::{
-    TargetResolution, Tool, ToolContext, ToolResult, build_document_envelope, resolve_target,
+    DocumentEnvelopeOptions, TargetResolution, Tool, ToolContext, ToolResult,
+    build_document_envelope, resolve_target,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -81,9 +82,12 @@ impl Tool for HoverTool {
         };
 
         if result_json["success"].as_bool() == Some(true) {
-            context.refresh_dom()?;
-            let mut payload =
-                serde_json::to_value(build_document_envelope(context, Some(&target), false)?)?;
+            context.invalidate_dom();
+            let mut payload = serde_json::to_value(build_document_envelope(
+                context,
+                Some(&target),
+                DocumentEnvelopeOptions::minimal(),
+            )?)?;
             if let serde_json::Value::Object(ref mut map) = payload {
                 map.insert("action".to_string(), serde_json::json!("hover"));
                 map.insert(

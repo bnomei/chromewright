@@ -1,6 +1,8 @@
 use crate::dom::{AriaChild, AriaNode, yaml_escape_key_if_needed, yaml_escape_value_if_needed};
 use crate::error::Result;
-use crate::tools::{Tool, ToolContext, ToolResult, build_document_envelope};
+use crate::tools::{
+    DocumentEnvelopeOptions, Tool, ToolContext, ToolResult, build_document_envelope,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -28,7 +30,7 @@ impl Tool for SnapshotTool {
         params: SnapshotParams,
         context: &mut ToolContext,
     ) -> Result<ToolResult> {
-        let mut envelope = build_document_envelope(context, None, true)?;
+        let mut envelope = build_document_envelope(context, None, DocumentEnvelopeOptions::full())?;
         if params.incremental {
             envelope.snapshot = envelope.snapshot.take();
         }

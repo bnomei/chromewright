@@ -78,6 +78,7 @@ Supported transports:
 
 - Default high-level agent tools for snapshot, navigate, click, input, wait, tabs, and extraction
 - DOM extraction with revision-scoped node references and iframe metadata
+- Metadata-first post-action envelopes for high-level tools, with the full snapshot surface kept on the `snapshot` tool
 - CSS selector, numeric index, or `node_ref` targeting for document interactions
 - Explicit operator opt-ins for raw JavaScript evaluation and filesystem-bound screenshots
 - Thread-safe browser session management
@@ -86,6 +87,8 @@ Supported transports:
 
 The default `ToolRegistry` and MCP server expose the high-level document interaction contract.
 Raw JavaScript evaluation and path-based screenshot capture are intentionally outside that default surface.
+High-level action tools now return updated document metadata by default; call `snapshot` when you need
+the full YAML snapshot plus actionable-node list.
 
 For direct Rust integrations, opt into those operator tools explicitly:
 
@@ -95,6 +98,10 @@ use browser_use::tools::ToolRegistry;
 let mut registry = ToolRegistry::with_defaults();
 registry.register_operator_tools();
 ```
+
+Once operator tools are registered, `evaluate` and `screenshot` still require `confirm_unsafe = true`
+per call. High-level `navigate` and `new_tab` also reject unsafe schemes such as `data:` and `file:`
+unless the caller passes `allow_unsafe = true`.
 
 ## Requirements
 

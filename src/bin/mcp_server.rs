@@ -12,8 +12,8 @@ use std::io::{stdin, stdout};
 use std::path::PathBuf;
 
 #[cfg(feature = "mcp-server")]
-use rmcp::transport::{
-    streamable_http_server::{StreamableHttpService, session::local::LocalSessionManager},
+use rmcp::transport::streamable_http_server::{
+    StreamableHttpService, session::local::LocalSessionManager,
 };
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -93,7 +93,7 @@ fn create_browser_server(mode: &BrowserMode) -> Result<BrowserServer, String> {
     }
 }
 
-#[tokio::main(flavor = "current_thread")]
+#[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();

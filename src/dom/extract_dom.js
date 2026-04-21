@@ -623,11 +623,13 @@ JSON.stringify((function() {
 
     function buildRevisionToken(documentState, frameReports) {
         const parts = ['main:' + documentState.revision];
-        for (const frame of frameReports) {
+        for (let i = 0; i < frameReports.length; i += 1) {
+            const frame = frameReports[i];
+            const frameKey = 'frame' + i;
             if (frame.document_id && frame.revision) {
-                parts.push((frame.index !== undefined ? frame.index : 'frame') + ':' + frame.document_id + ':' + frame.revision);
+                parts.push(frameKey + ':' + frame.document_id + ':' + frame.revision);
             } else {
-                parts.push((frame.index !== undefined ? frame.index : 'frame') + ':' + frame.status);
+                parts.push(frameKey + ':' + frame.status);
             }
         }
         return parts.join('|');

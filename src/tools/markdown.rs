@@ -1,9 +1,11 @@
+use crate::browser::session::MarkdownCacheEntry;
 use crate::error::{BrowserError, Result};
 use crate::tools::html_to_markdown::convert_html_to_markdown;
 use crate::tools::readability_script::READABILITY_SCRIPT;
 use crate::tools::{Tool, ToolContext, ToolResult};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 /// Parameters for getting markdown content with pagination support
@@ -50,57 +52,26 @@ impl Tool for GetMarkdownTool {
         params: GetMarkdownParams,
         context: &mut ToolContext,
     ) -> Result<ToolResult> {
-        context
-            .session
-            .wait_for_document_ready_with_timeout(std::time::Duration::from_secs(5))
-            .ok();
+        let document = context.session.document_metadata()?;
+        if let Some(entry) = context.session.markdown_cache_entry(&document)? {
+            return Ok(ToolResult::success_with(paginate_markdown(&entry, &params)));
+        }
+
+        if document.ready_state != "complete" {
+            context
+                .session
+                .wait_for_document_ready_with_timeout(std::time::Duration::from_secs(5))
+                .ok();
+        }
         wait_for_markdown_settle(context, Duration::from_secs(2))?;
 
-        // Inject Readability.js script and the conversion script
-        // Use 'var' instead of 'const' to allow redeclaration on subsequent calls
-        // This prevents "identifier already declared" errors when calling get_markdown multiple times
-        let js_code = format!(
-            "var READABILITY_SCRIPT = {};\n{}",
-            serde_json::to_string(READABILITY_SCRIPT).unwrap(),
-            include_str!("convert_to_markdown.js")
-        );
+        let document = context.session.document_metadata()?;
+        if let Some(entry) = context.session.markdown_cache_entry(&document)? {
+            return Ok(ToolResult::success_with(paginate_markdown(&entry, &params)));
+        }
 
-        // Execute the JavaScript to extract and convert content
-        let result = context
-            .session
-            .tab()?
-            .evaluate(&js_code, false)
-            .map_err(|e| BrowserError::EvaluationFailed(e.to_string()))?;
+        let extraction_result = extract_markdown(context)?;
 
-        // Parse the result
-        let result_value = result.value.ok_or_else(|| {
-            // Capture description if available
-            let description = result
-                .description
-                .map(|d| format!("Description: {}", d))
-                .unwrap_or_else(|| format!("Type: {:?}", result.Type));
-
-            BrowserError::ToolExecutionFailed {
-                tool: "get_markdown".to_string(),
-                reason: format!("No value returned from JavaScript. {}", description),
-            }
-        })?;
-
-        // The JavaScript returns a JSON string, so we need to parse it
-        let extraction_result: ExtractionResult = if let Some(json_str) = result_value.as_str() {
-            serde_json::from_str(json_str).map_err(|e| BrowserError::ToolExecutionFailed {
-                tool: "get_markdown".to_string(),
-                reason: format!("Failed to parse extraction result: {}", e),
-            })?
-        } else {
-            // If it's already an object, try to deserialize directly
-            serde_json::from_value(result_value).map_err(|e| BrowserError::ToolExecutionFailed {
-                tool: "get_markdown".to_string(),
-                reason: format!("Failed to deserialize extraction result: {}", e),
-            })?
-        };
-
-        // Check if Readability failed
         if extraction_result.readability_failed {
             return Err(BrowserError::ToolExecutionFailed {
                 tool: "get_markdown".to_string(),
@@ -110,67 +81,116 @@ impl Tool for GetMarkdownTool {
             });
         }
 
-        // Convert the extracted HTML content to Markdown
-        let full_markdown = convert_html_to_markdown(&extraction_result.content);
-
-        // Calculate pagination information
-        let total_pages = if full_markdown.is_empty() {
-            1
-        } else {
-            (full_markdown.len() + params.page_size - 1) / params.page_size
+        let entry = MarkdownCacheEntry {
+            document_id: document.document_id,
+            revision: document.revision,
+            title: extraction_result.title,
+            url: extraction_result.url,
+            byline: extraction_result.byline,
+            excerpt: extraction_result.excerpt,
+            site_name: extraction_result.site_name,
+            full_markdown: convert_html_to_markdown(&extraction_result.content),
         };
+        context.session.store_markdown_cache(entry.clone())?;
 
-        // Clamp page number to valid range
-        let current_page = params.page.clamp(1, total_pages.max(1));
-
-        // Calculate start and end indices for the requested page
-        let start_idx = (current_page - 1) * params.page_size;
-        let end_idx = (start_idx + params.page_size).min(full_markdown.len());
-
-        // Extract the content for the current page
-        let mut page_content = if start_idx < full_markdown.len() {
-            full_markdown[start_idx..end_idx].to_string()
-        } else {
-            String::new()
-        };
-
-        // Add title to the first page only
-        if current_page == 1 && !extraction_result.title.is_empty() {
-            page_content = format!("# {}\n\n{}", extraction_result.title, page_content);
-        }
-
-        // Add pagination information if there are multiple pages
-        if total_pages > 1 {
-            let pagination_info = if current_page < total_pages {
-                format!(
-                    "\n\n---\n\n*Page {} of {}. There are {} more page(s) with additional content.*\n",
-                    current_page,
-                    total_pages,
-                    total_pages - current_page
-                )
-            } else {
-                format!(
-                    "\n\n---\n\n*Page {} of {}. This is the last page.*\n",
-                    current_page, total_pages
-                )
-            };
-            page_content.push_str(&pagination_info);
-        }
-
-        // Return the result with pagination metadata
-        Ok(ToolResult::success_with(serde_json::json!({
-            "markdown": page_content,
-            "title": extraction_result.title,
-            "url": extraction_result.url,
-            "currentPage": current_page,
-            "totalPages": total_pages,
-            "hasMorePages": current_page < total_pages,
-            "length": page_content.len(),
-            "byline": extraction_result.byline,
-            "excerpt": extraction_result.excerpt,
-            "siteName": extraction_result.site_name,
-        })))
+        Ok(ToolResult::success_with(paginate_markdown(&entry, &params)))
     }
+}
+
+fn markdown_extraction_script() -> &'static str {
+    static SCRIPT: OnceLock<String> = OnceLock::new();
+    SCRIPT.get_or_init(|| {
+        format!(
+            "var READABILITY_SCRIPT = {};\n{}",
+            serde_json::to_string(READABILITY_SCRIPT)
+                .expect("Readability script serialization should never fail"),
+            include_str!("convert_to_markdown.js")
+        )
+    })
+}
+
+fn extract_markdown(context: &ToolContext) -> Result<ExtractionResult> {
+    let result = context
+        .session
+        .tab()?
+        .evaluate(markdown_extraction_script(), false)
+        .map_err(|e| BrowserError::EvaluationFailed(e.to_string()))?;
+
+    let result_value = result.value.ok_or_else(|| {
+        let description = result
+            .description
+            .map(|d| format!("Description: {}", d))
+            .unwrap_or_else(|| format!("Type: {:?}", result.Type));
+
+        BrowserError::ToolExecutionFailed {
+            tool: "get_markdown".to_string(),
+            reason: format!("No value returned from JavaScript. {}", description),
+        }
+    })?;
+
+    if let Some(json_str) = result_value.as_str() {
+        serde_json::from_str(json_str).map_err(|e| BrowserError::ToolExecutionFailed {
+            tool: "get_markdown".to_string(),
+            reason: format!("Failed to parse extraction result: {}", e),
+        })
+    } else {
+        serde_json::from_value(result_value).map_err(|e| BrowserError::ToolExecutionFailed {
+            tool: "get_markdown".to_string(),
+            reason: format!("Failed to deserialize extraction result: {}", e),
+        })
+    }
+}
+
+fn paginate_markdown(entry: &MarkdownCacheEntry, params: &GetMarkdownParams) -> serde_json::Value {
+    let total_pages = if entry.full_markdown.is_empty() {
+        1
+    } else {
+        (entry.full_markdown.len() + params.page_size - 1) / params.page_size
+    };
+
+    let current_page = params.page.clamp(1, total_pages.max(1));
+    let start_idx = (current_page - 1) * params.page_size;
+    let end_idx = (start_idx + params.page_size).min(entry.full_markdown.len());
+
+    let mut page_content = if start_idx < entry.full_markdown.len() {
+        entry.full_markdown[start_idx..end_idx].to_string()
+    } else {
+        String::new()
+    };
+
+    if current_page == 1 && !entry.title.is_empty() {
+        page_content = format!("# {}\n\n{}", entry.title, page_content);
+    }
+
+    if total_pages > 1 {
+        let pagination_info = if current_page < total_pages {
+            format!(
+                "\n\n---\n\n*Page {} of {}. There are {} more page(s) with additional content.*\n",
+                current_page,
+                total_pages,
+                total_pages - current_page
+            )
+        } else {
+            format!(
+                "\n\n---\n\n*Page {} of {}. This is the last page.*\n",
+                current_page, total_pages
+            )
+        };
+        page_content.push_str(&pagination_info);
+    }
+
+    serde_json::json!({
+        "markdown": page_content,
+        "title": entry.title,
+        "url": entry.url,
+        "currentPage": current_page,
+        "totalPages": total_pages,
+        "hasMorePages": current_page < total_pages,
+        "length": page_content.len(),
+        "byline": entry.byline,
+        "excerpt": entry.excerpt,
+        "siteName": entry.site_name,
+    })
 }
 
 fn wait_for_markdown_settle(context: &ToolContext, timeout: Duration) -> Result<()> {

@@ -5,7 +5,9 @@ fn launch_or_skip() -> Option<BrowserSession> {
     match BrowserSession::launch(LaunchOptions::new().headless(true)) {
         Ok(session) => Some(session),
         Err(err)
-            if err.to_string().contains("didn't give us a WebSocket URL before we timed out")
+            if err
+                .to_string()
+                .contains("didn't give us a WebSocket URL before we timed out")
                 || err
                     .to_string()
                     .contains("Could not auto detect a chrome executable")
@@ -13,7 +15,10 @@ fn launch_or_skip() -> Option<BrowserSession> {
                     .to_string()
                     .contains("Running as root without --no-sandbox is not supported") =>
         {
-            eprintln!("Skipping browser integration test due to environment: {}", err);
+            eprintln!(
+                "Skipping browser integration test due to environment: {}",
+                err
+            );
             None
         }
         Err(err) => panic!("Unexpected launch failure: {}", err),
@@ -257,7 +262,9 @@ fn test_snapshot_tool_exposes_document_metadata_and_node_refs() {
     assert!(result.success);
     let data = result.data.unwrap();
     let document = &data["document"];
-    let nodes = data["nodes"].as_array().expect("snapshot should return nodes");
+    let nodes = data["nodes"]
+        .as_array()
+        .expect("snapshot should return nodes");
 
     assert!(document["document_id"].as_str().is_some());
     assert!(document["revision"].as_str().is_some());
@@ -339,7 +346,9 @@ fn test_stale_node_ref_returns_structured_failure() {
         .expect("Stale node ref should return a structured tool failure");
 
     assert!(!stale_click.success);
-    let data = stale_click.data.expect("structured failure should include data");
+    let data = stale_click
+        .data
+        .expect("structured failure should include data");
     assert_eq!(data["code"].as_str(), Some("stale_node_ref"));
     assert_eq!(stale_click.error.as_deref(), Some("Stale node reference"));
 }
@@ -377,10 +386,12 @@ fn test_same_origin_iframe_content_is_included_in_snapshot() {
 
     assert!(result.success);
     let data = result.data.unwrap();
-    assert!(data["snapshot"]
-        .as_str()
-        .unwrap_or_default()
-        .contains("Inside Frame"));
+    assert!(
+        data["snapshot"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Inside Frame")
+    );
     assert_eq!(
         data["document"]["frames"][0]["status"].as_str(),
         Some("expanded")

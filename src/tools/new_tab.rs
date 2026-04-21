@@ -1,7 +1,8 @@
 use crate::error::Result;
-use crate::tools::snapshot::{RenderMode, render_aria_tree};
-use crate::tools::utils::normalize_url;
-use crate::tools::{Tool, ToolContext, ToolResult};
+use crate::tools::utils::validate_navigation_url;
+use crate::tools::{
+    DocumentEnvelopeOptions, Tool, ToolContext, ToolResult, build_document_envelope,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -10,6 +11,10 @@ use serde::{Deserialize, Serialize};
 pub struct NewTabParams {
     /// URL to open in the new tab
     pub url: String,
+
+    /// Allow non-web/unsafe absolute schemes such as data: or file:
+    #[serde(default)]
+    pub allow_unsafe: bool,
 }
 
 /// Tool for opening a new tab
@@ -24,39 +29,23 @@ impl Tool for NewTabTool {
     }
 
     fn execute_typed(&self, params: NewTabParams, context: &mut ToolContext) -> Result<ToolResult> {
-        let normalized_url = normalize_url(&params.url);
-        let tab = context.session.browser().new_tab().map_err(|e| {
-            crate::error::BrowserError::TabOperationFailed(format!("Failed to create tab: {}", e))
-        })?;
+        let normalized_url = validate_navigation_url(&params.url, params.allow_unsafe)?;
+        context.session.open_tab(&normalized_url)?;
+        context.invalidate_dom();
+        let mut payload = serde_json::to_value(build_document_envelope(
+            context,
+            None,
+            DocumentEnvelopeOptions::minimal(),
+        )?)?;
+        if let serde_json::Value::Object(ref mut map) = payload {
+            map.insert("action".to_string(), serde_json::json!("new_tab"));
+            map.insert("url".to_string(), serde_json::json!(normalized_url.clone()));
+            map.insert(
+                "message".to_string(),
+                serde_json::json!(format!("Opened a new tab for {}", normalized_url)),
+            );
+        }
 
-        // Navigate to the normalized URL
-        tab.navigate_to(&normalized_url).map_err(|e| {
-            crate::error::BrowserError::NavigationFailed(format!(
-                "Failed to navigate to {}: {}",
-                normalized_url, e
-            ))
-        })?;
-
-        // Wait for navigation to complete
-        tab.wait_until_navigated().map_err(|e| {
-            crate::error::BrowserError::NavigationFailed(format!(
-                "Navigation to {} did not complete: {}",
-                normalized_url, e
-            ))
-        })?;
-
-        // Bring the new tab to front
-        tab.activate().map_err(|e| {
-            crate::error::BrowserError::TabOperationFailed(format!("Failed to activate tab: {}", e))
-        })?;
-
-        let snapshot = {
-            let dom = context.get_dom()?;
-            render_aria_tree(&dom.root, RenderMode::Ai, None)
-        };
-
-        Ok(ToolResult::success_with(serde_json::json!({
-            "snapshot": snapshot
-        })))
+        Ok(ToolResult::success_with(payload))
     }
 }

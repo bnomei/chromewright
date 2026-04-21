@@ -34,6 +34,7 @@ fn test_new_tab() {
         .execute_typed(
             NewTabParams {
                 url: "data:text/html,<html><body><h1>Second Tab</h1></body></html>".to_string(),
+                allow_unsafe: true,
             },
             &mut context,
         )
@@ -143,6 +144,7 @@ fn test_new_tab_and_switch() {
         .execute_typed(
             NewTabParams {
                 url: "data:text/html,<html><body><h1>Second Tab</h1></body></html>".to_string(),
+                allow_unsafe: true,
             },
             &mut context,
         )
@@ -231,6 +233,7 @@ fn test_close_tab() {
         .execute_typed(
             NewTabParams {
                 url: "data:text/html,<html><body><h1>Second Tab</h1></body></html>".to_string(),
+                allow_unsafe: true,
             },
             &mut context,
         )
@@ -307,6 +310,7 @@ fn test_tab_workflow() {
         .execute_typed(
             NewTabParams {
                 url: "data:text/html,<html><body><h1>Tab 2</h1></body></html>".to_string(),
+                allow_unsafe: true,
             },
             &mut context,
         )
@@ -320,6 +324,7 @@ fn test_tab_workflow() {
         .execute_typed(
             NewTabParams {
                 url: "data:text/html,<html><body><h1>Tab 3</h1></body></html>".to_string(),
+                allow_unsafe: true,
             },
             &mut context,
         )

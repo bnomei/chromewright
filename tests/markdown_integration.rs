@@ -6,7 +6,9 @@ fn launch_or_skip() -> Option<BrowserSession> {
     match BrowserSession::launch(LaunchOptions::new().headless(true)) {
         Ok(session) => Some(session),
         Err(err)
-            if err.to_string().contains("didn't give us a WebSocket URL before we timed out")
+            if err
+                .to_string()
+                .contains("didn't give us a WebSocket URL before we timed out")
                 || err
                     .to_string()
                     .contains("Could not auto detect a chrome executable")
@@ -14,7 +16,10 @@ fn launch_or_skip() -> Option<BrowserSession> {
                     .to_string()
                     .contains("Running as root without --no-sandbox is not supported") =>
         {
-            eprintln!("Skipping browser integration test due to environment: {}", err);
+            eprintln!(
+                "Skipping browser integration test due to environment: {}",
+                err
+            );
             None
         }
         Err(err) => panic!("Unexpected launch failure: {}", err),

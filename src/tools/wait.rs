@@ -1,7 +1,8 @@
 use crate::dom::NodeRef;
 use crate::error::{BrowserError, Result};
 use crate::tools::{
-    TargetResolution, Tool, ToolContext, ToolResult, build_document_envelope, resolve_target,
+    DocumentEnvelopeOptions, TargetResolution, Tool, ToolContext, ToolResult,
+    build_document_envelope, resolve_target,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -114,10 +115,16 @@ impl Tool for WaitTool {
 
         match params.condition {
             WaitCondition::NavigationSettled => {
-                context.session.wait_for_document_ready_with_timeout(timeout)?;
-                context.refresh_dom()?;
+                context
+                    .session
+                    .wait_for_document_ready_with_timeout(timeout)?;
+                context.invalidate_dom();
 
-                let mut payload = serde_json::to_value(build_document_envelope(context, None, false)?)?;
+                let mut payload = serde_json::to_value(build_document_envelope(
+                    context,
+                    None,
+                    DocumentEnvelopeOptions::minimal(),
+                )?)?;
                 if let serde_json::Value::Object(ref mut map) = payload {
                     map.insert("action".to_string(), serde_json::json!("wait"));
                     map.insert(
@@ -134,15 +141,18 @@ impl Tool for WaitTool {
             WaitCondition::RevisionChanged => {
                 let baseline = match params.since_revision {
                     Some(revision) => revision,
-                    None => context.get_dom()?.document.revision.clone(),
+                    None => context.session.document_metadata()?.revision,
                 };
 
                 loop {
-                    context.refresh_dom()?;
-                    let current_revision = context.get_dom()?.document.revision.clone();
+                    let current_revision = context.session.document_metadata()?.revision;
                     if current_revision != baseline {
-                        let mut payload =
-                            serde_json::to_value(build_document_envelope(context, None, false)?)?;
+                        context.invalidate_dom();
+                        let mut payload = serde_json::to_value(build_document_envelope(
+                            context,
+                            None,
+                            DocumentEnvelopeOptions::minimal(),
+                        )?)?;
                         if let serde_json::Value::Object(ref mut map) = payload {
                             map.insert("action".to_string(), serde_json::json!("wait"));
                             map.insert(
@@ -187,16 +197,25 @@ impl Tool for WaitTool {
                     }
                 };
 
-                validate_wait_condition(&condition, params.text.as_deref(), params.value.as_deref())?;
+                validate_wait_condition(
+                    &condition,
+                    params.text.as_deref(),
+                    params.value.as_deref(),
+                )?;
 
                 loop {
                     let state = evaluate_node_state(context, &target.selector)?;
-                    if condition_matches(&condition, &state, params.text.as_deref(), params.value.as_deref()) {
-                        context.refresh_dom()?;
+                    if condition_matches(
+                        &condition,
+                        &state,
+                        params.text.as_deref(),
+                        params.value.as_deref(),
+                    ) {
+                        context.invalidate_dom();
                         let mut payload = serde_json::to_value(build_document_envelope(
                             context,
                             Some(&target),
-                            false,
+                            DocumentEnvelopeOptions::minimal(),
                         )?)?;
                         if let serde_json::Value::Object(ref mut map) = payload {
                             map.insert("action".to_string(), serde_json::json!("wait"));
@@ -262,14 +281,12 @@ fn evaluate_node_state(context: &ToolContext, selector: &str) -> Result<serde_js
         "selector": selector,
     });
     let js = WAIT_NODE_STATE_JS.replace("__WAIT_CONFIG__", &config.to_string());
-    let result = context
-        .session
-        .tab()?
-        .evaluate(&js, false)
-        .map_err(|e| BrowserError::ToolExecutionFailed {
+    let result = context.session.tab()?.evaluate(&js, false).map_err(|e| {
+        BrowserError::ToolExecutionFailed {
             tool: "wait".to_string(),
             reason: e.to_string(),
-        })?;
+        }
+    })?;
 
     if let Some(serde_json::Value::String(json_str)) = result.value {
         serde_json::from_str(&json_str).map_err(BrowserError::from)

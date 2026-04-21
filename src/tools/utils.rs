@@ -1,3 +1,5 @@
+use crate::error::{BrowserError, Result};
+
 /// Normalize an incomplete URL by adding missing protocol and handling common patterns
 pub fn normalize_url(url: &str) -> String {
     let trimmed = url.trim();
@@ -33,6 +35,38 @@ pub fn normalize_url(url: &str) -> String {
     // Single word - assume it's a domain name, add www. prefix and https://
     // This handles cases like "google" -> "https://www.google.com"
     format!("https://www.{}.com", trimmed)
+}
+
+fn has_absolute_scheme(url: &str) -> bool {
+    let Some((scheme, _rest)) = url.split_once(':') else {
+        return false;
+    };
+
+    !scheme.is_empty()
+        && scheme
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '+' | '-' | '.'))
+}
+
+/// Validate a high-level navigation target. Unsafe absolute schemes require explicit opt-in.
+pub fn validate_navigation_url(url: &str, allow_unsafe: bool) -> Result<String> {
+    let normalized = normalize_url(url);
+    if allow_unsafe || !has_absolute_scheme(&normalized) {
+        return Ok(normalized);
+    }
+
+    let scheme = normalized
+        .split_once(':')
+        .map(|(scheme, _)| scheme.to_ascii_lowercase())
+        .unwrap_or_default();
+    if matches!(scheme.as_str(), "http" | "https") {
+        return Ok(normalized);
+    }
+
+    Err(BrowserError::InvalidArgument(format!(
+        "Unsafe navigation target '{}' is blocked by default; pass allow_unsafe=true to opt in.",
+        normalized
+    )))
 }
 
 #[cfg(test)]
@@ -103,5 +137,19 @@ mod tests {
             normalize_url("  https://example.com  "),
             "https://example.com"
         );
+    }
+
+    #[test]
+    fn test_validate_navigation_url_blocks_unsafe_scheme_by_default() {
+        let err = validate_navigation_url("data:text/html,<h1>Test</h1>", false)
+            .expect_err("data: should be blocked without explicit opt-in");
+        assert!(matches!(err, BrowserError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn test_validate_navigation_url_allows_unsafe_scheme_with_opt_in() {
+        let normalized = validate_navigation_url("data:text/html,<h1>Test</h1>", true)
+            .expect("explicit opt-in should allow data: navigation");
+        assert_eq!(normalized, "data:text/html,<h1>Test</h1>");
     }
 }

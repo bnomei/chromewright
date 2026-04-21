@@ -1,6 +1,8 @@
 use crate::error::Result;
-use crate::tools::utils::normalize_url;
-use crate::tools::{Tool, ToolContext, ToolResult, build_document_envelope};
+use crate::tools::utils::validate_navigation_url;
+use crate::tools::{
+    DocumentEnvelopeOptions, Tool, ToolContext, ToolResult, build_document_envelope,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -13,6 +15,10 @@ pub struct NavigateParams {
     /// Wait for navigation to complete (default: true)
     #[serde(default = "default_wait")]
     pub wait_for_load: bool,
+
+    /// Allow non-web/unsafe absolute schemes such as data: or file:
+    #[serde(default)]
+    pub allow_unsafe: bool,
 }
 
 fn default_wait() -> bool {
@@ -36,7 +42,7 @@ impl Tool for NavigateTool {
         context: &mut ToolContext,
     ) -> Result<ToolResult> {
         // Normalize the URL
-        let normalized_url = normalize_url(&params.url);
+        let normalized_url = validate_navigation_url(&params.url, params.allow_unsafe)?;
 
         // Navigate to normalized URL
         context.session.navigate(&normalized_url)?;
@@ -46,8 +52,12 @@ impl Tool for NavigateTool {
             context.session.wait_for_navigation()?;
         }
 
-        context.refresh_dom()?;
-        let mut payload = serde_json::to_value(build_document_envelope(context, None, true)?)?;
+        context.invalidate_dom();
+        let mut payload = serde_json::to_value(build_document_envelope(
+            context,
+            None,
+            DocumentEnvelopeOptions::minimal(),
+        )?)?;
         if let serde_json::Value::Object(ref mut map) = payload {
             map.insert("action".to_string(), serde_json::json!("navigate"));
             map.insert("url".to_string(), serde_json::json!(normalized_url));

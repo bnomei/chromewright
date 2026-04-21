@@ -49,8 +49,8 @@ pub use select::SelectParams;
 pub use snapshot::SnapshotParams;
 pub use switch_tab::SwitchTabParams;
 pub use tab_list::TabListParams;
-pub use wait::WaitParams;
 pub use wait::WaitCondition;
+pub use wait::WaitParams;
 
 use crate::browser::BrowserSession;
 use crate::dom::{DocumentMetadata, DomTree, NodeRef, SnapshotNode};
@@ -116,7 +116,30 @@ pub struct DocumentEnvelope {
     pub snapshot: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub nodes: Vec<SnapshotNode>,
-    pub interactive_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interactive_count: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct DocumentEnvelopeOptions {
+    pub include_snapshot: bool,
+    pub include_nodes: bool,
+}
+
+impl DocumentEnvelopeOptions {
+    pub const fn minimal() -> Self {
+        Self {
+            include_snapshot: false,
+            include_nodes: false,
+        }
+    }
+
+    pub const fn full() -> Self {
+        Self {
+            include_snapshot: true,
+            include_nodes: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
@@ -339,15 +362,32 @@ impl ToolResult {
 pub(crate) fn build_document_envelope(
     context: &mut ToolContext,
     target: Option<&ResolvedTarget>,
-    include_snapshot: bool,
+    options: DocumentEnvelopeOptions,
 ) -> Result<DocumentEnvelope> {
-    let dom = context.get_dom()?;
+    let target = target.map(|resolved| resolved.to_target_envelope());
+
+    if options.include_snapshot || options.include_nodes {
+        let dom = context.get_dom()?;
+        return Ok(DocumentEnvelope {
+            document: dom.document.clone(),
+            target,
+            snapshot: options
+                .include_snapshot
+                .then(|| render_aria_tree(&dom.root, RenderMode::Ai, None)),
+            nodes: options
+                .include_nodes
+                .then(|| dom.snapshot_nodes())
+                .unwrap_or_default(),
+            interactive_count: options.include_nodes.then(|| dom.count_interactive()),
+        });
+    }
+
     Ok(DocumentEnvelope {
-        document: dom.document.clone(),
-        target: target.map(|resolved| resolved.to_target_envelope()),
-        snapshot: include_snapshot.then(|| render_aria_tree(&dom.root, RenderMode::Ai, None)),
-        nodes: dom.snapshot_nodes(),
-        interactive_count: dom.count_interactive(),
+        document: context.session.document_metadata()?,
+        target,
+        snapshot: None,
+        nodes: Vec::new(),
+        interactive_count: None,
     })
 }
 

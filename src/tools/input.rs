@@ -1,6 +1,7 @@
 use crate::error::{BrowserError, Result};
 use crate::tools::{
-    TargetResolution, Tool, ToolContext, ToolResult, build_document_envelope, resolve_target,
+    DocumentEnvelopeOptions, TargetResolution, Tool, ToolContext, ToolResult,
+    build_document_envelope, resolve_target,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -61,11 +62,52 @@ impl Tool for InputTool {
         let element = context.session.find_element(&tab, &target.selector)?;
 
         if clear {
-            element.click().ok(); // Focus
-            // Clear with Ctrl+A and Delete
-            tab.press_key("End").ok();
-            for _ in 0..text.len() + 100 {
-                tab.press_key("Backspace").ok();
+            let clear_js = format!(
+                r#"(() => {{
+                    const element = document.querySelector({});
+                    if (!element) {{
+                        return {{ success: false, error: "Element not found" }};
+                    }}
+
+                    if ('value' in element) {{
+                        element.value = '';
+                        element.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                        element.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                        return {{ success: true }};
+                    }}
+
+                    if (element.isContentEditable) {{
+                        element.textContent = '';
+                        element.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                        return {{ success: true }};
+                    }}
+
+                    return {{ success: false, error: "Element does not support direct clearing" }};
+                }})()"#,
+                serde_json::to_string(&target.selector)
+                    .expect("serializing CSS selector never fails")
+            );
+
+            let clear_result =
+                tab.evaluate(&clear_js, false)
+                    .map_err(|e| BrowserError::ToolExecutionFailed {
+                        tool: "input".to_string(),
+                        reason: e.to_string(),
+                    })?;
+            let clear_value = clear_result.value.unwrap_or(serde_json::Value::Null);
+            let clear_ok = clear_value
+                .get("success")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false);
+            if !clear_ok {
+                return Err(BrowserError::ToolExecutionFailed {
+                    tool: "input".to_string(),
+                    reason: clear_value
+                        .get("error")
+                        .and_then(|value| value.as_str())
+                        .map(str::to_string)
+                        .unwrap_or_else(|| "Failed to clear element".to_string()),
+                });
             }
         }
 
@@ -76,9 +118,12 @@ impl Tool for InputTool {
                 reason: e.to_string(),
             })?;
 
-        context.refresh_dom()?;
-        let mut result_json =
-            serde_json::to_value(build_document_envelope(context, Some(&target), true)?)?;
+        context.invalidate_dom();
+        let mut result_json = serde_json::to_value(build_document_envelope(
+            context,
+            Some(&target),
+            DocumentEnvelopeOptions::minimal(),
+        )?)?;
         if let serde_json::Value::Object(ref mut map) = result_json {
             map.insert("action".to_string(), serde_json::json!("input"));
             map.insert("text".to_string(), serde_json::json!(text));

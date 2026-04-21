@@ -13,7 +13,10 @@ use rmcp::{
     tool, tool_router,
 };
 
-fn with_metadata(result: CallToolResult, metadata: std::collections::HashMap<String, serde_json::Value>) -> CallToolResult {
+fn with_metadata(
+    result: CallToolResult,
+    metadata: std::collections::HashMap<String, serde_json::Value>,
+) -> CallToolResult {
     if metadata.is_empty() {
         return result;
     }
@@ -72,8 +75,7 @@ macro_rules! register_mcp_tools {
                     &self,
                     params: Parameters<<$tool_type as Tool>::Params>,
                 ) -> Result<CallToolResult, McpError> {
-                    let session = self.session();
-                    let mut context = ToolContext::new(&*session);
+                    let mut context = ToolContext::new(self.session());
                     let tool = <$tool_type>::default();
                     let result = tool.execute_typed(params.0, &mut context)
                         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -138,7 +140,10 @@ mod tests {
             }))
         );
         assert_eq!(result.is_error, Some(false));
-        assert_eq!(result.meta.as_ref().unwrap().0.get("duration_ms"), Some(&json!(12)));
+        assert_eq!(
+            result.meta.as_ref().unwrap().0.get("duration_ms"),
+            Some(&json!(12))
+        );
 
         let text = result
             .content
@@ -178,8 +183,8 @@ mod tests {
 
     #[test]
     fn test_convert_result_without_data_keeps_text_success() {
-        let result =
-            convert_result(InternalToolResult::success(None)).expect("empty success should convert");
+        let result = convert_result(InternalToolResult::success(None))
+            .expect("empty success should convert");
 
         assert_eq!(result.structured_content, None);
         assert_eq!(result.is_error, Some(false));

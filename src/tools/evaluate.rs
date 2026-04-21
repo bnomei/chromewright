@@ -12,6 +12,10 @@ pub struct EvaluateParams {
     /// Wait for promise resolution (default: false)
     #[serde(default)]
     pub await_promise: bool,
+
+    /// Explicit acknowledgement that this operator tool executes arbitrary JavaScript.
+    #[serde(default)]
+    pub confirm_unsafe: bool,
 }
 
 #[derive(Default)]
@@ -29,6 +33,12 @@ impl Tool for EvaluateTool {
         params: EvaluateParams,
         context: &mut ToolContext,
     ) -> Result<ToolResult> {
+        if !params.confirm_unsafe {
+            return Err(BrowserError::InvalidArgument(
+                "evaluate requires confirm_unsafe=true".to_string(),
+            ));
+        }
+
         let result = context
             .session
             .tab()?

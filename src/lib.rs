@@ -93,6 +93,13 @@
 //! registry.register_operator_tools();
 //! ```
 //!
+//! High-level action tools now return metadata-first document envelopes by default. Use the
+//! `snapshot` tool when you need the full YAML snapshot plus actionable-node list.
+//!
+//! Once operator tools are registered, `evaluate` and `screenshot` still require
+//! `confirm_unsafe = true` per call. High-level `navigate` and `new_tab` also reject unsafe
+//! schemes such as `data:` and `file:` unless the caller passes `allow_unsafe = true`.
+//!
 //! ### Document Snapshots For AI Agents
 //!
 //! The library exposes actionable elements as revision-scoped node references rather than relying
@@ -129,7 +136,9 @@ pub mod tools;
 pub mod mcp;
 
 pub use browser::{BrowserSession, ConnectionOptions, LaunchOptions};
-pub use dom::{BoundingBox, DocumentMetadata, DomTree, ElementNode, FrameMetadata, NodeRef, SnapshotNode};
+pub use dom::{
+    BoundingBox, DocumentMetadata, DomTree, ElementNode, FrameMetadata, NodeRef, SnapshotNode,
+};
 pub use error::{BrowserError, Result};
 pub use tools::{Tool, ToolContext, ToolRegistry, ToolResult};
 

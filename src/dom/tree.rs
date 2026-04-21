@@ -96,6 +96,34 @@ impl Default for DomTree {
     }
 }
 
+impl DocumentMetadata {
+    /// Read lightweight document metadata from the current tab without rebuilding the full DOM tree.
+    pub fn from_tab(tab: &Arc<Tab>) -> Result<Self> {
+        let result = tab
+            .evaluate(include_str!("document_metadata.js"), false)
+            .map_err(|e| {
+                BrowserError::DomParseFailed(format!(
+                    "Failed to execute document metadata script: {}",
+                    e
+                ))
+            })?;
+
+        let json_value = result.value.ok_or_else(|| {
+            BrowserError::DomParseFailed(
+                "No value returned from document metadata extraction".to_string(),
+            )
+        })?;
+
+        let json_str: String = serde_json::from_value(json_value).map_err(|e| {
+            BrowserError::DomParseFailed(format!("Failed to get metadata JSON string: {}", e))
+        })?;
+
+        serde_json::from_str(&json_str).map_err(|e| {
+            BrowserError::DomParseFailed(format!("Failed to parse document metadata JSON: {}", e))
+        })
+    }
+}
+
 /// Snapshot extraction response from JavaScript
 #[derive(Debug, serde::Deserialize)]
 struct LegacySnapshotResponse {

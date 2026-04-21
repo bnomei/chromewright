@@ -8,7 +8,7 @@ use rmcp::{
     model::{ServerCapabilities, ServerInfo},
     tool_handler,
 };
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 /// MCP Server wrapper for BrowserSession
 ///
@@ -16,14 +16,14 @@ use std::sync::{Arc, Mutex};
 /// for MCP tool execution.
 #[derive(Clone)]
 pub struct BrowserServer {
-    session: Arc<Mutex<BrowserSession>>,
+    session: Arc<BrowserSession>,
     tool_router: ToolRouter<Self>,
 }
 
 impl BrowserServer {
     fn from_session(session: BrowserSession) -> Self {
         Self {
-            session: Arc::new(Mutex::new(session)),
+            session: Arc::new(session),
             tool_router: Self::tool_router(),
         }
     }
@@ -52,9 +52,9 @@ impl BrowserServer {
         Ok(Self::from_session(session))
     }
 
-    /// Get a reference to the browser session (blocking lock)
-    pub(crate) fn session(&self) -> std::sync::MutexGuard<'_, BrowserSession> {
-        self.session.lock().expect("Failed to lock browser session")
+    /// Get a reference to the shared browser session.
+    pub(crate) fn session(&self) -> &BrowserSession {
+        self.session.as_ref()
     }
 }
 
