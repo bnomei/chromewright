@@ -28,7 +28,10 @@ pub fn browser_test_guard() -> MutexGuard<'static, ()> {
 pub fn launch_or_skip() -> Option<BrowserSession> {
     for attempt in 1..=3 {
         match BrowserSession::launch(LaunchOptions::new().headless(true)) {
-            Ok(session) => return Some(session),
+            Ok(mut session) => {
+                session.tool_registry_mut().register_operator_tools();
+                return Some(session);
+            }
             Err(err) if launch_error_is_environmental(&err.to_string()) => {
                 if attempt == 3 {
                     eprintln!(
@@ -91,7 +94,7 @@ pub fn wait_for_url_contains(session: &BrowserSession, needle: &str) -> Result<(
     wait_until(
         &format!("active tab URL to contain {needle:?}"),
         DEFAULT_TIMEOUT,
-        || Ok(session.tab()?.get_url().contains(needle)),
+        || Ok(session.document_metadata()?.url.contains(needle)),
     )
 }
 
@@ -99,7 +102,7 @@ pub fn wait_for_tab_count(session: &BrowserSession, expected: usize) -> Result<(
     wait_until(
         &format!("tab count to equal {}", expected),
         DEFAULT_TIMEOUT,
-        || Ok(session.get_tabs()?.len() == expected),
+        || Ok(session.list_tabs()?.len() == expected),
     )
 }
 
@@ -107,8 +110,33 @@ pub fn wait_for_tab_count_at_least(session: &BrowserSession, minimum: usize) -> 
     wait_until(
         &format!("tab count to reach at least {}", minimum),
         DEFAULT_TIMEOUT,
-        || Ok(session.get_tabs()?.len() >= minimum),
+        || Ok(session.list_tabs()?.len() >= minimum),
     )
+}
+
+pub fn evaluate(session: &BrowserSession, js: &str) -> Result<Value> {
+    let result = session.execute_tool(
+        "evaluate",
+        serde_json::json!({
+            "code": js,
+            "await_promise": false,
+            "confirm_unsafe": true,
+        }),
+    )?;
+
+    if !result.success {
+        return Err(BrowserError::ToolExecutionFailed {
+            tool: "evaluate".to_string(),
+            reason: result
+                .error
+                .unwrap_or_else(|| "evaluate failed".to_string()),
+        });
+    }
+
+    Ok(result
+        .data
+        .and_then(|data| data.get("result").cloned())
+        .unwrap_or(Value::Null))
 }
 
 pub fn wait_for_eval_truthy(
@@ -118,18 +146,14 @@ pub fn wait_for_eval_truthy(
     timeout: Duration,
 ) -> Result<()> {
     wait_until(description, timeout, || {
-        let value = session
-            .tab()?
-            .evaluate(js, false)
-            .map_err(|err| {
-                BrowserError::EvaluationFailed(format!(
-                    "Failed to evaluate wait probe for {}: {}",
-                    description, err
-                ))
-            })?
-            .value;
+        let value = evaluate(session, js).map_err(|err| {
+            BrowserError::EvaluationFailed(format!(
+                "Failed to evaluate wait probe for {}: {}",
+                description, err
+            ))
+        })?;
 
-        Ok(json_value_is_truthy(value.as_ref()))
+        Ok(json_value_is_truthy(Some(&value)))
     })
 }
 

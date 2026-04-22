@@ -104,6 +104,10 @@ impl Tool for WaitTool {
         "wait"
     }
 
+    fn description(&self) -> &str {
+        "Pause for load, revision change, or node state. Use after actions or before rereading."
+    }
+
     fn execute_typed(&self, params: WaitParams, context: &mut ToolContext) -> Result<ToolResult> {
         execute_wait(params, context)
     }

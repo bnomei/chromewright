@@ -39,6 +39,10 @@ impl Tool for TabListTool {
         "tab_list"
     }
 
+    fn description(&self) -> &str {
+        "List tabs so you can choose a switch_tab target."
+    }
+
     fn execute_typed(
         &self,
         _params: TabListParams,
@@ -104,7 +108,6 @@ mod tests {
     use crate::dom::{DocumentMetadata, DomTree};
     use crate::error::BrowserError;
     use crate::tools::{Tool, ToolContext};
-    use std::any::Any;
     use std::time::Duration;
 
     #[test]
@@ -177,10 +180,6 @@ mod tests {
     struct ActiveTabFailureBackend;
 
     impl SessionBackend for ActiveTabFailureBackend {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn navigate(&self, _url: &str) -> crate::error::Result<()> {
             unreachable!("navigate is not used in this test")
         }

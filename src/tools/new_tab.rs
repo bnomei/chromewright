@@ -38,6 +38,10 @@ impl Tool for NewTabTool {
         "new_tab"
     }
 
+    fn description(&self) -> &str {
+        "Open a URL in a new tab. Next: tab_list, switch_tab, or snapshot."
+    }
+
     fn execute_typed(&self, params: NewTabParams, context: &mut ToolContext) -> Result<ToolResult> {
         let normalized_url = validate_navigation_url(&params.url, params.allow_unsafe)?;
         context.session.open_tab_entry(&normalized_url)?;

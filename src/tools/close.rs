@@ -25,6 +25,10 @@ impl Tool for CloseTool {
         "close"
     }
 
+    fn description(&self) -> &str {
+        "Close all open tabs in the current session."
+    }
+
     fn execute_typed(&self, _params: CloseParams, context: &mut ToolContext) -> Result<ToolResult> {
         let closed_tabs = context.session.tab_overview()?.len();
 

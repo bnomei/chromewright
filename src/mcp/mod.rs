@@ -5,14 +5,12 @@
 pub mod handler;
 pub use handler::BrowserServer;
 
-use crate::tools::{
-    self, Tool, ToolContext, ToolResult as InternalToolResult, normalize_tool_outcome,
-};
+use crate::tools::ToolResult as InternalToolResult;
+#[cfg(test)]
+use crate::tools::{ToolContext, normalize_tool_outcome};
 use rmcp::{
     ErrorData as McpError,
-    handler::server::wrapper::Parameters,
     model::{CallToolResult, Content, Meta},
-    tool, tool_router,
 };
 
 fn with_metadata(
@@ -27,7 +25,7 @@ fn with_metadata(
 }
 
 /// Convert internal ToolResult to MCP CallToolResult
-fn convert_result(result: InternalToolResult) -> Result<CallToolResult, McpError> {
+pub(crate) fn convert_result(result: InternalToolResult) -> Result<CallToolResult, McpError> {
     let InternalToolResult {
         success,
         data,
@@ -66,67 +64,17 @@ fn convert_result(result: InternalToolResult) -> Result<CallToolResult, McpError
     }
 }
 
+#[cfg(test)]
 fn convert_tool_outcome(
     outcome: crate::error::Result<InternalToolResult>,
     context: &ToolContext<'_>,
 ) -> Result<CallToolResult, McpError> {
-    let result = normalize_tool_outcome(outcome, context)
-        .map_err(|error| McpError::internal_error(error.to_string(), None))?;
+    let result = normalize_tool_outcome(outcome, context).map_err(mcp_internal_error)?;
     convert_result(result)
 }
 
-/// Macro to register MCP tools by automatically generating wrapper functions
-macro_rules! register_mcp_tools {
-    ($($mcp_name:ident => $tool_type:ty, $description:expr);* $(;)?) => {
-        #[tool_router]
-        impl BrowserServer {
-            $(
-                #[tool(
-                    description = $description,
-                    output_schema = rmcp::handler::server::tool::schema_for_type::<<$tool_type as Tool>::Output>()
-                )]
-                fn $mcp_name(
-                    &self,
-                    params: Parameters<<$tool_type as Tool>::Params>,
-                ) -> Result<CallToolResult, McpError> {
-                    let mut context = ToolContext::new(self.session());
-                    let tool = <$tool_type>::default();
-                    convert_tool_outcome(tool.execute_typed(params.0, &mut context), &context)
-                }
-            )*
-        }
-    };
-}
-
-// Register all MCP tools using the macro
-register_mcp_tools! {
-    // ---- Navigation and Browser Flow ----
-    browser_navigate => tools::navigate::NavigateTool, "Open a URL. Next: wait or snapshot.";
-    browser_go_back => tools::go_back::GoBackTool, "Go back in history. Next: wait or snapshot.";
-    browser_go_forward => tools::go_forward::GoForwardTool, "Go forward in history. Next: wait or snapshot.";
-    browser_close => tools::close::CloseTool, "Close all open tabs in the current session.";
-
-    // ---- Page Content and Extraction ----
-    browser_get_markdown => tools::markdown::GetMarkdownTool, "Read page content as markdown. Extraction only; use snapshot for actions.";
-    browser_get_text => tools::extract::ExtractContentTool, "Read text or HTML from the page or a selector. Use when markdown is too lossy.";
-    browser_read_links => tools::read_links::ReadLinksTool, "List page links. Next: click or navigate.";
-    browser_snapshot => tools::snapshot::SnapshotTool, "Capture page state and node cursors. Next: inspect_node, click, input, select, hover, wait.";
-    browser_inspect_node => tools::inspect_node::InspectNodeTool, "Inspect one node after snapshot. Prefer cursor; selector/index/node_ref still work.";
-
-    // ---- Interaction ----
-    browser_click => tools::click::ClickTool, "Activate an element. Usually after snapshot; next wait or snapshot.";
-    browser_hover => tools::hover::HoverTool, "Reveal hover state. Usually after snapshot; next snapshot or click.";
-    browser_select => tools::select::SelectTool, "Choose a dropdown value. Usually after snapshot; next wait or snapshot.";
-    browser_input_fill => tools::input::InputTool, "Type into an input. Usually after snapshot; next press_key, click, or wait.";
-    browser_press_key => tools::press_key::PressKeyTool, "Press a keyboard key. Returns focus hints; snapshot only for broader rereads.";
-    browser_scroll => tools::scroll::ScrollTool, "Scroll the page. Returns viewport hints; snapshot only for broader rereads.";
-    browser_wait => tools::wait::WaitTool, "Pause for load, revision change, or node state. Use after actions or before rereading.";
-
-    // ---- Tab Management ----
-    browser_new_tab => tools::new_tab::NewTabTool, "Open a URL in a new tab. Next: tab_list, switch_tab, or snapshot.";
-    browser_tab_list => tools::tab_list::TabListTool, "List tabs so you can choose a switch_tab target.";
-    browser_switch_tab => tools::switch_tab::SwitchTabTool, "Activate a tab by index. Usually after tab_list; next snapshot.";
-    browser_close_tab => tools::close_tab::CloseTabTool, "Close the active tab. Next: tab_list or switch_tab if work continues.";
+pub(crate) fn mcp_internal_error(error: impl std::fmt::Display) -> McpError {
+    McpError::internal_error(error.to_string(), None)
 }
 
 #[cfg(test)]
@@ -186,8 +134,7 @@ mod tests {
     #[test]
     fn test_convert_result_uses_structured_tool_error() {
         let result = convert_result(
-            InternalToolResult::failure("Element not found")
-                .with_metadata("tool", json!("browser_click")),
+            InternalToolResult::failure("Element not found").with_metadata("tool", json!("click")),
         )
         .expect("tool failures should stay in CallToolResult");
 
@@ -200,7 +147,7 @@ mod tests {
         assert_eq!(result.is_error, Some(true));
         assert_eq!(
             result.meta.as_ref().unwrap().0.get("tool"),
-            Some(&json!("browser_click"))
+            Some(&json!("click"))
         );
     }
 
@@ -273,7 +220,10 @@ mod tests {
 
     #[test]
     fn test_mcp_tools_advertise_output_schemas() {
-        let tools = BrowserServer::tool_router().list_all();
+        let tools = BrowserServer::from_session(BrowserSession::with_test_backend(
+            FakeSessionBackend::new(),
+        ))
+        .list_mcp_tools();
 
         assert!(!tools.is_empty(), "expected MCP tools to be registered");
 
@@ -303,7 +253,10 @@ mod tests {
 
     #[test]
     fn test_mcp_tool_descriptions_are_concise() {
-        let tools = BrowserServer::tool_router().list_all();
+        let tools = BrowserServer::from_session(BrowserSession::with_test_backend(
+            FakeSessionBackend::new(),
+        ))
+        .list_mcp_tools();
 
         let problems: Vec<String> = tools
             .iter()
@@ -332,32 +285,34 @@ mod tests {
 
     #[test]
     fn test_mcp_tool_descriptions_keep_orchestration_hints() {
-        let descriptions: HashMap<String, String> = BrowserServer::tool_router()
-            .list_all()
-            .into_iter()
-            .map(|tool| {
-                (
-                    tool.name.to_string(),
-                    tool.description.as_deref().unwrap_or("").to_string(),
-                )
-            })
-            .collect();
+        let descriptions: HashMap<String, String> = BrowserServer::from_session(
+            BrowserSession::with_test_backend(FakeSessionBackend::new()),
+        )
+        .list_mcp_tools()
+        .into_iter()
+        .map(|tool| {
+            (
+                tool.name.to_string(),
+                tool.description.as_deref().unwrap_or("").to_string(),
+            )
+        })
+        .collect();
 
         let expectations = [
-            ("browser_get_markdown", ["snapshot"].as_slice()),
-            ("browser_get_text", ["markdown"].as_slice()),
-            ("browser_read_links", ["click", "navigate"].as_slice()),
+            ("get_markdown", ["snapshot"].as_slice()),
+            ("extract", ["markdown"].as_slice()),
+            ("read_links", ["click", "navigate"].as_slice()),
             (
-                "browser_snapshot",
+                "snapshot",
                 ["cursors", "inspect_node", "click", "wait"].as_slice(),
             ),
-            ("browser_inspect_node", ["cursor", "snapshot"].as_slice()),
-            ("browser_click", ["snapshot", "wait"].as_slice()),
-            ("browser_input_fill", ["snapshot", "press_key"].as_slice()),
-            ("browser_select", ["snapshot", "wait"].as_slice()),
-            ("browser_new_tab", ["tab_list", "switch_tab"].as_slice()),
-            ("browser_tab_list", ["switch_tab"].as_slice()),
-            ("browser_switch_tab", ["tab_list", "snapshot"].as_slice()),
+            ("inspect_node", ["cursor", "snapshot"].as_slice()),
+            ("click", ["snapshot", "wait"].as_slice()),
+            ("input", ["snapshot", "press_key"].as_slice()),
+            ("select", ["snapshot", "wait"].as_slice()),
+            ("new_tab", ["tab_list", "switch_tab"].as_slice()),
+            ("tab_list", ["switch_tab"].as_slice()),
+            ("switch_tab", ["tab_list", "snapshot"].as_slice()),
         ];
 
         for (tool_name, keywords) in expectations {
@@ -376,19 +331,36 @@ mod tests {
 
     #[test]
     fn test_mcp_surface_exports_default_extraction_tools() {
-        let tool_names: Vec<String> = BrowserServer::tool_router()
-            .list_all()
+        let tool_names: Vec<String> = BrowserServer::from_session(
+            BrowserSession::with_test_backend(FakeSessionBackend::new()),
+        )
+        .list_mcp_tools()
+        .into_iter()
+        .map(|tool| tool.name.to_string())
+        .collect();
+
+        assert!(
+            tool_names.iter().any(|name| name == "extract"),
+            "extract should be exported via MCP"
+        );
+        assert!(
+            tool_names.iter().any(|name| name == "read_links"),
+            "read_links should be exported via MCP"
+        );
+    }
+
+    #[test]
+    fn test_mcp_surface_reflects_operator_tool_registration() {
+        let mut session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        session.tool_registry_mut().register_operator_tools();
+
+        let tool_names: Vec<String> = BrowserServer::from_session(session)
+            .list_mcp_tools()
             .into_iter()
             .map(|tool| tool.name.to_string())
             .collect();
 
-        assert!(
-            tool_names.iter().any(|name| name == "browser_get_text"),
-            "browser_get_text should be exported via MCP"
-        );
-        assert!(
-            tool_names.iter().any(|name| name == "browser_read_links"),
-            "browser_read_links should be exported via MCP"
-        );
+        assert!(tool_names.iter().any(|name| name == "evaluate"));
+        assert!(tool_names.iter().any(|name| name == "screenshot"));
     }
 }

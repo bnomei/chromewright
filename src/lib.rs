@@ -135,7 +135,7 @@ pub mod tools;
 #[cfg(feature = "mcp-handler")]
 pub mod mcp;
 
-pub use browser::{BrowserSession, ConnectionOptions, LaunchOptions};
+pub use browser::{BrowserSession, ClosedTabSummary, ConnectionOptions, LaunchOptions, TabInfo};
 pub use dom::{
     BoundingBox, DocumentMetadata, DomTree, ElementNode, FrameMetadata, NodeRef, SnapshotNode,
 };

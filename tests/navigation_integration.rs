@@ -29,7 +29,7 @@ fn test_go_back_tool() {
     .expect("Failed to navigate to page 2");
 
     // Verify we're on page 2
-    let current_url = session.tab().unwrap().get_url();
+    let current_url = session.document_metadata().unwrap().url;
     assert!(current_url.contains("Page 2"));
 
     // Create tool and context
@@ -58,7 +58,7 @@ fn test_go_back_tool() {
     common::wait_for_url_contains(session, "Page 1").expect("Should return to page 1");
 
     // Verify we went back to page 1
-    let new_url = session.tab().unwrap().get_url();
+    let new_url = session.document_metadata().unwrap().url;
     assert!(new_url.contains("Page 1"));
 }
 
@@ -89,7 +89,7 @@ fn test_go_forward_tool() {
     common::wait_for_url_contains(session, "Page 1").expect("Should return to page 1");
 
     // Verify we're on page 1
-    let current_url = session.tab().unwrap().get_url();
+    let current_url = session.document_metadata().unwrap().url;
     assert!(current_url.contains("Page 1"));
 
     // Create tool and context
@@ -118,7 +118,7 @@ fn test_go_forward_tool() {
     common::wait_for_url_contains(session, "Page 2").expect("Should advance to page 2");
 
     // Verify we went forward to page 2
-    let new_url = session.tab().unwrap().get_url();
+    let new_url = session.document_metadata().unwrap().url;
     assert!(new_url.contains("Page 2"));
 }
 
@@ -185,7 +185,7 @@ fn test_navigation_workflow() {
     common::wait_for_url_contains(session, "Page 1").expect("Should return to page 1");
 
     // Verify we're on page 1
-    let current_url = session.tab().unwrap().get_url();
+    let current_url = session.document_metadata().unwrap().url;
     assert!(current_url.contains("Page 1"));
 
     // Go forward to page 2
@@ -200,7 +200,7 @@ fn test_navigation_workflow() {
     common::wait_for_url_contains(session, "Page 2").expect("Should advance to page 2");
 
     // Verify we're on page 2
-    let current_url = session.tab().unwrap().get_url();
+    let current_url = session.document_metadata().unwrap().url;
     assert!(current_url.contains("Page 2"));
 }
 
@@ -220,7 +220,7 @@ fn test_close_tool() {
     .expect("Failed to navigate");
 
     // Verify browser is working
-    let tabs = session.get_tabs().expect("Failed to get tabs");
+    let tabs = session.list_tabs().expect("Failed to list tabs");
     assert!(!tabs.is_empty(), "Should have at least one tab");
 
     // Create tool and context

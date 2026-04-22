@@ -4,7 +4,7 @@ use crate::tools::{
     DocumentEnvelope, TargetEnvelope, TargetResolution, Tool, ToolContext, ToolResult,
     actionability::ActionabilityPredicate,
     browser_kernel::render_browser_kernel_script,
-    click::{
+    services::interaction::{
         ActionabilityWaitState, DEFAULT_ACTIONABILITY_TIMEOUT_MS, TargetStatus,
         build_actionability_failure, build_interaction_failure, build_interaction_handoff,
         decode_action_result, resolve_interaction_target, wait_for_actionability,
@@ -63,6 +63,10 @@ impl Tool for InputTool {
 
     fn name(&self) -> &str {
         "input"
+    }
+
+    fn description(&self) -> &str {
+        "Type into an input. Usually after snapshot; next press_key, click, or wait."
     }
 
     fn execute_typed(&self, params: InputParams, context: &mut ToolContext) -> Result<ToolResult> {

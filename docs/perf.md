@@ -37,7 +37,7 @@ This note is a static inspection of likely bottlenecks in the current codebase. 
 ## Medium Priority
 
 5. Active-tab discovery is O(number of tabs) and relies on JS evaluation on every lookup
-   - Evidence: `tab()` delegates to `get_active_tab()`, which clones the tab list and evaluates visibility and focus JS across every tab, with a second pass if needed (`src/browser/session.rs:101-169`). Many helpers call `self.tab()?` repeatedly, including navigation readiness checks (`src/browser/session.rs:205-241`) and wait condition evaluation (`src/tools/wait.rs:260-278`). `tab_list` separately scans tabs again after fetching the active tab (`src/tools/tab_list.rs:39-85`).
+   - Evidence: the backend still clones the tab list and evaluates visibility and focus JS across every tab, with a second pass if needed (`src/browser/backend.rs`). Higher-level session methods like `document_metadata()` and `list_tabs()` still depend on that active-tab probe, and `tab_list` separately scans tabs again after fetching the active tab (`src/tools/tab_list.rs`).
    - Why it matters: with many open tabs, seemingly cheap operations accumulate multiple cross-process round trips and repeated tab-list clones.
    - Fix direction: keep a cached active-tab identifier updated by `new_tab`, `switch_tab`, and activation events, and fall back to probing only when the cached handle is invalid.
 
@@ -54,7 +54,7 @@ This note is a static inspection of likely bottlenecks in the current codebase. 
 ## Security Findings
 
 8. The default MCP surface can navigate to privileged or local schemes
-   - Evidence: `normalize_url()` explicitly allows `file://`, `data:`, `about:`, `chrome://`, and `chrome-extension://` (`src/tools/utils.rs:5-15`), and `browser_navigate` is on the default MCP surface (`src/tools/mod.rs:428-455`, `src/mcp/mod.rs:87-95`).
+   - Evidence: `normalize_url()` explicitly allows `file://`, `data:`, `about:`, `chrome://`, and `chrome-extension://` (`src/tools/utils.rs:5-15`), and `navigate` is on the default MCP surface.
    - Why it matters: if an untrusted MCP client gets access, it can attempt local-file reads or privileged-browser navigation and then combine that with snapshot and extraction tools. Some pages will still be browser-protected, but the default policy is much broader than a normal web-only browser automation surface.
    - Fix direction: default-deny non-HTTP(S) schemes on the MCP surface and gate local or privileged schemes behind an explicit trusted-mode option.
 

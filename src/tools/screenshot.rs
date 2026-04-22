@@ -37,6 +37,10 @@ impl Tool for ScreenshotTool {
         "screenshot"
     }
 
+    fn description(&self) -> &str {
+        "Save a PNG to a relative path. Operator tool; requires confirm_unsafe=true."
+    }
+
     fn execute_typed(
         &self,
         params: ScreenshotParams,

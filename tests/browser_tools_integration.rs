@@ -310,13 +310,9 @@ fn test_scroll_tool_returns_compact_viewport_follow_up_state() {
     assert!(data["nodes"].is_null());
     assert!(data["interactive_count"].is_null());
 
-    let actual_scroll_y = session
-        .tab()
-        .expect("tab should exist")
-        .evaluate("window.scrollY", false)
+    let actual_scroll_y = common::evaluate(session, "window.scrollY")
         .expect("window.scrollY should be readable")
-        .value
-        .and_then(|value| value.as_i64())
+        .as_i64()
         .expect("window.scrollY should be numeric");
     assert_eq!(scroll_y, actual_scroll_y);
 }
@@ -437,22 +433,16 @@ fn test_select_tool_reports_rebound_handoff_after_replacement() {
         data["target_after"]["node_ref"]["revision"].as_str()
     );
 
-    let status = session
-        .tab()
-        .expect("tab should exist")
-        .evaluate("document.getElementById('status').textContent", false)
+    let status = common::evaluate(session, "document.getElementById('status').textContent")
         .expect("status text should be readable")
-        .value
-        .and_then(|value| value.as_str().map(str::to_string));
+        .as_str()
+        .map(str::to_string);
     assert_eq!(status.as_deref(), Some("selected:ca"));
 
-    let selected_value = session
-        .tab()
-        .expect("tab should exist")
-        .evaluate("document.getElementById('country').value", false)
+    let selected_value = common::evaluate(session, "document.getElementById('country').value")
         .expect("selected value should be readable")
-        .value
-        .and_then(|value| value.as_str().map(str::to_string));
+        .as_str()
+        .map(str::to_string);
     assert_eq!(selected_value.as_deref(), Some("ca"));
 }
 
@@ -779,13 +769,10 @@ fn test_click_tool_auto_waits_and_reports_rebound_handoff() {
     );
     assert_eq!(data["target"]["selector"].as_str(), Some("#save"));
 
-    let status = session
-        .tab()
-        .expect("tab should exist")
-        .evaluate("document.getElementById('status').textContent", false)
+    let status = common::evaluate(session, "document.getElementById('status').textContent")
         .expect("status text should be readable")
-        .value
-        .and_then(|value| value.as_str().map(str::to_string));
+        .as_str()
+        .map(str::to_string);
     assert_eq!(status.as_deref(), Some("clicked"));
 }
 
@@ -885,26 +872,19 @@ fn test_click_tool_offscreen_target_auto_scrolls_into_view() {
     );
     assert_eq!(data["target_status"].as_str(), Some("same"));
 
-    let scroll_y = session
-        .tab()
-        .expect("tab should exist")
-        .evaluate("window.scrollY", false)
+    let scroll_y = common::evaluate(session, "window.scrollY")
         .expect("window.scrollY should be readable")
-        .value
-        .and_then(|value| value.as_i64())
+        .as_i64()
         .expect("window.scrollY should be numeric");
     assert!(
         scroll_y > 0,
         "click should scroll the offscreen target into view"
     );
 
-    let status = session
-        .tab()
-        .expect("tab should exist")
-        .evaluate("document.getElementById('status').textContent", false)
+    let status = common::evaluate(session, "document.getElementById('status').textContent")
         .expect("status text should be readable")
-        .value
-        .and_then(|value| value.as_str().map(str::to_string));
+        .as_str()
+        .map(str::to_string);
     assert_eq!(status.as_deref(), Some("clicked"));
 }
 
@@ -1019,10 +999,7 @@ fn test_inspect_node_with_snapshot_cursor() {
     "#;
 
     common::navigate_html(session, html).expect("Failed to navigate");
-    session
-        .tab()
-        .expect("tab should exist")
-        .evaluate("document.getElementById('save').focus();", false)
+    common::evaluate(session, "document.getElementById('save').focus(); true")
         .expect("button should be focusable");
 
     let snapshot_tool = SnapshotTool::default();
@@ -1152,10 +1129,7 @@ fn test_inspect_node_compact_surface_covers_focus_disabled_and_viewport_visibili
     "#;
 
     common::navigate_html(session, html).expect("Failed to navigate");
-    session
-        .tab()
-        .expect("tab should exist")
-        .evaluate("document.getElementById('query').focus();", false)
+    common::evaluate(session, "document.getElementById('query').focus(); true")
         .expect("input should be focusable");
 
     let inspect_tool = InspectNodeTool::default();

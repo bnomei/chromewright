@@ -1,4 +1,4 @@
-use crate::browser::session::MarkdownCacheEntry;
+use crate::browser::MarkdownCacheEntry;
 use crate::error::{BrowserError, Result};
 use crate::tools::html_to_markdown::convert_html_to_markdown;
 use crate::tools::markdown::{GetMarkdownOutput, GetMarkdownParams};
@@ -286,15 +286,9 @@ mod tests {
     use crate::browser::BrowserSession;
     use crate::browser::backend::{ScriptEvaluation, SessionBackend, TabDescriptor};
     use crate::dom::{DocumentMetadata, DomTree};
-    use std::any::Any;
-
     struct ReadyWaitFailureBackend;
 
     impl SessionBackend for ReadyWaitFailureBackend {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn navigate(&self, _url: &str) -> Result<()> {
             unreachable!("navigate is not used in this test")
         }
@@ -364,10 +358,6 @@ mod tests {
     struct InvalidMarkdownSettleBackend;
 
     impl SessionBackend for InvalidMarkdownSettleBackend {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn navigate(&self, _url: &str) -> Result<()> {
             unreachable!("navigate is not used in this test")
         }

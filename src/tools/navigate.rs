@@ -45,6 +45,10 @@ impl Tool for NavigateTool {
         "navigate"
     }
 
+    fn description(&self) -> &str {
+        "Open a URL. Next: wait or snapshot."
+    }
+
     fn execute_typed(
         &self,
         params: NavigateParams,

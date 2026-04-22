@@ -24,9 +24,6 @@ pub struct LaunchOptions {
 
     /// Enable sandbox mode (default: true)
     pub sandbox: bool,
-
-    /// Timeout for browser launch in milliseconds (default: 30000)
-    pub launch_timeout: u64,
 }
 
 impl Default for LaunchOptions {
@@ -39,7 +36,6 @@ impl Default for LaunchOptions {
             user_data_dir: None,
             debug_port: None,
             sandbox: true,
-            launch_timeout: 30000,
         }
     }
 }
@@ -86,12 +82,6 @@ impl LaunchOptions {
         self.sandbox = sandbox;
         self
     }
-
-    /// Builder method: set launch timeout
-    pub fn launch_timeout(mut self, timeout_ms: u64) -> Self {
-        self.launch_timeout = timeout_ms;
-        self
-    }
 }
 
 /// Options for connecting to an existing browser instance
@@ -99,9 +89,6 @@ impl LaunchOptions {
 pub struct ConnectionOptions {
     /// WebSocket URL for Chrome DevTools Protocol
     pub ws_url: String,
-
-    /// Connection timeout in milliseconds (default: 10000)
-    pub timeout: u64,
 }
 
 impl ConnectionOptions {
@@ -109,14 +96,7 @@ impl ConnectionOptions {
     pub fn new<S: Into<String>>(ws_url: S) -> Self {
         Self {
             ws_url: ws_url.into(),
-            timeout: 10000,
         }
-    }
-
-    /// Builder method: set connection timeout
-    pub fn timeout(mut self, timeout_ms: u64) -> Self {
-        self.timeout = timeout_ms;
-        self
     }
 }
 
@@ -132,7 +112,6 @@ mod tests {
         assert_eq!(opts.window_height, 720);
         assert_eq!(opts.debug_port, None);
         assert!(opts.sandbox);
-        assert_eq!(opts.launch_timeout, 30000);
     }
 
     #[test]
@@ -141,22 +120,19 @@ mod tests {
             .headless(false)
             .window_size(1920, 1080)
             .debug_port(9222)
-            .sandbox(false)
-            .launch_timeout(60000);
+            .sandbox(false);
 
         assert!(!opts.headless);
         assert_eq!(opts.window_width, 1920);
         assert_eq!(opts.window_height, 1080);
         assert_eq!(opts.debug_port, Some(9222));
         assert!(!opts.sandbox);
-        assert_eq!(opts.launch_timeout, 60000);
     }
 
     #[test]
     fn test_connection_options() {
-        let opts = ConnectionOptions::new("ws://localhost:9222").timeout(5000);
+        let opts = ConnectionOptions::new("ws://localhost:9222");
 
         assert_eq!(opts.ws_url, "ws://localhost:9222");
-        assert_eq!(opts.timeout, 5000);
     }
 }

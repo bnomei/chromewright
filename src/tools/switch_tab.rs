@@ -30,6 +30,10 @@ impl Tool for SwitchTabTool {
         "switch_tab"
     }
 
+    fn description(&self) -> &str {
+        "Activate a tab by index. Usually after tab_list; next snapshot."
+    }
+
     fn execute_typed(
         &self,
         params: SwitchTabParams,

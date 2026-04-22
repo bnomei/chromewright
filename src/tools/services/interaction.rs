@@ -442,16 +442,11 @@ mod tests {
     use crate::browser::BrowserSession;
     use crate::browser::backend::{ScriptEvaluation, SessionBackend, TabDescriptor};
     use crate::{dom::DocumentMetadata, dom::DomTree};
-    use std::any::Any;
     use std::time::Duration;
 
     struct InvalidTargetExistsPayloadBackend;
 
     impl SessionBackend for InvalidTargetExistsPayloadBackend {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn navigate(&self, _url: &str) -> Result<()> {
             unreachable!("navigate is not used in this test")
         }

@@ -37,6 +37,10 @@ impl Tool for ExtractContentTool {
         "extract"
     }
 
+    fn description(&self) -> &str {
+        "Read text or HTML from the page or a selector. Use when markdown is too lossy."
+    }
+
     fn execute_typed(
         &self,
         params: ExtractParams,
@@ -162,7 +166,6 @@ mod tests {
     };
     use crate::error::BrowserError;
     use crate::{dom::DocumentMetadata, dom::DomTree};
-    use std::any::Any;
     use std::time::Duration;
 
     enum EvaluateOnlyOutcome {
@@ -175,10 +178,6 @@ mod tests {
     }
 
     impl SessionBackend for EvaluateOnlyBackend {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn navigate(&self, _url: &str) -> crate::error::Result<()> {
             unreachable!("navigate is not used in this test")
         }

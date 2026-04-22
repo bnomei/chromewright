@@ -201,6 +201,10 @@ impl Tool for InspectNodeTool {
         "inspect_node"
     }
 
+    fn description(&self) -> &str {
+        "Inspect one node after snapshot. Prefer cursor; selector/index/node_ref still work."
+    }
+
     fn execute_typed(
         &self,
         params: InspectNodeParams,

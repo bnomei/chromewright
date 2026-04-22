@@ -28,6 +28,10 @@ impl Tool for GoForwardTool {
         "go_forward"
     }
 
+    fn description(&self) -> &str {
+        "Go forward in history. Next: wait or snapshot."
+    }
+
     fn execute_typed(
         &self,
         _params: GoForwardParams,

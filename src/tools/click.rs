@@ -3,17 +3,16 @@ use crate::error::{BrowserError, Result};
 use crate::tools::{
     DocumentEnvelope, TargetEnvelope, TargetResolution, Tool, ToolContext, ToolResult,
     actionability::ActionabilityPredicate, browser_kernel::render_browser_kernel_script,
+    services::interaction::{
+        ActionabilityWaitState, DEFAULT_ACTIONABILITY_TIMEOUT_MS, TargetStatus,
+        build_actionability_failure, build_interaction_failure, build_interaction_handoff,
+        decode_action_result, resolve_interaction_target, wait_for_actionability,
+    },
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 const CLICK_JS: &str = include_str!("click.js");
-
-pub(crate) use crate::tools::services::interaction::{
-    ActionabilityWaitState, DEFAULT_ACTIONABILITY_TIMEOUT_MS, TargetStatus,
-    build_actionability_failure, build_interaction_failure, build_interaction_handoff,
-    decode_action_result, resolve_interaction_target, wait_for_actionability,
-};
 
 /// Parameters for the click tool
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -56,6 +55,10 @@ impl Tool for ClickTool {
 
     fn name(&self) -> &str {
         "click"
+    }
+
+    fn description(&self) -> &str {
+        "Activate an element. Usually after snapshot; next wait or snapshot."
     }
 
     fn execute_typed(&self, params: ClickParams, context: &mut ToolContext) -> Result<ToolResult> {

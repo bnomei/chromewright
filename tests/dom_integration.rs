@@ -153,12 +153,7 @@ fn test_press_key_enter() {
     common::navigate_html(session, html).expect("Failed to navigate");
 
     // Focus the input element first
-    session
-        .tab()
-        .unwrap()
-        .find_element("#input1")
-        .expect("Input not found")
-        .click()
+    common::evaluate(session, "document.getElementById('input1').click(); true")
         .expect("Failed to click input");
 
     common::wait_for_eval_truthy(
@@ -209,12 +204,9 @@ fn test_press_key_enter() {
     .expect("Enter key handler should update the output");
 
     // Verify that the event was triggered
-    let output = session
-        .tab()
-        .unwrap()
-        .wait_for_element("#output")
+    let output = common::evaluate(session, "document.getElementById('output').textContent")
         .ok()
-        .and_then(|elem| elem.get_inner_text().ok());
+        .and_then(|value| value.as_str().map(str::to_string));
 
     info!("Output after Enter key: {:?}", output);
 
@@ -470,20 +462,17 @@ fn test_same_origin_iframe_content_is_included_in_snapshot() {
         .document_id
         .clone()
         .expect("same-origin iframe should expose a frame document id");
-    session
-        .tab()
-        .expect("tab should exist")
-        .evaluate(
-            r#"
-                (() => {
-                    const frame = document.getElementById('frame');
-                    frame.contentWindow.location.replace('about:blank#updated');
-                    return true;
-                })()
-            "#,
-            false,
-        )
-        .expect("iframe navigation should succeed");
+    common::evaluate(
+        session,
+        r#"
+            (() => {
+                const frame = document.getElementById('frame');
+                frame.contentWindow.location.replace('about:blank#updated');
+                return true;
+            })()
+        "#,
+    )
+    .expect("iframe navigation should succeed");
 
     let navigation_start = std::time::Instant::now();
     let updated_metadata = loop {
@@ -511,38 +500,32 @@ fn test_same_origin_iframe_content_is_included_in_snapshot() {
         Some(initial_frame_document_id.as_str())
     );
 
-    session
-        .tab()
-        .expect("tab should exist")
-        .evaluate(
-            r#"
-                (() => {
-                    const frame = document.getElementById('frame');
-                    frame.contentDocument.body.innerHTML =
-                        '<h2>Updated Frame</h2><p>Updated text</p>';
-                    return true;
-                })()
-            "#,
-            false,
-        )
-        .expect("updating iframe contents should succeed");
+    common::evaluate(
+        session,
+        r#"
+            (() => {
+                const frame = document.getElementById('frame');
+                frame.contentDocument.body.innerHTML =
+                    '<h2>Updated Frame</h2><p>Updated text</p>';
+                return true;
+            })()
+        "#,
+    )
+    .expect("updating iframe contents should succeed");
 
-    session
-        .tab()
-        .expect("tab should exist")
-        .evaluate(
-            r#"
-                (() => {
-                    const extra = document.createElement('iframe');
-                    extra.id = 'extra-frame';
-                    extra.srcdoc = '<html><body><p>Extra Frame</p></body></html>';
-                    document.body.appendChild(extra);
-                    return true;
-                })()
-            "#,
-            false,
-        )
-        .expect("adding an iframe should succeed");
+    common::evaluate(
+        session,
+        r#"
+            (() => {
+                const extra = document.createElement('iframe');
+                extra.id = 'extra-frame';
+                extra.srcdoc = '<html><body><p>Extra Frame</p></body></html>';
+                document.body.appendChild(extra);
+                return true;
+            })()
+        "#,
+    )
+    .expect("adding an iframe should succeed");
 
     let membership_start = std::time::Instant::now();
     let final_metadata = loop {

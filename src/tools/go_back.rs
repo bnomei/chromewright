@@ -28,6 +28,10 @@ impl Tool for GoBackTool {
         "go_back"
     }
 
+    fn description(&self) -> &str {
+        "Go back in history. Next: wait or snapshot."
+    }
+
     fn execute_typed(
         &self,
         _params: GoBackParams,

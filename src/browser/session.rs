@@ -1,35 +1,22 @@
 use crate::browser::backend::{
-    ChromeSessionBackend, ScriptEvaluation, SessionBackend, TabDescriptor,
+    ChromeSessionBackend, ScriptEvaluation, SessionBackend,
 };
 #[cfg(test)]
 use crate::browser::backend::{
     DEBUG_PORT_END, DEBUG_PORT_START, FakeSessionBackend, build_launch_options, choose_debug_port,
 };
-use crate::browser::config::{ConnectionOptions, LaunchOptions};
+use crate::browser::{ConnectionOptions, LaunchOptions};
 use crate::dom::{DocumentMetadata, DomTree};
-use crate::error::{BrowserError, Result};
+use crate::error::Result;
 use crate::tools::{ToolContext, ToolRegistry};
-use headless_chrome::{Browser, Tab};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-/// Wrapper for Tab and Element to maintain proper lifetime relationships
-pub struct TabElement<'a> {
-    pub tab: Arc<Tab>,
-    pub element: headless_chrome::Element<'a>,
-}
+mod cache;
+mod history;
+mod tabs;
 
-#[derive(Debug, Clone)]
-pub(crate) struct MarkdownCacheEntry {
-    pub document_id: String,
-    pub revision: String,
-    pub title: String,
-    pub url: String,
-    pub byline: String,
-    pub excerpt: String,
-    pub site_name: String,
-    pub full_markdown: Arc<str>,
-}
+pub(crate) use cache::MarkdownCacheEntry;
 
 /// Browser session that manages a Chrome/Chromium instance
 pub struct BrowserSession {
@@ -42,25 +29,19 @@ pub struct BrowserSession {
     markdown_cache: Mutex<Option<Arc<MarkdownCacheEntry>>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SessionTab {
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TabInfo {
     pub id: String,
     pub title: String,
     pub url: String,
     pub active: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ClosedTabSummary {
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ClosedTabSummary {
     pub index: usize,
     pub title: String,
     pub url: String,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct HistoryNavigationMetrics {
-    pub browser_evaluations: u64,
-    pub poll_iterations: u64,
 }
 
 impl BrowserSession {
@@ -77,63 +58,6 @@ impl BrowserSession {
     /// Launch a browser with default options
     pub fn new() -> Result<Self> {
         Self::launch(LaunchOptions::default())
-    }
-
-    /// Get the active tab.
-    ///
-    /// This is a Chrome-only escape hatch used by browser-backed tests and low-level integrations.
-    pub fn tab(&self) -> Result<Arc<Tab>> {
-        self.get_active_tab()
-    }
-
-    /// Create a new tab and set it as active.
-    ///
-    /// This is a Chrome-only escape hatch used by browser-backed tests and low-level integrations.
-    pub fn new_tab(&mut self) -> Result<Arc<Tab>> {
-        self.chrome_backend()?.create_tab_handle()
-    }
-
-    /// Get all tabs.
-    ///
-    /// This is a Chrome-only escape hatch used by browser-backed tests and low-level integrations.
-    pub fn get_tabs(&self) -> Result<Vec<Arc<Tab>>> {
-        self.chrome_backend()?.tabs()
-    }
-
-    /// Get the currently active tab.
-    ///
-    /// This is a Chrome-only escape hatch used by browser-backed tests and low-level integrations.
-    pub fn get_active_tab(&self) -> Result<Arc<Tab>> {
-        self.chrome_backend()?.active_tab_handle()
-    }
-
-    /// Close the active tab
-    pub fn close_active_tab(&mut self) -> Result<()> {
-        let active_tab = self.backend.active_tab()?;
-        self.backend.close_tab(&active_tab.id, true)
-    }
-
-    /// Get the underlying Browser instance.
-    ///
-    /// This is a Chrome-only escape hatch used by browser-backed tests and low-level integrations.
-    pub fn browser(&self) -> &Browser {
-        self.chrome_backend()
-            .expect("browser() is only available for the real Chrome backend")
-            .browser()
-    }
-
-    /// Activate the provided tab and remember it as the active-tab hint.
-    ///
-    /// This is a Chrome-only escape hatch used by browser-backed tests and low-level integrations.
-    pub fn activate_tab(&self, tab: &Arc<Tab>) -> Result<()> {
-        self.chrome_backend()?.activate_real_tab(tab)
-    }
-
-    /// Open a new tab, navigate to the URL, wait for the initial load, and mark it active.
-    ///
-    /// This is a Chrome-only escape hatch used by browser-backed tests and low-level integrations.
-    pub fn open_tab(&self, url: &str) -> Result<Arc<Tab>> {
-        self.chrome_backend()?.open_real_tab(url)
     }
 
     /// Navigate to a URL using the active tab
@@ -161,44 +85,6 @@ impl BrowserSession {
         self.backend.wait_for_document_ready_with_timeout(timeout)
     }
 
-    fn wait_for_history_settle(
-        &self,
-        previous_url: &str,
-        timeout: Duration,
-    ) -> Result<HistoryNavigationMetrics> {
-        let start = Instant::now();
-        let mut observed_navigation = false;
-        let mut metrics = HistoryNavigationMetrics::default();
-
-        loop {
-            metrics.poll_iterations += 1;
-            let document = self.document_metadata()?;
-            let current_url = document.url;
-            if current_url != previous_url {
-                observed_navigation = true;
-            }
-
-            metrics.browser_evaluations += 1;
-            let elapsed = start.elapsed();
-            let grace_period = Duration::from_millis(500);
-
-            if document.ready_state == "complete"
-                && (observed_navigation || elapsed >= grace_period)
-            {
-                return Ok(metrics);
-            }
-
-            if elapsed >= timeout {
-                return Err(BrowserError::Timeout(format!(
-                    "History navigation did not settle within {} ms",
-                    timeout.as_millis()
-                )));
-            }
-
-            std::thread::sleep(Duration::from_millis(50));
-        }
-    }
-
     /// Extract the DOM tree from the active tab
     pub fn extract_dom(&self) -> Result<DomTree> {
         self.backend.extract_dom()
@@ -207,17 +93,6 @@ impl BrowserSession {
     /// Extract the DOM tree with a custom ref prefix (for iframe handling)
     pub fn extract_dom_with_prefix(&self, prefix: &str) -> Result<DomTree> {
         self.backend.extract_dom_with_prefix(prefix)
-    }
-
-    /// Find an element by CSS selector using the provided tab
-    pub fn find_element<'a>(
-        &self,
-        tab: &'a Arc<Tab>,
-        css_selector: &str,
-    ) -> Result<headless_chrome::Element<'a>> {
-        tab.find_element(css_selector).map_err(|e| {
-            BrowserError::ElementNotFound(format!("Element '{}' not found: {}", css_selector, e))
-        })
     }
 
     /// Get the tool registry
@@ -240,78 +115,31 @@ impl BrowserSession {
         self.tool_registry.execute(name, params, &mut context)
     }
 
-    pub(crate) fn markdown_cache_entry(
-        &self,
-        document: &DocumentMetadata,
-    ) -> Result<Option<Arc<MarkdownCacheEntry>>> {
-        let guard = self
-            .markdown_cache
-            .lock()
-            .map_err(|e| BrowserError::ToolExecutionFailed {
-                tool: "get_markdown".to_string(),
-                reason: format!("Failed to read markdown cache: {}", e),
-            })?;
-
-        Ok(guard.as_ref().and_then(|entry| {
-            (entry.document_id == document.document_id && entry.revision == document.revision)
-                .then_some(Arc::clone(entry))
-        }))
+    /// List browser tabs using backend-neutral descriptors.
+    pub fn list_tabs(&self) -> Result<Vec<TabInfo>> {
+        self.tab_overview()
     }
 
-    pub(crate) fn store_markdown_cache(&self, entry: Arc<MarkdownCacheEntry>) -> Result<()> {
-        *self
-            .markdown_cache
-            .lock()
-            .map_err(|e| BrowserError::ToolExecutionFailed {
-                tool: "get_markdown".to_string(),
-                reason: format!("Failed to write markdown cache: {}", e),
-            })? = Some(entry);
-        Ok(())
+    /// Activate a tab by backend-neutral tab id.
+    pub fn activate_tab(&self, tab_id: &str) -> Result<()> {
+        self.activate_tab_by_id(tab_id)
     }
 
-    pub(crate) fn tab_overview(&self) -> Result<Vec<SessionTab>> {
-        let tabs = self.backend.list_tabs()?;
-        let active_id = match self.backend.active_tab() {
-            Ok(tab) => Some(tab.id),
-            Err(BrowserError::TabOperationFailed(reason))
-                if reason.contains("No active tab found") =>
-            {
-                None
-            }
-            Err(err) => return Err(err),
-        };
+    /// Open a new tab and mark it active.
+    pub fn open_tab(&self, url: &str) -> Result<TabInfo> {
+        let tab = self.open_tab_entry(url)?;
 
-        Ok(tabs
-            .into_iter()
-            .map(|tab| SessionTab {
-                active: active_id.as_deref() == Some(tab.id.as_str()),
-                id: tab.id,
-                title: tab.title,
-                url: tab.url,
-            })
-            .collect())
-    }
-
-    pub(crate) fn activate_tab_by_id(&self, tab_id: &str) -> Result<()> {
-        self.backend.activate_tab(tab_id)
-    }
-
-    pub(crate) fn open_tab_entry(&self, url: &str) -> Result<TabDescriptor> {
-        self.backend.open_tab(url)
-    }
-
-    pub(crate) fn close_active_tab_summary(&self) -> Result<ClosedTabSummary> {
-        let tabs = self.backend.list_tabs()?;
-        let active = self.backend.active_tab()?;
-        let index = tabs.iter().position(|tab| tab.id == active.id).unwrap_or(0);
-
-        self.backend.close_tab(&active.id, true)?;
-
-        Ok(ClosedTabSummary {
-            index,
-            title: active.title,
-            url: active.url,
+        Ok(TabInfo {
+            id: tab.id,
+            title: tab.title,
+            url: tab.url,
+            active: true,
         })
+    }
+
+    /// Close the active tab and return its summary.
+    pub fn close_active_tab(&self) -> Result<ClosedTabSummary> {
+        self.close_active_tab_summary()
     }
 
     pub(crate) fn evaluate(&self, script: &str, await_promise: bool) -> Result<ScriptEvaluation> {
@@ -331,47 +159,9 @@ impl BrowserSession {
         self.go_back_with_metrics().map(|_| ())
     }
 
-    pub(crate) fn go_back_with_metrics(&self) -> Result<HistoryNavigationMetrics> {
-        let previous_url = self.document_metadata()?.url;
-        let go_back_js = r#"
-            (function() {
-                window.history.back();
-                return true;
-            })()
-        "#;
-
-        self.evaluate(go_back_js, false)
-            .map_err(|e| BrowserError::NavigationFailed(format!("Failed to go back: {}", e)))?;
-        let settle_metrics = self.wait_for_history_settle(&previous_url, Duration::from_secs(5))?;
-
-        Ok(HistoryNavigationMetrics {
-            browser_evaluations: settle_metrics.browser_evaluations + 1,
-            poll_iterations: settle_metrics.poll_iterations,
-        })
-    }
-
     /// Navigate forward in browser history
     pub fn go_forward(&self) -> Result<()> {
         self.go_forward_with_metrics().map(|_| ())
-    }
-
-    pub(crate) fn go_forward_with_metrics(&self) -> Result<HistoryNavigationMetrics> {
-        let previous_url = self.document_metadata()?.url;
-        let go_forward_js = r#"
-            (function() {
-                window.history.forward();
-                return true;
-            })()
-        "#;
-
-        self.evaluate(go_forward_js, false)
-            .map_err(|e| BrowserError::NavigationFailed(format!("Failed to go forward: {}", e)))?;
-        let settle_metrics = self.wait_for_history_settle(&previous_url, Duration::from_secs(5))?;
-
-        Ok(HistoryNavigationMetrics {
-            browser_evaluations: settle_metrics.browser_evaluations + 1,
-            poll_iterations: settle_metrics.poll_iterations,
-        })
     }
 
     /// Close all open tabs in the current session backend.
@@ -387,26 +177,9 @@ impl BrowserSession {
         })
     }
 
-    fn chrome_backend(&self) -> Result<&ChromeSessionBackend> {
-        self.backend
-            .as_any()
-            .downcast_ref::<ChromeSessionBackend>()
-            .ok_or_else(|| {
-                BrowserError::TabOperationFailed(
-                    "This operation requires the real Chrome backend".to_string(),
-                )
-            })
-    }
-
     #[cfg(test)]
     pub(crate) fn with_test_backend<B: SessionBackend + 'static>(backend: B) -> Self {
         Self::from_backend(backend).expect("test backend should construct")
-    }
-}
-
-impl Default for BrowserSession {
-    fn default() -> Self {
-        Self::new().expect("Failed to create default browser session")
     }
 }
 
@@ -439,10 +212,9 @@ mod tests {
 
     #[test]
     fn test_connection_options() {
-        let opts = ConnectionOptions::new("ws://localhost:9222").timeout(5000);
+        let opts = ConnectionOptions::new("ws://localhost:9222");
 
         assert_eq!(opts.ws_url, "ws://localhost:9222");
-        assert_eq!(opts.timeout, 5000);
     }
 
     #[test]
@@ -632,15 +404,15 @@ mod tests {
 
     #[test]
     #[ignore]
-    fn test_get_active_tab() {
+    fn test_list_tabs() {
         let Some(session) =
             launch_or_skip(BrowserSession::launch(LaunchOptions::new().headless(true)))
         else {
             return;
         };
 
-        let tab = session.get_active_tab();
-        assert!(tab.is_ok());
+        let tabs = session.list_tabs();
+        assert!(tabs.is_ok());
     }
 
     // Integration tests (require Chrome to be installed)
@@ -669,17 +441,17 @@ mod tests {
 
     #[test]
     #[ignore]
-    fn test_new_tab() {
-        let Some(mut session) =
+    fn test_open_tab() {
+        let Some(session) =
             launch_or_skip(BrowserSession::launch(LaunchOptions::new().headless(true)))
         else {
             return;
         };
 
-        let result = session.new_tab();
+        let result = session.open_tab("about:blank");
         assert!(result.is_ok());
 
-        let tabs = session.get_tabs().expect("Failed to get tabs");
+        let tabs = session.list_tabs().expect("Failed to list tabs");
         assert!(tabs.len() >= 2);
     }
 }

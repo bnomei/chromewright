@@ -73,6 +73,10 @@ impl Tool for GetMarkdownTool {
         "get_markdown"
     }
 
+    fn description(&self) -> &str {
+        "Read page content as markdown. Extraction only; use snapshot for actions."
+    }
+
     fn execute_typed(
         &self,
         params: GetMarkdownParams,
@@ -85,7 +89,7 @@ impl Tool for GetMarkdownTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::browser::session::MarkdownCacheEntry;
+    use crate::browser::MarkdownCacheEntry;
     use std::sync::Arc;
 
     fn sample_entry(full_markdown: &str) -> MarkdownCacheEntry {

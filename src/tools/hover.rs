@@ -4,7 +4,7 @@ use crate::tools::{
     DocumentEnvelope, TargetEnvelope, TargetResolution, Tool, ToolContext, ToolResult,
     actionability::ActionabilityPredicate,
     browser_kernel::render_browser_kernel_script,
-    click::{
+    services::interaction::{
         ActionabilityWaitState, DEFAULT_ACTIONABILITY_TIMEOUT_MS, TargetStatus,
         build_actionability_failure, build_interaction_failure, build_interaction_handoff,
         decode_action_result, resolve_interaction_target, wait_for_actionability,
@@ -65,6 +65,10 @@ impl Tool for HoverTool {
 
     fn name(&self) -> &str {
         "hover"
+    }
+
+    fn description(&self) -> &str {
+        "Reveal hover state. Usually after snapshot; next snapshot or click."
     }
 
     fn execute_typed(&self, params: HoverParams, context: &mut ToolContext) -> Result<ToolResult> {
@@ -235,7 +239,6 @@ mod tests {
     use crate::dom::{AriaChild, AriaNode, DocumentMetadata, DomTree};
     use crate::tools::{OPERATION_METRICS_METADATA_KEY, Tool, ToolContext};
     use serde_json::Value;
-    use std::any::Any;
     use std::time::Duration;
 
     struct InvalidHoverPayloadBackend;
@@ -264,10 +267,6 @@ mod tests {
     }
 
     impl SessionBackend for InvalidHoverPayloadBackend {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn navigate(&self, _url: &str) -> crate::error::Result<()> {
             unreachable!("navigate is not used in this test")
         }

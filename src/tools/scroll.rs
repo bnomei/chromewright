@@ -57,11 +57,15 @@ impl Tool for ScrollTool {
         "scroll"
     }
 
+    fn description(&self) -> &str {
+        "Scroll the page. Returns viewport hints; snapshot only for broader rereads."
+    }
+
     fn execute_typed(&self, params: ScrollParams, context: &mut ToolContext) -> Result<ToolResult> {
         let config = serde_json::json!({
             "amount": params.amount
         });
-        let scroll_js = SCROLL_JS.replace("__SCROLL_CONFIG__", &config.to_string());
+        let scroll_js = build_scroll_js(&config);
 
         context.record_browser_evaluation();
         let result = context
@@ -100,6 +104,11 @@ impl Tool for ScrollTool {
             envelope,
         ))))
     }
+}
+
+fn build_scroll_js(config: &serde_json::Value) -> String {
+    // Scroll only needs the page globals, so this stays a deliberate non-kernel exception.
+    SCROLL_JS.replace("__SCROLL_CONFIG__", &config.to_string())
 }
 
 fn build_scroll_output(result_json: RawScrollOutput, envelope: DocumentEnvelope) -> ScrollOutput {
@@ -174,16 +183,19 @@ mod tests {
     use crate::tools::{OPERATION_METRICS_METADATA_KEY, Tool, ToolContext};
     use crate::{dom::DocumentMetadata, dom::DomTree};
     use serde_json::Value;
-    use std::any::Any;
     use std::time::Duration;
 
     struct InvalidScrollPayloadBackend;
 
-    impl SessionBackend for InvalidScrollPayloadBackend {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
+    #[test]
+    fn test_build_scroll_js_injects_config_without_placeholder() {
+        let scroll_js = build_scroll_js(&serde_json::json!({ "amount": 240 }));
 
+        assert!(scroll_js.contains(r#"const config = {"amount":240};"#));
+        assert!(!scroll_js.contains("__SCROLL_CONFIG__"));
+    }
+
+    impl SessionBackend for InvalidScrollPayloadBackend {
         fn navigate(&self, _url: &str) -> crate::error::Result<()> {
             unreachable!("navigate is not used in this test")
         }

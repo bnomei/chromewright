@@ -40,7 +40,7 @@ cargo install --path .
 ## Quick Start
 
 ```rust
-use chromewright::browser::BrowserSession;
+use chromewright::BrowserSession;
 
 // Launch browser and navigate
 let session = BrowserSession::launch(Default::default())?;
@@ -50,6 +50,24 @@ session.navigate("https://example.com")?;
 let dom = session.extract_dom()?;
 println!("Current revision: {}", dom.document.revision);
 ```
+
+## Public API
+
+Prefer the crate-root reexports for session setup and browser lifecycle:
+
+```rust
+use chromewright::{BrowserSession, ConnectionOptions, LaunchOptions};
+```
+
+Use the `tools` namespace for the high-level tool contract:
+
+```rust
+use chromewright::tools::{ToolContext, ToolRegistry};
+```
+
+The file modules behind `browser::config`, `browser::session`, and the internal tools helpers are
+implementation details. `src/tools/mod.rs` remains the stable tools facade, with shared primitives
+under `src/tools/core/` and shared multi-step workflows under `src/tools/services/`.
 
 ## MCP Server
 
@@ -106,7 +124,8 @@ Supported transports:
 
 ## Tool Surfaces
 
-The default `ToolRegistry` and MCP server expose the high-level document interaction contract.
+The default `ToolRegistry` and MCP server expose the same high-level document interaction contract,
+using the same tool names and schemas.
 Raw JavaScript evaluation and path-based screenshot capture are intentionally outside that default surface.
 High-level action tools now return updated document metadata by default; call `snapshot` when you need
 the full YAML snapshot plus actionable-node list.

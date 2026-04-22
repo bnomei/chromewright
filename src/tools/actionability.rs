@@ -178,7 +178,6 @@ mod tests {
     use crate::browser::backend::{ScriptEvaluation, SessionBackend, TabDescriptor};
     use crate::dom::{DocumentMetadata, DomTree};
     use serde_json::Value;
-    use std::any::Any;
     use std::time::Duration;
 
     #[test]
@@ -310,10 +309,6 @@ mod tests {
     }
 
     impl SessionBackend for StaticActionabilityBackend {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn navigate(&self, _url: &str) -> Result<()> {
             unreachable!("navigate is not used in this test")
         }

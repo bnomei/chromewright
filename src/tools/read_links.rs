@@ -32,6 +32,10 @@ impl Tool for ReadLinksTool {
         "read_links"
     }
 
+    fn description(&self) -> &str {
+        "List page links. Next: click or navigate."
+    }
+
     fn execute_typed(
         &self,
         _params: ReadLinksParams,
@@ -95,16 +99,11 @@ mod tests {
     };
     use crate::tools::{OPERATION_METRICS_METADATA_KEY, Tool, ToolContext};
     use crate::{dom::DocumentMetadata, dom::DomTree};
-    use std::any::Any;
     use std::time::Duration;
 
     struct InvalidLinksPayloadBackend;
 
     impl SessionBackend for InvalidLinksPayloadBackend {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn navigate(&self, _url: &str) -> crate::error::Result<()> {
             unreachable!("navigate is not used in this test")
         }

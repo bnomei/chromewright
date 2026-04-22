@@ -34,6 +34,10 @@ impl Tool for EvaluateTool {
         "evaluate"
     }
 
+    fn description(&self) -> &str {
+        "Run arbitrary JavaScript when inspect_node is insufficient. Requires confirm_unsafe=true."
+    }
+
     fn execute_typed(
         &self,
         params: EvaluateParams,

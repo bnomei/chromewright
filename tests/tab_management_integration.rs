@@ -24,7 +24,7 @@ fn test_new_tab() {
     .expect("Failed to navigate");
 
     // Get initial tab count
-    let initial_tabs = session.get_tabs().expect("Failed to get tabs");
+    let initial_tabs = session.list_tabs().expect("Failed to list tabs");
     let initial_count = initial_tabs.len();
     info!("Initial tab count: {}", initial_count);
 
@@ -65,7 +65,7 @@ fn test_new_tab() {
     common::wait_for_tab_count(session, initial_count + 1).expect("Second tab should appear");
 
     // Verify tab count increased
-    let final_tabs = session.get_tabs().expect("Failed to get tabs");
+    let final_tabs = session.list_tabs().expect("Failed to list tabs");
     let final_count = final_tabs.len();
     info!("Final tab count: {}", final_count);
 

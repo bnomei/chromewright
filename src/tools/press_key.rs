@@ -202,6 +202,10 @@ impl Tool for PressKeyTool {
         "press_key"
     }
 
+    fn description(&self) -> &str {
+        "Press a keyboard key. Returns focus hints; snapshot only for broader rereads."
+    }
+
     fn execute_typed(
         &self,
         params: PressKeyParams,

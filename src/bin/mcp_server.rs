@@ -3,8 +3,7 @@
 //! This binary provides a Model Context Protocol (MCP) server for browser automation.
 //! It exposes browser automation tools that can be used by AI assistants and other MCP clients.
 
-use chromewright::browser::{ConnectionOptions, LaunchOptions};
-use chromewright::mcp::BrowserServer;
+use chromewright::{BrowserServer, ConnectionOptions, LaunchOptions};
 use clap::{Parser, ValueEnum};
 use log::{debug, info};
 use rmcp::{ServiceExt, transport::stdio};
@@ -99,7 +98,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let browser_mode = browser_mode_from_cli(&cli);
 
-    info!("Browser-use MCP Server v{}", env!("CARGO_PKG_VERSION"));
+    info!("chromewright MCP server v{}", env!("CARGO_PKG_VERSION"));
     match &browser_mode {
         BrowserMode::Launch(options) => {
             info!(

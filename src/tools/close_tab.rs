@@ -28,6 +28,10 @@ impl Tool for CloseTabTool {
         "close_tab"
     }
 
+    fn description(&self) -> &str {
+        "Close the active tab. Next: tab_list or switch_tab if work continues."
+    }
+
     fn execute_typed(
         &self,
         _params: CloseTabParams,

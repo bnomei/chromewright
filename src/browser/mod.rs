@@ -4,11 +4,12 @@
 //! It includes configuration options, session management, and browser lifecycle control.
 
 pub(crate) mod backend;
-pub mod config;
-pub mod session;
+mod config;
+mod session;
 
 pub use config::{ConnectionOptions, LaunchOptions};
-pub use session::BrowserSession;
+pub use session::{BrowserSession, ClosedTabSummary, TabInfo};
+pub(crate) use session::MarkdownCacheEntry;
 
 use crate::error::Result;
 

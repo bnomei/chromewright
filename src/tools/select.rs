@@ -4,7 +4,7 @@ use crate::tools::{
     DocumentEnvelope, TargetEnvelope, TargetResolution, Tool, ToolContext, ToolResult,
     actionability::ActionabilityPredicate,
     browser_kernel::render_browser_kernel_script,
-    click::{
+    services::interaction::{
         ActionabilityWaitState, DEFAULT_ACTIONABILITY_TIMEOUT_MS, TargetStatus,
         build_actionability_failure, build_interaction_failure, build_interaction_handoff,
         decode_action_result, resolve_interaction_target, wait_for_actionability,
@@ -62,6 +62,10 @@ impl Tool for SelectTool {
 
     fn name(&self) -> &str {
         "select"
+    }
+
+    fn description(&self) -> &str {
+        "Choose a dropdown value. Usually after snapshot; next wait or snapshot."
     }
 
     fn execute_typed(&self, params: SelectParams, context: &mut ToolContext) -> Result<ToolResult> {
