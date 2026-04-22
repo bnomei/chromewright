@@ -1,4 +1,5 @@
 use crate::error::Result;
+use crate::tools::TargetEnvelope;
 use crate::tools::inspect_node::{
     InspectDetail, InspectNodeOutput, InspectNodeParams, InspectNodeProbePayload,
     build_inspect_node_js, decode_probe_payload,
@@ -42,6 +43,35 @@ fn missing_required_probe_fields(payload: &InspectNodeProbePayload) -> Vec<&'sta
     missing
 }
 
+fn downgrade_target_to_selector(target: &mut TargetEnvelope) {
+    target.method = "css".to_string();
+    target.cursor = None;
+    target.node_ref = None;
+    target.index = None;
+}
+
+fn reconcile_target_with_probe(
+    target: &mut TargetEnvelope,
+    payload: &InspectNodeProbePayload,
+    resolved_revision: &str,
+    current_revision: &str,
+) {
+    if target.cursor.is_none() && target.index.is_none() && target.node_ref.is_none() {
+        return;
+    }
+
+    if resolved_revision != current_revision {
+        downgrade_target_to_selector(target);
+        return;
+    }
+
+    match (target.index, payload.actionable_index) {
+        (Some(expected), Some(actual)) if expected == actual => {}
+        (Some(_), _) => downgrade_target_to_selector(target),
+        (None, Some(_)) | (None, None) => {}
+    }
+}
+
 pub(crate) fn execute_inspect_node(
     params: InspectNodeParams,
     context: &mut ToolContext,
@@ -54,9 +84,10 @@ pub(crate) fn execute_inspect_node(
         detail,
         style_names,
     } = params;
-    let target = {
+    let (target, resolved_revision) = {
         let dom = context.get_dom()?;
-        match resolve_target_with_cursor(
+        let resolved_revision = dom.document.revision.clone();
+        let target = match resolve_target_with_cursor(
             "inspect_node",
             selector,
             index,
@@ -66,7 +97,9 @@ pub(crate) fn execute_inspect_node(
         )? {
             TargetResolution::Resolved(target) => target,
             TargetResolution::Failure(failure) => return Ok(context.finish(failure)),
-        }
+        };
+
+        (target, resolved_revision)
     };
 
     let target_index = target
@@ -134,47 +167,14 @@ pub(crate) fn execute_inspect_node(
         .target
         .take()
         .expect("inspect_node should keep target");
-    if target_envelope.cursor.is_none() {
-        target_envelope.cursor = match payload.actionable_index {
-            Some(index) => context.get_dom()?.cursor_for_index(index),
-            None => None,
-        };
-    }
+    let current_revision = envelope.document.revision.clone();
+    reconcile_target_with_probe(
+        &mut target_envelope,
+        &payload,
+        &resolved_revision,
+        &current_revision,
+    );
     let cursor = target_envelope.cursor.clone();
-    if cursor.is_none() {
-        let error = if payload
-            .context
-            .as_ref()
-            .map(|context| context.frame_depth > 0)
-            .unwrap_or(false)
-        {
-            "inspect_node matched an element inside an iframe, but it is not cursor-addressable yet"
-                .to_string()
-        } else {
-            "inspect_node requires a selector that resolves to an actionable cursor".to_string()
-        };
-        let code = if payload
-            .context
-            .as_ref()
-            .map(|context| context.frame_depth > 0)
-            .unwrap_or(false)
-        {
-            "unsupported_frame_context"
-        } else {
-            "selector_not_cursor_addressable"
-        };
-
-        return Ok(context.finish(ToolResult::failure_with(
-            error.clone(),
-            serde_json::json!({
-                "code": code,
-                "error": error,
-                "target": target_envelope,
-                "context": payload.context,
-                "boundary": payload.boundary,
-            }),
-        )));
-    }
 
     let missing_fields = missing_required_probe_fields(&payload);
     if !missing_fields.is_empty() {
@@ -224,4 +224,111 @@ pub(crate) fn execute_inspect_node(
         boundary: payload.boundary,
         sections: payload.sections,
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dom::{Cursor, NodeRef};
+
+    fn target_with_cursor(index: usize) -> TargetEnvelope {
+        let node_ref = NodeRef {
+            document_id: "doc-1".to_string(),
+            revision: "rev-1".to_string(),
+            index,
+        };
+        let cursor = Cursor {
+            node_ref: node_ref.clone(),
+            selector: "#save".to_string(),
+            index,
+            role: "button".to_string(),
+            name: "Save".to_string(),
+        };
+
+        TargetEnvelope {
+            method: "cursor".to_string(),
+            cursor: Some(cursor),
+            node_ref: Some(node_ref),
+            selector: Some("#save".to_string()),
+            index: Some(index),
+        }
+    }
+
+    #[test]
+    fn test_reconcile_target_with_probe_keeps_verified_actionable_handles() {
+        let mut target = target_with_cursor(4);
+        let payload = InspectNodeProbePayload {
+            success: true,
+            code: None,
+            error: None,
+            actionable_index: Some(4),
+            identity: None,
+            accessibility: None,
+            form_state: None,
+            layout: None,
+            context: None,
+            boundary: None,
+            boundaries: None,
+            sections: None,
+        };
+
+        reconcile_target_with_probe(&mut target, &payload, "rev-1", "rev-1");
+
+        assert_eq!(target.method, "cursor");
+        assert_eq!(target.index, Some(4));
+        assert!(target.cursor.is_some());
+    }
+
+    #[test]
+    fn test_reconcile_target_with_probe_downgrades_mismatched_actionable_handles() {
+        let mut target = target_with_cursor(4);
+        let payload = InspectNodeProbePayload {
+            success: true,
+            code: None,
+            error: None,
+            actionable_index: Some(9),
+            identity: None,
+            accessibility: None,
+            form_state: None,
+            layout: None,
+            context: None,
+            boundary: None,
+            boundaries: None,
+            sections: None,
+        };
+
+        reconcile_target_with_probe(&mut target, &payload, "rev-1", "rev-1");
+
+        assert_eq!(target.method, "css");
+        assert_eq!(target.selector.as_deref(), Some("#save"));
+        assert!(target.cursor.is_none());
+        assert!(target.node_ref.is_none());
+        assert!(target.index.is_none());
+    }
+
+    #[test]
+    fn test_reconcile_target_with_probe_downgrades_after_revision_change() {
+        let mut target = target_with_cursor(4);
+        let payload = InspectNodeProbePayload {
+            success: true,
+            code: None,
+            error: None,
+            actionable_index: Some(4),
+            identity: None,
+            accessibility: None,
+            form_state: None,
+            layout: None,
+            context: None,
+            boundary: None,
+            boundaries: None,
+            sections: None,
+        };
+
+        reconcile_target_with_probe(&mut target, &payload, "rev-1", "rev-2");
+
+        assert_eq!(target.method, "css");
+        assert!(target.cursor.is_none());
+        assert!(target.node_ref.is_none());
+        assert!(target.index.is_none());
+    }
 }

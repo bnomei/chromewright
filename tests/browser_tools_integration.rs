@@ -36,6 +36,76 @@ fn snapshot_node_ref_for_selector(snapshot_data: &Value, selector: &str) -> Node
     serde_json::from_value(node_ref_value).expect("node_ref should deserialize")
 }
 
+fn snapshot_node_by_name<'a>(snapshot_data: &'a Value, name: &str) -> &'a Value {
+    snapshot_data["nodes"]
+        .as_array()
+        .expect("snapshot should return nodes")
+        .iter()
+        .find(|node| node["name"].as_str() == Some(name))
+        .unwrap_or_else(|| panic!("expected snapshot node named {name}"))
+}
+
+fn production_inspection_fixture_html() -> String {
+    let tiny_gif = "R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
+    format!(
+        r#"
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <style>
+                body {{ font-family: sans-serif; margin: 0; padding: 24px; }}
+                article {{ max-width: 720px; }}
+                img.hero {{ display: block; width: 320px; height: 180px; }}
+                [role="tab"] {{ cursor: pointer; }}
+                dialog[open] {{ position: fixed; right: 16px; bottom: 16px; }}
+            </style>
+        </head>
+        <body>
+            <main>
+                <article>
+                    <h1 id="story-title">Workspace agents in ChatGPT</h1>
+                    <p>Production-style fixture for inspection reliability.</p>
+                    <img
+                        id="3hero-image"
+                        class="hero visual"
+                        alt="Workspace agent diagram"
+                        src="data:image/gif;base64,{tiny_gif}"
+                    />
+                    <div role="tablist" aria-label="Customer stories">
+                        <button id="7rippling" role="tab" aria-selected="true">Rippling</button>
+                        <button id="better-mortgage" role="tab" aria-selected="false">Better Mortgage</button>
+                        <button id="softbank-corp" role="tab" aria-selected="false">SoftBank Corp.</button>
+                    </div>
+                    <section aria-labelledby="7rippling">
+                        <h2 id="3compliance-api">Compliance API</h2>
+                        <p>Selected panel details.</p>
+                    </section>
+                </article>
+
+                <dialog id="cookie-banner" open>
+                    <form method="dialog">
+                        <p>Cookies</p>
+                        <button id="cookie-manage">Manage</button>
+                        <button id="cookie-dismiss">Dismiss</button>
+                        <button id="cookie-accept">Accept</button>
+                    </form>
+                </dialog>
+
+                <iframe
+                    id="same-origin-frame"
+                    srcdoc="<html><body><button id='inside'>Inside</button></body></html>"
+                ></iframe>
+                <iframe
+                    id="cross-origin-frame"
+                    src="data:text/html,%3Cbutton%20id%3D%22outside%22%3EOutside%3C%2Fbutton%3E"
+                ></iframe>
+            </main>
+        </body>
+        </html>
+        "#
+    )
+}
+
 #[test]
 #[ignore]
 fn test_read_links_tool_returns_raw_and_resolved_urls_via_registry() {
@@ -1534,4 +1604,166 @@ fn test_inspect_node_reuses_snapshot_cursor_inside_same_origin_iframe() {
     assert_eq!(data["cursor"]["selector"].as_str(), Some("#inside"));
     assert_eq!(data["context"]["frame_depth"].as_u64(), Some(1));
     assert_eq!(data["identity"]["tag"].as_str(), Some("button"));
+}
+
+#[test]
+#[ignore]
+fn test_inspect_node_supports_non_actionable_and_overlay_targets_in_production_fixture() {
+    let Some(browser) = common::browser_or_skip() else {
+        return;
+    };
+    let session = browser.session();
+
+    common::navigate_encoded_html(session, production_inspection_fixture_html())
+        .expect("Failed to navigate");
+
+    let inspect_tool = InspectNodeTool::default();
+    let mut context = ToolContext::new(&session);
+
+    let heading = inspect_tool
+        .execute_typed(
+            InspectNodeParams {
+                selector: Some("h1".to_string()),
+                index: None,
+                node_ref: None,
+                cursor: None,
+                detail: InspectDetail::Compact,
+                style_names: Vec::new(),
+            },
+            &mut context,
+        )
+        .expect("heading inspection should succeed");
+
+    assert!(heading.success);
+    let heading_data = heading
+        .data
+        .expect("heading inspection should include data");
+    assert_eq!(heading_data["identity"]["tag"].as_str(), Some("h1"));
+    assert_eq!(
+        heading_data["accessibility"]["role"].as_str(),
+        Some("heading")
+    );
+    assert!(heading_data["cursor"].is_null());
+    assert_eq!(heading_data["target"]["selector"].as_str(), Some("h1"));
+
+    let image = inspect_tool
+        .execute_typed(
+            InspectNodeParams {
+                selector: Some("#3hero-image".to_string()),
+                index: None,
+                node_ref: None,
+                cursor: None,
+                detail: InspectDetail::Full,
+                style_names: Vec::new(),
+            },
+            &mut context,
+        )
+        .expect("numeric-id image inspection should succeed");
+
+    assert!(image.success);
+    let image_data = image.data.expect("image inspection should include data");
+    assert_eq!(image_data["identity"]["tag"].as_str(), Some("img"));
+    assert_eq!(image_data["accessibility"]["role"].as_str(), Some("img"));
+    assert_eq!(
+        image_data["accessibility"]["name"].as_str(),
+        Some("Workspace agent diagram")
+    );
+    assert!(image_data["cursor"].is_null());
+    assert_eq!(
+        image_data["target"]["selector"].as_str(),
+        Some("#3hero-image")
+    );
+    assert!(
+        image_data["sections"]["html"]["value"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("3hero-image")
+    );
+
+    let overlay = inspect_tool
+        .execute_typed(
+            InspectNodeParams {
+                selector: Some("#cookie-accept".to_string()),
+                index: None,
+                node_ref: None,
+                cursor: None,
+                detail: InspectDetail::Compact,
+                style_names: Vec::new(),
+            },
+            &mut context,
+        )
+        .expect("overlay inspection should succeed");
+
+    assert!(overlay.success);
+    let overlay_data = overlay
+        .data
+        .expect("overlay inspection should include data");
+    assert_eq!(
+        overlay_data["identity"]["id"].as_str(),
+        Some("cookie-accept")
+    );
+    assert_eq!(
+        overlay_data["accessibility"]["name"].as_str(),
+        Some("Accept")
+    );
+    assert_eq!(overlay_data["context"]["frame_depth"].as_u64(), Some(0));
+}
+
+#[test]
+#[ignore]
+fn test_inspect_node_keeps_snapshot_cursor_consistent_for_production_tabset() {
+    let Some(browser) = common::browser_or_skip() else {
+        return;
+    };
+    let session = browser.session();
+
+    common::navigate_encoded_html(session, production_inspection_fixture_html())
+        .expect("Failed to navigate");
+
+    let snapshot_tool = SnapshotTool::default();
+    let inspect_tool = InspectNodeTool::default();
+    let mut context = ToolContext::new(&session);
+
+    let snapshot = snapshot_tool
+        .execute_typed(SnapshotParams::default(), &mut context)
+        .expect("snapshot should succeed");
+    let snapshot_data = snapshot.data.expect("snapshot should include data");
+    let tab_node = snapshot_node_by_name(&snapshot_data, "Rippling");
+    let cursor_value = tab_node["cursor"].clone();
+    let cursor: Cursor = serde_json::from_value(cursor_value.clone()).expect("cursor should parse");
+
+    assert_eq!(cursor.selector, "#\\37 rippling");
+
+    let result = inspect_tool
+        .execute_typed(
+            InspectNodeParams {
+                selector: Some(cursor.selector.clone()),
+                index: None,
+                node_ref: None,
+                cursor: None,
+                detail: InspectDetail::Full,
+                style_names: Vec::new(),
+            },
+            &mut context,
+        )
+        .expect("tab inspection should succeed");
+
+    assert!(result.success);
+    let data = result.data.expect("inspect_node should include data");
+    assert_eq!(
+        data["target"]["selector"].as_str(),
+        Some(cursor.selector.as_str())
+    );
+    assert_eq!(data["cursor"], cursor_value);
+    assert_eq!(data["target"]["cursor"], cursor_value);
+    assert_eq!(data["identity"]["id"].as_str(), Some("7rippling"));
+    assert_eq!(data["identity"]["tag"].as_str(), Some("button"));
+    assert_eq!(data["accessibility"]["name"].as_str(), Some("Rippling"));
+    assert_eq!(data["accessibility"]["selected"].as_bool(), Some(true));
+    assert!(
+        data["sections"]["html"]["value"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("id=\"7rippling\"")
+    );
 }

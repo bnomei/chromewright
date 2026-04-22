@@ -855,11 +855,30 @@ JSON.stringify((function() {
         }
     }
 
+    function escapeCssIdentifier(value) {
+        const text = String(value || '');
+        const css = getDocumentView(document).CSS;
+        if (css && typeof css.escape === 'function') {
+            return css.escape(text);
+        }
+
+        return text
+            .replace(/[\0-\x1f\x7f]/g, function(char) {
+                return '\\' + char.charCodeAt(0).toString(16) + ' ';
+            })
+            .replace(/^-?\d/, function(char) {
+                return '\\' + char.charCodeAt(0).toString(16) + ' ';
+            })
+            .replace(/[^\w-]/g, function(char) {
+                return '\\' + char;
+            });
+    }
+
     // Build CSS selector for element
     function buildSelector(element) {
         const doc = element.ownerDocument;
         if (element.id) {
-            return '#' + element.id;
+            return '#' + escapeCssIdentifier(element.id);
         }
         
         const path = [];
@@ -871,7 +890,7 @@ JSON.stringify((function() {
             if (current.className && typeof current.className === 'string') {
                 const classes = current.className.trim().split(/\s+/);
                 if (classes.length > 0 && classes[0]) {
-                    selector += '.' + classes[0];
+                    selector += '.' + escapeCssIdentifier(classes[0]);
                 }
             }
             

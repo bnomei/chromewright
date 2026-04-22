@@ -229,6 +229,49 @@ function findActionableIndexForElement(targetElement) {
   });
 }
 
+function escapeCssIdentifier(value) {
+  const text = String(value || '');
+  if (typeof CSS !== 'undefined' && CSS && typeof CSS.escape === 'function') {
+    return CSS.escape(text);
+  }
+
+  return text
+    .replace(/[\0-\x1f\x7f]/g, (char) => '\\' + char.charCodeAt(0).toString(16) + ' ')
+    .replace(/^-?\d/, (char) => '\\' + char.charCodeAt(0).toString(16) + ' ')
+    .replace(/[^\w-]/g, (char) => '\\' + char);
+}
+
+function normalizeSimpleIdSelector(selector) {
+  if (typeof selector !== 'string' || selector.length < 2 || selector[0] !== '#') {
+    return null;
+  }
+
+  const rawId = selector.slice(1);
+  if (!rawId || /\s/.test(rawId)) {
+    return null;
+  }
+
+  const normalized = '#' + escapeCssIdentifier(rawId);
+  return normalized === selector ? null : normalized;
+}
+
+function queryRootSelector(root, selector) {
+  try {
+    return root.querySelector(selector);
+  } catch (error) {
+    const normalized = normalizeSimpleIdSelector(selector);
+    if (!normalized) {
+      return null;
+    }
+
+    try {
+      return root.querySelector(normalized);
+    } catch (fallbackError) {
+      return null;
+    }
+  }
+}
+
 function querySelectorAcrossScopes(selector, options) {
   const visitedDocs = new Set();
   const collectBoundaries = Boolean(options && options.collectBoundaries);
@@ -252,12 +295,7 @@ function querySelectorAcrossScopes(selector, options) {
       return null;
     }
 
-    let directMatch = null;
-    try {
-      directMatch = root.querySelector(selector);
-    } catch (error) {
-      return null;
-    }
+    const directMatch = queryRootSelector(root, selector);
 
     if (directMatch) {
       return {

@@ -2,6 +2,47 @@ mod common;
 
 use log::info;
 
+fn production_inspection_fixture_html() -> String {
+    let tiny_gif = "R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
+    format!(
+        r#"
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <style>
+                [role="tab"] {{ cursor: pointer; }}
+            </style>
+        </head>
+        <body>
+            <main>
+                <article>
+                    <h1 id="story-title">Workspace agents in ChatGPT</h1>
+                    <img
+                        id="3hero-image"
+                        alt="Workspace agent diagram"
+                        src="data:image/gif;base64,{tiny_gif}"
+                    />
+                    <div role="tablist" aria-label="Customer stories">
+                        <button id="7rippling" role="tab" aria-selected="true">Rippling</button>
+                        <button id="better-mortgage" role="tab" aria-selected="false">Better Mortgage</button>
+                    </div>
+                </article>
+
+                <dialog id="cookie-banner" open>
+                    <button id="cookie-accept">Accept</button>
+                </dialog>
+
+                <iframe
+                    id="same-origin-frame"
+                    srcdoc="<html><body><button id='inside'>Inside</button></body></html>"
+                ></iframe>
+            </main>
+        </body>
+        </html>
+        "#
+    )
+}
+
 #[test]
 #[ignore] // Requires Chrome to be installed
 fn test_dom_extraction() {
@@ -639,5 +680,66 @@ fn test_snapshot_tool_exposes_cursor_for_same_origin_iframe_node() {
     assert_eq!(
         data["document"]["frames"][0]["status"].as_str(),
         Some("expanded")
+    );
+}
+
+#[test]
+#[ignore]
+fn test_snapshot_tool_keeps_inline_handles_aligned_with_exposed_cursor_nodes() {
+    use chromewright::tools::{SnapshotParams, Tool, ToolContext, snapshot::SnapshotTool};
+
+    let Some(browser) = common::browser_or_skip() else {
+        return;
+    };
+    let session = browser.session();
+
+    common::navigate_encoded_html(session, production_inspection_fixture_html())
+        .expect("Failed to navigate");
+
+    let tool = SnapshotTool::default();
+    let mut context = ToolContext::new(&session);
+
+    let result = tool
+        .execute_typed(SnapshotParams::default(), &mut context)
+        .expect("snapshot should succeed");
+
+    assert!(result.success);
+    let data = result.data.expect("snapshot should include data");
+    let snapshot = data["snapshot"]
+        .as_str()
+        .expect("snapshot should include a rendered tree");
+    let nodes = data["nodes"]
+        .as_array()
+        .expect("snapshot should include exposed nodes");
+
+    assert!(snapshot.contains("heading \"Workspace agents in ChatGPT\""));
+    assert!(snapshot.contains("img \"Workspace agent diagram\""));
+    assert!(
+        !snapshot.contains("heading \"Workspace agents in ChatGPT\" [index="),
+        "non-actionable headings should not advertise numeric follow-up handles"
+    );
+    assert!(
+        !snapshot.contains("img \"Workspace agent diagram\" [index="),
+        "non-actionable images should not advertise numeric follow-up handles"
+    );
+
+    let rippling = nodes
+        .iter()
+        .find(|node| node["name"].as_str() == Some("Rippling"))
+        .expect("expected Rippling tab in snapshot nodes");
+    assert_eq!(
+        rippling["cursor"]["selector"].as_str(),
+        Some("#\\37 rippling")
+    );
+
+    assert!(
+        nodes
+            .iter()
+            .all(|node| node["name"].as_str() != Some("Workspace agents in ChatGPT"))
+    );
+    assert!(
+        nodes
+            .iter()
+            .all(|node| node["name"].as_str() != Some("Workspace agent diagram"))
     );
 }

@@ -163,8 +163,8 @@ The exact file name and field names vary by client. The important part is that t
 Once Chromewright is running, the normal workflow is:
 
 1. Use `new_tab` or `tab_list` to establish an active tab. On a fresh session with no active tab, do not call `snapshot` first.
-2. Use `snapshot` to get document metadata plus actionable nodes.
-3. Use `inspect_node` for targeted bounded reads, `get_markdown` for article-like reading, `extract` for targeted text or HTML, and `read_links` for link inventory or planning.
+2. Use `snapshot` to get document metadata plus actionable nodes. Its inline `[index=...]` markers are revision-scoped numeric handles that mirror the exposed `nodes` list; they are not a separate durable handle family.
+3. Use `inspect_node` for targeted bounded reads, including selector-based inspection of non-actionable nodes such as headings, images, and overlays. Prefer `cursor` when one is available; otherwise a successful inspection may legitimately return `cursor = null`.
 4. Use `click`, `input`, `select`, `hover`, `press_key`, `scroll`, `wait`, or the tab tools with `cursor` preferred for follow-up targeting inside a page and stable `tab_id` preferred for multi-tab flows.
 5. Refresh `snapshot` after revision-changing actions. `cursor` and `node_ref` are revision-scoped, so rereads are the normal recovery path.
 
@@ -176,6 +176,7 @@ Chromewright exposes the same high-level tool contract to Rust callers through `
 
 - Fresh sessions: use `new_tab` or `tab_list` before `snapshot` if you do not already have an active tab.
 - Revision-scoped targets: `cursor` and `node_ref` belong to a specific document revision. After navigation or DOM-changing actions, rerun `snapshot` or fall back to selector-based recovery before precise follow-up work.
+- Snapshot inline handles: rendered `[index=...]` markers follow the same revision scope as the exposed actionable `nodes`; use them as reread-local hints, not as durable cross-revision IDs.
 - `target_status = same`: the tool still resolved the same target, so direct follow-up is usually safe.
 - `target_status = rebound`: the tool recovered after a revision change; reread with `snapshot` before more precise chained work.
 - `target_status = detached`: the old target no longer exists, often after navigation; reacquire state from the new page before continuing.
@@ -210,7 +211,7 @@ let mut registry = ToolRegistry::with_defaults();
 registry.register_operator_tools();
 ```
 
-High-level action tools return compact follow-up metadata by default. Use `snapshot` when you need the full YAML snapshot plus actionable-node list. For targeted reads, use `snapshot` to choose a node and reuse its `cursor`, then call `inspect_node`. After revision-changing actions, rerun `snapshot` before more precise target reuse. Targetable tools still accept `selector`, `index`, and `node_ref`, but `cursor` is the preferred follow-up handle.
+High-level action tools return compact follow-up metadata by default. Use `snapshot` when you need the full YAML snapshot plus actionable-node list. For targeted reads, use `snapshot` to choose a node and reuse its `cursor`, then call `inspect_node`; when you need to inspect a non-actionable DOM node such as a heading or image, `inspect_node` also accepts selector-based reads with an optional `cursor`. After revision-changing actions, rerun `snapshot` before more precise target reuse. Targetable tools still accept `selector`, `index`, and `node_ref`, but `cursor` is the preferred follow-up handle.
 
 Read-oriented tools are intentionally distinct: `get_markdown` is the broad reading tool, `extract` is for targeted text or HTML, and `read_links` is for link inventory and planning. For multi-tab work, prefer stable `tab_id` handles from `tab_list`, `new_tab`, `switch_tab`, and `close_tab` instead of relying only on tab indices.
 
