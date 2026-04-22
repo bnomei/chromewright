@@ -252,7 +252,10 @@ impl Tool for InspectNodeTool {
                 .map(|name| (*name).to_string())
                 .collect::<Vec<_>>()
         } else {
-            style_names.into_iter().take(MAX_STYLE_NAMES).collect::<Vec<_>>()
+            style_names
+                .into_iter()
+                .take(MAX_STYLE_NAMES)
+                .collect::<Vec<_>>()
         };
         let detail_name = match detail {
             InspectDetail::Compact => "compact",
@@ -294,7 +297,10 @@ impl Tool for InspectNodeTool {
 
         let mut envelope =
             build_document_envelope(context, Some(&target), DocumentEnvelopeOptions::minimal())?;
-        let mut target_envelope = envelope.target.take().expect("inspect_node should keep target");
+        let mut target_envelope = envelope
+            .target
+            .take()
+            .expect("inspect_node should keep target");
         if target_envelope.cursor.is_none() {
             target_envelope.cursor = match payload.actionable_index {
                 Some(index) => context.get_dom()?.cursor_for_index(index),
@@ -411,5 +417,17 @@ mod tests {
 
         assert!(payload.success);
         assert_eq!(payload.identity.unwrap().tag, "button");
+    }
+
+    #[test]
+    fn test_inspect_node_js_prefers_selector_before_target_index() {
+        assert!(INSPECT_NODE_JS.contains("if (config.selector) {"));
+        assert!(
+            INSPECT_NODE_JS
+                .contains("selectorSearch = querySelectorAcrossScopes(config.selector);")
+        );
+        assert!(
+            INSPECT_NODE_JS.contains("if (!match && typeof config.target_index === 'number') {")
+        );
     }
 }

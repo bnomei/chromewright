@@ -1,7 +1,13 @@
+use crate::dom::{Cursor, NodeRef};
 use crate::error::{BrowserError, Result};
 use crate::tools::{
-    DocumentEnvelopeOptions, TargetResolution, Tool, ToolContext, ToolResult,
-    build_document_envelope, resolve_target,
+    DocumentEnvelope, TargetEnvelope, TargetResolution, Tool, ToolContext, ToolResult,
+    actionability::ActionabilityPredicate,
+    click::{
+        ActionabilityWaitState, DEFAULT_ACTIONABILITY_TIMEOUT_MS, TargetStatus,
+        build_actionability_failure, build_interaction_failure, build_interaction_handoff,
+        decode_action_result, resolve_interaction_target, wait_for_actionability,
+    },
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -19,7 +25,11 @@ pub struct SelectParams {
 
     /// Revision-scoped node reference from the snapshot tool
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub node_ref: Option<crate::dom::NodeRef>,
+    pub node_ref: Option<NodeRef>,
+
+    /// Cursor from the snapshot or inspect_node tools
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<Cursor>,
 
     /// Value to select in the dropdown
     pub value: String,
@@ -34,8 +44,12 @@ const SELECT_JS: &str = include_str!("select.js");
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SelectOutput {
     #[serde(flatten)]
-    pub envelope: crate::tools::DocumentEnvelope,
+    pub envelope: DocumentEnvelope,
     pub action: String,
+    pub target_before: TargetEnvelope,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_after: Option<TargetEnvelope>,
+    pub target_status: TargetStatus,
     pub value: String,
     #[serde(rename = "selectedText")]
     pub selected_text: Option<String>,
@@ -54,66 +68,74 @@ impl Tool for SelectTool {
             selector,
             index,
             node_ref,
+            cursor,
             value,
         } = params;
-        let target = {
-            let dom = if index.is_some() || node_ref.is_some() {
-                Some(context.get_dom()?)
-            } else {
-                None
-            };
-            match resolve_target("select", selector, index, node_ref, dom)? {
+        let target =
+            match resolve_interaction_target("select", selector, index, node_ref, cursor, context)?
+            {
                 TargetResolution::Resolved(target) => target,
                 TargetResolution::Failure(failure) => return Ok(failure),
+            };
+
+        let tab = context.session.tab()?;
+        let predicates = select_actionability_predicates();
+        match wait_for_actionability(&tab, &target, predicates, DEFAULT_ACTIONABILITY_TIMEOUT_MS)? {
+            ActionabilityWaitState::Ready => {}
+            ActionabilityWaitState::TimedOut(probe) => {
+                return build_actionability_failure(
+                    "select", &tab, &target, &probe, predicates, None,
+                );
             }
-        };
+        }
 
         let select_config = serde_json::json!({
             "selector": target.selector,
+            "target_index": target.cursor.as_ref().map(|cursor| cursor.index).or(target.index),
             "value": value,
         });
         let select_js = SELECT_JS.replace("__SELECT_CONFIG__", &select_config.to_string());
 
-        let result = context
-            .session
-            .tab()?
-            .evaluate(&select_js, false)
-            .map_err(|e| BrowserError::ToolExecutionFailed {
-                tool: "select".to_string(),
-                reason: e.to_string(),
-            })?;
+        let result =
+            tab.evaluate(&select_js, false)
+                .map_err(|e| BrowserError::ToolExecutionFailed {
+                    tool: "select".to_string(),
+                    reason: e.to_string(),
+                })?;
 
         match parse_select_result(result.value)? {
             SelectParseResult::Success(selected_text) => {
-                context.invalidate_dom();
+                let handoff = build_interaction_handoff(context, &tab, &target)?;
                 Ok(ToolResult::success_with(SelectOutput {
-                    envelope: build_document_envelope(
-                        context,
-                        Some(&target),
-                        DocumentEnvelopeOptions::minimal(),
-                    )?,
+                    envelope: handoff.envelope,
                     action: "select".to_string(),
+                    target_before: handoff.target_before,
+                    target_after: handoff.target_after,
+                    target_status: handoff.target_status,
                     value,
                     selected_text,
                 }))
             }
-            SelectParseResult::Failure(reason) => Err(BrowserError::ToolExecutionFailed {
-                tool: "select".to_string(),
-                reason,
-            }),
+            SelectParseResult::Failure { code, error } => {
+                build_interaction_failure("select", &tab, &target, code, error, Vec::new(), None)
+            }
         }
     }
 }
 
 enum SelectParseResult {
     Success(Option<String>),
-    Failure(String),
+    Failure { code: String, error: String },
 }
 
 fn parse_select_result(value: Option<serde_json::Value>) -> Result<SelectParseResult> {
-    let result_json = decode_tool_result_json(
+    let result_json = decode_action_result(
         value,
-        serde_json::json!({"success": false, "error": "No result returned"}),
+        serde_json::json!({
+            "success": false,
+            "code": "target_detached",
+            "error": "Element is no longer present"
+        }),
     )?;
 
     if result_json["success"].as_bool() == Some(true) {
@@ -123,24 +145,26 @@ fn parse_select_result(value: Option<serde_json::Value>) -> Result<SelectParseRe
                 .map(ToString::to_string),
         ))
     } else {
-        Ok(SelectParseResult::Failure(
-            result_json["error"]
+        Ok(SelectParseResult::Failure {
+            code: result_json["code"]
                 .as_str()
-                .unwrap_or("Unknown error")
+                .unwrap_or("invalid_target")
                 .to_string(),
-        ))
+            error: result_json["error"]
+                .as_str()
+                .unwrap_or("Select failed")
+                .to_string(),
+        })
     }
 }
 
-fn decode_tool_result_json(
-    value: Option<serde_json::Value>,
-    fallback: serde_json::Value,
-) -> Result<serde_json::Value> {
-    if let Some(serde_json::Value::String(json_str)) = value {
-        serde_json::from_str(&json_str).map_err(BrowserError::from)
-    } else {
-        Ok(value.unwrap_or(fallback))
-    }
+fn select_actionability_predicates() -> &'static [ActionabilityPredicate] {
+    &[
+        ActionabilityPredicate::Present,
+        ActionabilityPredicate::Visible,
+        ActionabilityPredicate::Enabled,
+        ActionabilityPredicate::Stable,
+    ]
 }
 
 #[cfg(test)]
@@ -184,21 +208,23 @@ mod tests {
             SelectParseResult::Success(selected_text) => {
                 assert_eq!(selected_text.as_deref(), Some("United Kingdom"));
             }
-            SelectParseResult::Failure(reason) => panic!("unexpected failure: {reason}"),
+            SelectParseResult::Failure { error, .. } => panic!("unexpected failure: {error}"),
         }
     }
 
     #[test]
-    fn test_parse_select_result_failure_uses_error_message() {
+    fn test_parse_select_result_failure_uses_code_and_error() {
         let result = parse_select_result(Some(serde_json::json!({
             "success": false,
+            "code": "invalid_target",
             "error": "Element is not a SELECT element"
         })))
         .expect("select result should parse");
 
         match result {
-            SelectParseResult::Failure(reason) => {
-                assert_eq!(reason, "Element is not a SELECT element");
+            SelectParseResult::Failure { code, error } => {
+                assert_eq!(code, "invalid_target");
+                assert_eq!(error, "Element is not a SELECT element");
             }
             SelectParseResult::Success(_) => panic!("expected failure"),
         }
@@ -206,12 +232,23 @@ mod tests {
 
     #[test]
     fn test_decode_tool_result_json_rejects_invalid_json_string() {
-        let error = decode_tool_result_json(
+        let error = decode_action_result(
             Some(serde_json::Value::String("not-json".to_string())),
             serde_json::json!({}),
         )
         .expect_err("invalid JSON should fail");
 
         assert!(matches!(error, BrowserError::JsonError(_)));
+    }
+
+    #[test]
+    fn test_select_js_prefers_selector_before_target_index() {
+        assert!(super::SELECT_JS.contains("const selectorMatch = config.selector"));
+        assert!(super::SELECT_JS.contains("? querySelectorAcrossScopes(config.selector)"));
+        assert!(
+            super::SELECT_JS
+                .contains("const element =\n      selectorMatch && selectorMatch.isConnected")
+        );
+        assert!(super::SELECT_JS.contains("? searchActionableIndex(config.target_index)"));
     }
 }

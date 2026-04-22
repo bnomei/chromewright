@@ -22,10 +22,12 @@ JSON.stringify((function() {
         if (!view.__browserUseDocumentState) {
             const state = {
                 documentId: generateDocumentId(doc),
-                revision: 1
+                revision: 1,
+                frameTrackerListeners: []
             };
-            const observer = new view.MutationObserver(function() {
+            const observer = new view.MutationObserver(function(mutations) {
                 state.revision += 1;
+                notifyFrameTrackerListeners(state, mutations);
             });
             observer.observe(doc, {
                 subtree: true,
@@ -36,7 +38,90 @@ JSON.stringify((function() {
             state.observer = observer;
             view.__browserUseDocumentState = state;
         }
-        return view.__browserUseDocumentState;
+        const state = view.__browserUseDocumentState;
+        if (!Array.isArray(state.frameTrackerListeners)) {
+            state.frameTrackerListeners = [];
+        }
+        return state;
+    }
+
+    function notifyFrameTrackerListeners(documentState, mutations) {
+        if (!hasFrameStructureMutation(mutations)) {
+            return;
+        }
+
+        const listeners = documentState.frameTrackerListeners || [];
+        for (const listener of listeners.slice()) {
+            try {
+                listener();
+            } catch (error) {
+                // Ignore tracker invalidation failures during extraction.
+            }
+        }
+    }
+
+    function hasFrameStructureMutation(mutations) {
+        for (const mutation of mutations || []) {
+            if (mutation.type === 'attributes') {
+                if (containsIframeNode(mutation.target)) {
+                    return true;
+                }
+                continue;
+            }
+
+            if (mutation.type !== 'childList') {
+                continue;
+            }
+
+            for (const node of mutation.addedNodes || []) {
+                if (containsIframeNode(node)) {
+                    return true;
+                }
+            }
+
+            for (const node of mutation.removedNodes || []) {
+                if (containsIframeNode(node)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    function containsIframeNode(node) {
+        if (!node || node.nodeType !== 1) {
+            return false;
+        }
+
+        const element = node;
+        if (element.tagName === 'IFRAME') {
+            return true;
+        }
+
+        for (let child = element.firstChild; child; child = child.nextSibling) {
+            if (!child.assignedSlot && containsIframeNode(child)) {
+                return true;
+            }
+        }
+
+        if (element.shadowRoot) {
+            for (let child = element.shadowRoot.firstChild; child; child = child.nextSibling) {
+                if (containsIframeNode(child)) {
+                    return true;
+                }
+            }
+        }
+
+        if (element.tagName === 'SLOT') {
+            for (const child of element.assignedNodes()) {
+                if (containsIframeNode(child)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     // Helper: normalize whitespace

@@ -188,6 +188,16 @@ fn test_press_key_enter() {
 
     let data = result.data.unwrap();
     assert_eq!(data["key"].as_str(), Some("Enter"));
+    assert!(data["document"]["revision"].as_str().is_some());
+    assert_eq!(data["focus_after"]["kind"].as_str(), Some("cursor"));
+    assert_eq!(
+        data["focus_after"]["cursor"]["selector"].as_str(),
+        Some("#input1")
+    );
+    assert_eq!(
+        data["focus_after"]["cursor"]["role"].as_str(),
+        Some("textbox")
+    );
 
     std::thread::sleep(std::time::Duration::from_millis(200));
 
@@ -321,6 +331,7 @@ fn test_stale_node_ref_returns_structured_failure() {
                 selector: None,
                 index: None,
                 node_ref: Some(node_ref.clone()),
+                cursor: None,
             },
             &mut context,
         )
@@ -333,6 +344,7 @@ fn test_stale_node_ref_returns_structured_failure() {
                 selector: None,
                 index: None,
                 node_ref: Some(node_ref),
+                cursor: None,
             },
             &mut context,
         )
@@ -344,6 +356,69 @@ fn test_stale_node_ref_returns_structured_failure() {
         .expect("structured failure should include data");
     assert_eq!(data["code"].as_str(), Some("stale_node_ref"));
     assert_eq!(stale_click.error.as_deref(), Some("Stale node reference"));
+}
+
+#[test]
+#[ignore]
+fn test_click_tool_reports_detached_handoff_after_target_removal() {
+    use chromewright::tools::{
+        ClickParams, SnapshotParams, Tool, ToolContext, click::ClickTool, snapshot::SnapshotTool,
+    };
+
+    let _guard = common::browser_test_guard();
+    let Some(session) = common::launch_or_skip() else {
+        return;
+    };
+
+    let html = r#"
+        <html>
+        <body>
+            <button id="remove" onclick="this.remove(); document.getElementById('status').textContent = 'removed';">Remove</button>
+            <div id="status">initial</div>
+        </body>
+        </html>
+    "#;
+
+    session
+        .navigate(&format!("data:text/html,{}", html))
+        .expect("Failed to navigate");
+    session
+        .wait_for_document_ready_with_timeout(std::time::Duration::from_secs(5))
+        .expect("Failed to wait for page readiness");
+
+    let snapshot_tool = SnapshotTool::default();
+    let click_tool = ClickTool::default();
+    let mut context = ToolContext::new(&session);
+
+    let snapshot = snapshot_tool
+        .execute_typed(SnapshotParams::default(), &mut context)
+        .expect("snapshot should succeed");
+    let snapshot_data = snapshot.data.expect("snapshot should include data");
+    let node_ref: chromewright::dom::NodeRef =
+        serde_json::from_value(snapshot_data["nodes"][0]["node_ref"].clone())
+            .expect("node_ref should deserialize");
+
+    let result = click_tool
+        .execute_typed(
+            ClickParams {
+                selector: None,
+                index: None,
+                node_ref: Some(node_ref.clone()),
+                cursor: None,
+            },
+            &mut context,
+        )
+        .expect("click should succeed");
+
+    assert!(result.success);
+    let data = result.data.expect("click should include data");
+    assert_eq!(
+        data["target_before"]["node_ref"],
+        serde_json::to_value(node_ref).unwrap()
+    );
+    assert_eq!(data["target_status"].as_str(), Some("detached"));
+    assert!(data["target_after"].is_null());
+    assert!(data["target"].is_null());
 }
 
 #[test]
@@ -371,6 +446,15 @@ fn test_same_origin_iframe_content_is_included_in_snapshot() {
         .wait_for_document_ready_with_timeout(std::time::Duration::from_secs(5))
         .expect("Failed to wait for page readiness");
 
+    let initial_metadata = session
+        .document_metadata()
+        .expect("metadata should load before snapshot extraction");
+    let initial_dom = session
+        .extract_dom()
+        .expect("DOM extraction should succeed before snapshot extraction");
+    assert_eq!(initial_metadata.revision, initial_dom.document.revision);
+    assert_eq!(initial_metadata.frames, initial_dom.document.frames);
+
     let tool = SnapshotTool::default();
     let mut context = ToolContext::new(&session);
 
@@ -389,6 +473,137 @@ fn test_same_origin_iframe_content_is_included_in_snapshot() {
     assert_eq!(
         data["document"]["frames"][0]["status"].as_str(),
         Some("expanded")
+    );
+    assert_eq!(
+        data["document"]["revision"].as_str(),
+        Some(initial_metadata.revision.as_str())
+    );
+
+    let initial_frame_document_id = initial_metadata.frames[0]
+        .document_id
+        .clone()
+        .expect("same-origin iframe should expose a frame document id");
+    session
+        .tab()
+        .expect("tab should exist")
+        .evaluate(
+            r#"
+                (() => {
+                    const frame = document.getElementById('frame');
+                    frame.contentWindow.location.replace('about:blank#updated');
+                    return true;
+                })()
+            "#,
+            false,
+        )
+        .expect("iframe navigation should succeed");
+
+    let navigation_start = std::time::Instant::now();
+    let updated_metadata = loop {
+        let metadata = session
+            .document_metadata()
+            .expect("metadata should load after iframe navigation");
+        let current_frame_document_id = metadata.frames[0]
+            .document_id
+            .as_deref()
+            .expect("same-origin iframe should keep a frame document id");
+        if current_frame_document_id != initial_frame_document_id {
+            break metadata;
+        }
+
+        if navigation_start.elapsed() >= std::time::Duration::from_secs(5) {
+            panic!("iframe navigation did not invalidate metadata tracking in time");
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+
+    assert_ne!(updated_metadata.revision, initial_metadata.revision);
+    assert_ne!(
+        updated_metadata.frames[0].document_id.as_deref(),
+        Some(initial_frame_document_id.as_str())
+    );
+
+    session
+        .tab()
+        .expect("tab should exist")
+        .evaluate(
+            r#"
+                (() => {
+                    const frame = document.getElementById('frame');
+                    frame.contentDocument.body.innerHTML =
+                        '<h2>Updated Frame</h2><p>Updated text</p>';
+                    return true;
+                })()
+            "#,
+            false,
+        )
+        .expect("updating iframe contents should succeed");
+
+    session
+        .tab()
+        .expect("tab should exist")
+        .evaluate(
+            r#"
+                (() => {
+                    const extra = document.createElement('iframe');
+                    extra.id = 'extra-frame';
+                    extra.srcdoc = '<html><body><p>Extra Frame</p></body></html>';
+                    document.body.appendChild(extra);
+                    return true;
+                })()
+            "#,
+            false,
+        )
+        .expect("adding an iframe should succeed");
+
+    let membership_start = std::time::Instant::now();
+    let final_metadata = loop {
+        let metadata = session
+            .document_metadata()
+            .expect("metadata should load after iframe membership change");
+        if metadata.frames.len() == 2 {
+            break metadata;
+        }
+
+        if membership_start.elapsed() >= std::time::Duration::from_secs(5) {
+            panic!("iframe membership change did not invalidate metadata tracking in time");
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+
+    let final_dom = session
+        .extract_dom()
+        .expect("DOM extraction should succeed after iframe updates");
+    assert_eq!(final_metadata.revision, final_dom.document.revision);
+    assert_eq!(final_metadata.frames, final_dom.document.frames);
+    assert_eq!(final_metadata.frames.len(), 2);
+    assert_eq!(final_metadata.frames[0].status.as_str(), "expanded");
+    assert_eq!(final_metadata.frames[1].status.as_str(), "expanded");
+
+    let mut updated_context = ToolContext::new(&session);
+    let updated_snapshot = tool
+        .execute_typed(SnapshotParams::default(), &mut updated_context)
+        .expect("snapshot should succeed after iframe updates");
+    let updated_data = updated_snapshot
+        .data
+        .expect("snapshot should include data after iframe updates");
+    assert!(
+        updated_data["snapshot"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Updated Frame")
+    );
+    assert!(
+        updated_data["snapshot"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Extra Frame")
+    );
+    assert_eq!(
+        updated_data["document"]["revision"].as_str(),
+        Some(final_metadata.revision.as_str())
     );
 }
 
@@ -426,7 +641,9 @@ fn test_snapshot_tool_exposes_cursor_for_same_origin_iframe_node() {
 
     assert!(result.success);
     let data = result.data.unwrap();
-    let nodes = data["nodes"].as_array().expect("snapshot should return nodes");
+    let nodes = data["nodes"]
+        .as_array()
+        .expect("snapshot should return nodes");
     let iframe_node = nodes
         .iter()
         .find(|node| node["cursor"]["selector"].as_str() == Some("#inside"))

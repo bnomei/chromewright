@@ -14,15 +14,25 @@ This note is a static inspection of likely bottlenecks in the current codebase. 
    - Why it matters: on large or dynamic pages this is a lot of JS work, JSON allocation, CDP transfer, and Rust deserialization for every refresh.
    - Fix direction: split "cheap revision probe" from "full snapshot"; cache by document revision; only rebuild selectors and node summaries when a caller explicitly asks for a snapshot.
 
-3. `wait(revision_changed)` currently re-extracts the entire DOM every 50 ms until success or timeout
-   - Evidence: `WaitCondition::RevisionChanged` calls `context.refresh_dom()?` inside the polling loop and sleeps for 50 ms between attempts (`src/tools/wait.rs:134-168`).
-   - Why it matters: a 30 second timeout means up to about 600 full DOM extractions. This is the clearest CPU and memory churn hotspot in the repo.
-   - Fix direction: add a lightweight JS call that returns only the revision token from `__browserUseDocumentState` instead of rebuilding the full `DomTree`.
+3. `wait(revision_changed)` remains a narrower follow-up hotspot after the landed wait-predicate split
+   - Evidence: `WaitCondition::RevisionChanged` still polls every 50 ms and compares frame-aware metadata revisions (`src/tools/wait.rs:137-188`), while the other wait conditions now dispatch through condition-specific browser predicates instead of one monolithic state bundle (`src/tools/wait.rs:247-259`, `src/tools/wait.rs:284-353`).
+   - Why it matters: the broad "compute visibility, text, and value for every wait condition" issue is closed, but revision polling is still a steady-state loop worth revisiting if it shows up in profiling.
+   - Fix direction: if profiling justifies more work here, add a lighter-weight revision-token probe instead of routing through the general document metadata path.
 
 4. Successful tool responses rebuild large document envelopes even when callers may only need success or failure
    - Evidence: `build_document_envelope()` clones document metadata, optionally renders the full YAML snapshot, rebuilds the agent-facing node list, and recounts interactives (`src/tools/mod.rs:339-351`). Mutating tools like `navigate`, `click`, `input`, and `select` all refresh the DOM and then build this envelope, usually with `include_snapshot = true` (`src/tools/navigate.rs:49-56`, `src/tools/click.rs:62-68`, `src/tools/input.rs:79-88`, `src/tools/select.rs:86-99`).
    - Why it matters: each successful action does several full-tree passes and allocates large strings and vectors. That increases latency and heap pressure for routine clicks and form fills.
    - Fix direction: make snapshot and node lists opt-in; return only `document_id`, `revision`, and target metadata by default; precompute node summaries during extraction if they are frequently needed.
+
+## Landed In `frame-aware-metadata-and-wait-polling`
+
+- Frame-aware metadata reads no longer rescan the full same-origin iframe tree on every steady-state call.
+  - Landed work: `src/dom/document_metadata.js` now keeps an in-page frame tracker that separates frame discovery from live revision sampling and rebuilds only when iframe membership or navigation invalidates the tracker.
+  - Residual note: full DOM extraction is still expensive when a caller explicitly asks for a snapshot, but minimal metadata reads no longer pay the recursive iframe walk on every call.
+
+- Wait polling no longer computes one monolithic visibility/text/value bundle for every condition.
+  - Landed work: `src/tools/wait.rs` now emits condition-specific browser predicates so `present`, `enabled`, `editable`, `text_contains`, and `value_equals` only read the fields they need, while `visible` keeps the layout/style-sensitive path.
+  - Residual note: the remaining wait-specific hotspot is `revision_changed`, which is now the exception rather than the default behavior for every wait condition.
 
 ## Medium Priority
 
@@ -55,16 +65,16 @@ This note is a static inspection of likely bottlenecks in the current codebase. 
 
 ## Lower-Priority Memory Note
 
-10. DOM revision tracking adds an always-on subtree `MutationObserver` per extracted same-origin document
-   - Evidence: the extraction script installs `__browserUseDocumentState` with a `MutationObserver` over `subtree`, `childList`, `attributes`, and `characterData` (`src/dom/extract_dom.js:20-39`), including same-origin frame documents when expanded (`src/dom/extract_dom.js:585-615`).
-   - Why it matters: the callback is cheap, but on very dynamic pages it adds background work to every DOM mutation and keeps extra per-document state alive for the page lifetime.
-   - Fix direction: keep it for now, but do not treat revision tracking as free; if extraction moves to a cheaper revision API, re-check whether this observer is still the right tradeoff.
+10. DOM revision tracking and frame invalidation add always-on observers to same-origin documents
+   - Evidence: the extraction and metadata scripts install `__browserUseDocumentState` with a `MutationObserver` over `subtree`, `childList`, `attributes`, and `characterData` (`src/dom/extract_dom.js:20-108`, `src/dom/document_metadata.js:18-311`), including same-origin frame documents when expanded or tracked.
+   - Why it matters: the callbacks are cheap, but on very dynamic pages they add background work to every DOM mutation and keep extra per-document state alive for the page lifetime.
+   - Fix direction: keep this for now because it underpins the landed revision and frame-tracker behavior, but do not treat it as free; if extraction or revision polling moves again, re-check whether the observer footprint is still the right tradeoff.
 
 ## Suggested Order Of Attack
 
-1. Fix `wait(revision_changed)` so it polls only revision tokens, not full snapshots.
-2. Stop returning full document envelopes for every successful action by default.
-3. Rework the MCP session lock and blocking sleeps so one call cannot stall the whole server.
-4. Cache active tab state instead of probing all tabs on each lookup.
-5. Cache markdown extraction by document revision.
+1. Stop returning full document envelopes for every successful action by default.
+2. Rework the MCP session lock and blocking sleeps so one call cannot stall the whole server.
+3. Cache active tab state instead of probing all tabs on each lookup.
+4. Cache markdown extraction by document revision.
+5. Revisit `wait(revision_changed)` only if profiling shows it is still materially hot after the landed condition-specific predicate work.
 6. Tighten scheme handling and keep operator tools heavily gated.

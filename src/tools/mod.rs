@@ -3,6 +3,7 @@
 //! This module provides a framework for browser automation tools and
 //! includes implementations of common browser operations.
 
+pub(crate) mod actionability;
 pub mod click;
 pub mod close;
 pub mod close_tab;
@@ -12,8 +13,8 @@ pub mod go_back;
 pub mod go_forward;
 pub mod hover;
 pub mod html_to_markdown;
-pub mod inspect_node;
 pub mod input;
+pub mod inspect_node;
 pub mod markdown;
 pub mod navigate;
 pub mod new_tab;
@@ -38,8 +39,8 @@ pub use extract::ExtractParams;
 pub use go_back::GoBackParams;
 pub use go_forward::GoForwardParams;
 pub use hover::HoverParams;
-pub use inspect_node::{InspectDetail, InspectNodeParams};
 pub use input::InputParams;
+pub use inspect_node::{InspectDetail, InspectNodeParams};
 pub use markdown::GetMarkdownParams;
 pub use navigate::NavigateParams;
 pub use new_tab::NewTabParams;
@@ -210,16 +211,6 @@ fn stale_node_ref_failure(provided: &NodeRef, current: &DocumentMetadata) -> Too
     )
 }
 
-pub(crate) fn resolve_target(
-    tool: &str,
-    selector: Option<String>,
-    index: Option<usize>,
-    node_ref: Option<NodeRef>,
-    dom: Option<&DomTree>,
-) -> Result<TargetResolution> {
-    resolve_target_with_cursor(tool, selector, index, node_ref, None, dom)
-}
-
 pub(crate) fn resolve_target_with_cursor(
     tool: &str,
     selector: Option<String>,
@@ -320,12 +311,14 @@ pub(crate) fn resolve_target_with_cursor(
                 )));
             }
 
-            let mut cursor = dom.cursor_for_index(cursor_input.node_ref.index).ok_or_else(|| {
-                BrowserError::ElementNotFound(format!(
-                    "No element with index {} for the provided cursor",
-                    cursor_input.node_ref.index
-                ))
-            })?;
+            let mut cursor = dom
+                .cursor_for_index(cursor_input.node_ref.index)
+                .ok_or_else(|| {
+                    BrowserError::ElementNotFound(format!(
+                        "No element with index {} for the provided cursor",
+                        cursor_input.node_ref.index
+                    ))
+                })?;
             cursor.node_ref = cursor_input.node_ref.clone();
 
             Ok(TargetResolution::Resolved(ResolvedTarget {
@@ -738,8 +731,15 @@ mod tests {
 
     #[test]
     fn test_resolve_target_prefers_css_selector() {
-        let target = resolve_target("click", Some("#submit".to_string()), None, None, None)
-            .expect("selector target should resolve");
+        let target = resolve_target_with_cursor(
+            "click",
+            Some("#submit".to_string()),
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("selector target should resolve");
 
         match target {
             TargetResolution::Resolved(target) => {
@@ -762,7 +762,7 @@ mod tests {
     #[test]
     fn test_resolve_target_resolves_index_via_dom() {
         let dom = sample_dom();
-        let target = resolve_target("click", None, Some(1), None, Some(&dom))
+        let target = resolve_target_with_cursor("click", None, Some(1), None, None, Some(&dom))
             .expect("index target should resolve against DOM");
 
         match target {
@@ -854,11 +854,18 @@ mod tests {
 
     #[test]
     fn test_resolve_target_rejects_invalid_combinations() {
-        let both = resolve_target("click", Some("#submit".to_string()), Some(1), None, None)
-            .expect("invalid combination should return tool failure");
+        let both = resolve_target_with_cursor(
+            "click",
+            Some("#submit".to_string()),
+            Some(1),
+            None,
+            None,
+            None,
+        )
+        .expect("invalid combination should return tool failure");
         assert!(matches!(both, TargetResolution::Failure(_)));
 
-        let neither = resolve_target("click", None, None, None, None)
+        let neither = resolve_target_with_cursor("click", None, None, None, None, None)
             .expect("missing target should return tool failure");
         assert!(matches!(neither, TargetResolution::Failure(_)));
     }
@@ -866,7 +873,7 @@ mod tests {
     #[test]
     fn test_resolve_target_errors_for_missing_index() {
         let dom = sample_dom();
-        let result = resolve_target("click", None, Some(9), None, Some(&dom));
+        let result = resolve_target_with_cursor("click", None, Some(9), None, None, Some(&dom));
 
         assert!(matches!(result, Err(BrowserError::ElementNotFound(_))));
     }
@@ -874,7 +881,7 @@ mod tests {
     #[test]
     fn test_resolve_target_rejects_stale_node_ref() {
         let dom = sample_dom();
-        let result = resolve_target(
+        let result = resolve_target_with_cursor(
             "click",
             None,
             None,
@@ -883,6 +890,7 @@ mod tests {
                 revision: "main:0".to_string(),
                 index: 1,
             }),
+            None,
             Some(&dom),
         )
         .expect("stale node ref should become tool failure");

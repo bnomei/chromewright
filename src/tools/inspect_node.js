@@ -624,14 +624,14 @@
 
   try {
     let match = null;
-    if (typeof config.target_index === 'number') {
-      match = searchActionableIndex(config.target_index);
-    }
-
     let selectorSearch = null;
-    if (!match && config.selector) {
+    if (config.selector) {
       selectorSearch = querySelectorAcrossScopes(config.selector);
       match = selectorSearch.match;
+    }
+
+    if (!match && typeof config.target_index === 'number') {
+      match = searchActionableIndex(config.target_index);
     }
 
     if (!match || !match.element) {
@@ -652,10 +652,10 @@
     }
 
     const actionableIndex =
-      typeof config.target_index === 'number'
-        ? config.target_index
-        : (match.frame_depth || 0) === 0
-          ? findActionableIndexForElement(match.element)
+      (match.frame_depth || 0) === 0
+        ? findActionableIndexForElement(match.element)
+        : typeof config.target_index === 'number'
+          ? config.target_index
           : null;
 
     return JSON.stringify(inspectElement(match.element, match.frame_depth || 0, actionableIndex));

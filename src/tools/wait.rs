@@ -1,49 +1,19 @@
-use crate::dom::NodeRef;
+use crate::dom::{Cursor, NodeRef};
 use crate::error::{BrowserError, Result};
 use crate::tools::{
-    DocumentEnvelopeOptions, TargetResolution, Tool, ToolContext, ToolResult,
-    build_document_envelope, resolve_target,
+    DocumentEnvelopeOptions, TargetEnvelope, TargetResolution, Tool, ToolContext, ToolResult,
+    actionability::{ActionabilityPredicate, ActionabilityRequest, probe_actionability},
+    build_document_envelope,
+    click::{
+        ActionabilityWaitState, TargetStatus, build_interaction_handoff,
+        resolve_interaction_target, wait_for_actionability,
+    },
 };
 use headless_chrome::Tab;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-
-const WAIT_NODE_STATE_JS: &str = r#"
-(() => {
-  const config = __WAIT_CONFIG__;
-  const element = document.querySelector(config.selector);
-  if (!element) {
-    return JSON.stringify({
-      present: false,
-      visible: false,
-      enabled: false,
-      editable: false,
-      text: '',
-      value: null
-    });
-  }
-
-  const rect = element.getBoundingClientRect();
-  const style = window.getComputedStyle(element);
-  const visible = rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
-  const disabled = Boolean(element.disabled) || element.getAttribute('aria-disabled') === 'true';
-  const editable = !disabled && (
-    element.matches('input, textarea, select') ||
-    element.isContentEditable
-  );
-
-  return JSON.stringify({
-    present: true,
-    visible,
-    enabled: !disabled,
-    editable,
-    text: (element.innerText || element.textContent || '').trim(),
-    value: ('value' in element) ? element.value : null
-  });
-})()
-"#;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -53,6 +23,9 @@ pub enum WaitCondition {
     Visible,
     Enabled,
     Editable,
+    Actionable,
+    Stable,
+    ReceivesEvents,
     TextContains,
     ValueEquals,
     RevisionChanged,
@@ -75,6 +48,10 @@ pub struct WaitParams {
     /// Revision-scoped node reference from the snapshot tool
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node_ref: Option<NodeRef>,
+
+    /// Cursor from the snapshot or inspect_node tools
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<Cursor>,
 
     /// Wait predicate to apply
     #[serde(default = "default_condition")]
@@ -112,6 +89,12 @@ pub struct WaitOutput {
     pub condition: String,
     pub elapsed_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_before: Option<TargetEnvelope>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_after: Option<TargetEnvelope>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_status: Option<TargetStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub since_revision: Option<String>,
 }
 
@@ -143,6 +126,9 @@ impl Tool for WaitTool {
                     action: "wait".to_string(),
                     condition: "navigation_settled".to_string(),
                     elapsed_ms: start.elapsed().as_millis() as u64,
+                    target_before: None,
+                    target_after: None,
+                    target_status: None,
                     since_revision: None,
                 }))
             }
@@ -174,6 +160,9 @@ impl Tool for WaitTool {
                             action: "wait".to_string(),
                             condition: "revision_changed".to_string(),
                             elapsed_ms: start.elapsed().as_millis() as u64,
+                            target_before: None,
+                            target_after: None,
+                            target_status: None,
                             since_revision: Some(baseline),
                         }));
                     }
@@ -189,22 +178,16 @@ impl Tool for WaitTool {
                 }
             }
             condition => {
-                let target = {
-                    let dom = if params.index.is_some() || params.node_ref.is_some() {
-                        Some(context.get_dom()?)
-                    } else {
-                        None
-                    };
-                    match resolve_target(
-                        "wait",
-                        params.selector.clone(),
-                        params.index,
-                        params.node_ref.clone(),
-                        dom,
-                    )? {
-                        TargetResolution::Resolved(target) => target,
-                        TargetResolution::Failure(failure) => return Ok(failure),
-                    }
+                let target = match resolve_interaction_target(
+                    "wait",
+                    params.selector.clone(),
+                    params.index,
+                    params.node_ref.clone(),
+                    params.cursor.clone(),
+                    context,
+                )? {
+                    TargetResolution::Resolved(target) => target,
+                    TargetResolution::Failure(failure) => return Ok(failure),
                 };
 
                 validate_wait_condition(
@@ -213,25 +196,65 @@ impl Tool for WaitTool {
                     params.value.as_deref(),
                 )?;
                 let active_tab = context.session.tab()?;
+                let predicates = wait_condition_predicates(&condition);
+
+                if wait_condition_uses_interaction_scroll(&condition) {
+                    match wait_for_actionability(
+                        &active_tab,
+                        &target,
+                        predicates,
+                        params.timeout_ms,
+                    )? {
+                        ActionabilityWaitState::Ready => {
+                            let handoff = build_interaction_handoff(context, &active_tab, &target)?;
+                            return Ok(ToolResult::success_with(WaitOutput {
+                                envelope: handoff.envelope,
+                                action: "wait".to_string(),
+                                condition: condition_name(&condition).to_string(),
+                                elapsed_ms: start.elapsed().as_millis() as u64,
+                                target_before: Some(handoff.target_before),
+                                target_after: handoff.target_after,
+                                target_status: Some(handoff.target_status),
+                                since_revision: None,
+                            }));
+                        }
+                        ActionabilityWaitState::TimedOut(_) => {
+                            return Err(BrowserError::Timeout(format!(
+                                "Condition '{}' did not match for '{}' within {} ms",
+                                condition_name(&condition),
+                                target.selector,
+                                params.timeout_ms
+                            )));
+                        }
+                    }
+                }
+
+                let target_index = target
+                    .cursor
+                    .as_ref()
+                    .map(|cursor| cursor.index)
+                    .or(target.index);
 
                 loop {
-                    let state = evaluate_node_state(&active_tab, &target.selector)?;
-                    if condition_matches(
+                    let probe = evaluate_wait_probe(
                         &condition,
-                        &state,
+                        &active_tab,
+                        &target.selector,
+                        target_index,
                         params.text.as_deref(),
                         params.value.as_deref(),
-                    ) {
-                        context.invalidate_dom();
+                    )?;
+
+                    if wait_condition_matches(&condition, predicates, &probe) {
+                        let handoff = build_interaction_handoff(context, &active_tab, &target)?;
                         return Ok(ToolResult::success_with(WaitOutput {
-                            envelope: build_document_envelope(
-                                context,
-                                Some(&target),
-                                DocumentEnvelopeOptions::minimal(),
-                            )?,
+                            envelope: handoff.envelope,
                             action: "wait".to_string(),
                             condition: condition_name(&condition).to_string(),
                             elapsed_ms: start.elapsed().as_millis() as u64,
+                            target_before: Some(handoff.target_before),
+                            target_after: handoff.target_after,
+                            target_status: Some(handoff.target_status),
                             since_revision: None,
                         }));
                     }
@@ -249,6 +272,28 @@ impl Tool for WaitTool {
                 }
             }
         }
+    }
+}
+
+fn wait_condition_predicates(condition: &WaitCondition) -> &'static [ActionabilityPredicate] {
+    match condition {
+        WaitCondition::NavigationSettled | WaitCondition::RevisionChanged => &[],
+        WaitCondition::Present => &[ActionabilityPredicate::Present],
+        WaitCondition::Visible => &[ActionabilityPredicate::Visible],
+        WaitCondition::Enabled => &[ActionabilityPredicate::Enabled],
+        WaitCondition::Editable => &[ActionabilityPredicate::Editable],
+        WaitCondition::Actionable => &[
+            ActionabilityPredicate::Present,
+            ActionabilityPredicate::Visible,
+            ActionabilityPredicate::Enabled,
+            ActionabilityPredicate::Stable,
+            ActionabilityPredicate::ReceivesEvents,
+            ActionabilityPredicate::UnobscuredCenter,
+        ],
+        WaitCondition::Stable => &[ActionabilityPredicate::Stable],
+        WaitCondition::ReceivesEvents => &[ActionabilityPredicate::ReceivesEvents],
+        WaitCondition::TextContains => &[ActionabilityPredicate::TextContains],
+        WaitCondition::ValueEquals => &[ActionabilityPredicate::ValueEquals],
     }
 }
 
@@ -275,57 +320,56 @@ fn condition_name(condition: &WaitCondition) -> &'static str {
         WaitCondition::Visible => "visible",
         WaitCondition::Enabled => "enabled",
         WaitCondition::Editable => "editable",
+        WaitCondition::Actionable => "actionable",
+        WaitCondition::Stable => "stable",
+        WaitCondition::ReceivesEvents => "receives_events",
         WaitCondition::TextContains => "text_contains",
         WaitCondition::ValueEquals => "value_equals",
         WaitCondition::RevisionChanged => "revision_changed",
     }
 }
 
-fn evaluate_node_state(tab: &Arc<Tab>, selector: &str) -> Result<serde_json::Value> {
-    let config = serde_json::json!({
-        "selector": selector,
-    });
-    let js = WAIT_NODE_STATE_JS.replace("__WAIT_CONFIG__", &config.to_string());
-    let result = tab
-        .evaluate(&js, false)
-        .map_err(|e| BrowserError::ToolExecutionFailed {
-            tool: "wait".to_string(),
-            reason: e.to_string(),
-        })?;
-
-    if let Some(serde_json::Value::String(json_str)) = result.value {
-        serde_json::from_str(&json_str).map_err(BrowserError::from)
-    } else {
-        Ok(result.value.unwrap_or(serde_json::Value::Null))
-    }
+fn wait_condition_uses_interaction_scroll(condition: &WaitCondition) -> bool {
+    matches!(
+        condition,
+        WaitCondition::Actionable | WaitCondition::ReceivesEvents
+    )
 }
 
-fn condition_matches(
+fn evaluate_wait_probe(
     condition: &WaitCondition,
-    state: &serde_json::Value,
+    tab: &Arc<Tab>,
+    selector: &str,
+    target_index: Option<usize>,
     expected_text: Option<&str>,
     expected_value: Option<&str>,
+) -> Result<crate::tools::actionability::ActionabilityProbeResult> {
+    probe_actionability(
+        tab,
+        &ActionabilityRequest {
+            selector,
+            target_index,
+            predicates: wait_condition_predicates(condition),
+            expected_text,
+            expected_value,
+        },
+    )
+}
+
+fn wait_condition_matches(
+    _condition: &WaitCondition,
+    predicates: &[ActionabilityPredicate],
+    probe: &crate::tools::actionability::ActionabilityProbeResult,
 ) -> bool {
-    match condition {
-        WaitCondition::NavigationSettled | WaitCondition::RevisionChanged => false,
-        WaitCondition::Present => state["present"].as_bool() == Some(true),
-        WaitCondition::Visible => state["visible"].as_bool() == Some(true),
-        WaitCondition::Enabled => state["enabled"].as_bool() == Some(true),
-        WaitCondition::Editable => state["editable"].as_bool() == Some(true),
-        WaitCondition::TextContains => state["text"]
-            .as_str()
-            .map(|text| text.contains(expected_text.unwrap_or_default()))
-            .unwrap_or(false),
-        WaitCondition::ValueEquals => state["value"]
-            .as_str()
-            .map(|value| value == expected_value.unwrap_or_default())
-            .unwrap_or(false),
-    }
+    predicates
+        .iter()
+        .all(|predicate| probe.predicate(*predicate) == Some(true))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tools::actionability::ActionabilityPredicate;
     use serde_json::json;
 
     #[test]
@@ -336,6 +380,7 @@ mod tests {
         assert_eq!(params.condition, WaitCondition::Present);
         assert_eq!(params.timeout_ms, 30_000);
         assert!(params.selector.is_none());
+        assert!(params.cursor.is_none());
         assert!(params.text.is_none());
         assert!(params.value.is_none());
     }
@@ -368,6 +413,9 @@ mod tests {
             (WaitCondition::Visible, "visible"),
             (WaitCondition::Enabled, "enabled"),
             (WaitCondition::Editable, "editable"),
+            (WaitCondition::Actionable, "actionable"),
+            (WaitCondition::Stable, "stable"),
+            (WaitCondition::ReceivesEvents, "receives_events"),
             (WaitCondition::TextContains, "text_contains"),
             (WaitCondition::ValueEquals, "value_equals"),
             (WaitCondition::RevisionChanged, "revision_changed"),
@@ -379,75 +427,154 @@ mod tests {
     }
 
     #[test]
-    fn test_condition_matches_for_supported_wait_conditions() {
-        let state = json!({
-            "present": true,
-            "visible": true,
-            "enabled": true,
-            "editable": false,
-            "text": "hello world",
-            "value": "expected",
-        });
+    fn test_wait_condition_predicates_reuse_shared_actionability_model() {
+        assert_eq!(
+            wait_condition_predicates(&WaitCondition::Present),
+            [ActionabilityPredicate::Present]
+        );
+        assert_eq!(
+            wait_condition_predicates(&WaitCondition::Visible),
+            [ActionabilityPredicate::Visible]
+        );
+        assert_eq!(
+            wait_condition_predicates(&WaitCondition::Enabled),
+            [ActionabilityPredicate::Enabled]
+        );
+        assert_eq!(
+            wait_condition_predicates(&WaitCondition::Editable),
+            [ActionabilityPredicate::Editable]
+        );
+        assert_eq!(
+            wait_condition_predicates(&WaitCondition::Actionable),
+            [
+                ActionabilityPredicate::Present,
+                ActionabilityPredicate::Visible,
+                ActionabilityPredicate::Enabled,
+                ActionabilityPredicate::Stable,
+                ActionabilityPredicate::ReceivesEvents,
+                ActionabilityPredicate::UnobscuredCenter,
+            ]
+        );
+        assert_eq!(
+            wait_condition_predicates(&WaitCondition::Stable),
+            [ActionabilityPredicate::Stable]
+        );
+        assert_eq!(
+            wait_condition_predicates(&WaitCondition::ReceivesEvents),
+            [ActionabilityPredicate::ReceivesEvents]
+        );
+        assert_eq!(
+            wait_condition_predicates(&WaitCondition::TextContains),
+            [ActionabilityPredicate::TextContains]
+        );
+        assert_eq!(
+            wait_condition_predicates(&WaitCondition::ValueEquals),
+            [ActionabilityPredicate::ValueEquals]
+        );
+        assert!(wait_condition_predicates(&WaitCondition::RevisionChanged).is_empty());
+        assert!(wait_condition_predicates(&WaitCondition::NavigationSettled).is_empty());
+    }
 
-        assert!(condition_matches(
-            &WaitCondition::Present,
-            &state,
-            None,
-            None
+    #[test]
+    fn test_wait_condition_predicates_cover_every_targeted_wait_condition() {
+        let targeted_conditions = [
+            WaitCondition::Present,
+            WaitCondition::Visible,
+            WaitCondition::Enabled,
+            WaitCondition::Editable,
+            WaitCondition::Actionable,
+            WaitCondition::Stable,
+            WaitCondition::ReceivesEvents,
+            WaitCondition::TextContains,
+            WaitCondition::ValueEquals,
+        ];
+
+        for condition in targeted_conditions {
+            assert!(
+                !wait_condition_predicates(&condition).is_empty(),
+                "expected shared predicates for '{}'",
+                condition_name(&condition),
+            );
+        }
+
+        assert_eq!(
+            wait_condition_predicates(&WaitCondition::Actionable)
+                .iter()
+                .map(|predicate| predicate.key())
+                .collect::<Vec<_>>(),
+            vec![
+                "present",
+                "visible",
+                "enabled",
+                "stable",
+                "receives_events",
+                "unobscured_center",
+            ]
+        );
+        assert_eq!(
+            wait_condition_predicates(&WaitCondition::Stable)[0].key(),
+            "stable"
+        );
+        assert_eq!(
+            wait_condition_predicates(&WaitCondition::ReceivesEvents)[0].key(),
+            "receives_events"
+        );
+        assert_eq!(
+            wait_condition_predicates(&WaitCondition::TextContains)[0].key(),
+            "text_contains"
+        );
+        assert_eq!(
+            wait_condition_predicates(&WaitCondition::ValueEquals)[0].key(),
+            "value_equals"
+        );
+    }
+
+    #[test]
+    fn test_wait_condition_matches_requires_all_actionable_predicates() {
+        let probe = crate::tools::actionability::ActionabilityProbeResult {
+            present: true,
+            visible: Some(true),
+            enabled: Some(true),
+            editable: None,
+            stable: Some(true),
+            receives_events: Some(true),
+            in_viewport: None,
+            unobscured_center: Some(true),
+            text_contains: None,
+            value_equals: None,
+            frame_depth: Some(0),
+            diagnostics: None,
+        };
+        assert!(wait_condition_matches(
+            &WaitCondition::Actionable,
+            wait_condition_predicates(&WaitCondition::Actionable),
+            &probe
         ));
-        assert!(condition_matches(
-            &WaitCondition::Visible,
-            &state,
-            None,
-            None
+
+        let obscured = crate::tools::actionability::ActionabilityProbeResult {
+            unobscured_center: Some(false),
+            ..probe
+        };
+        assert!(!wait_condition_matches(
+            &WaitCondition::Actionable,
+            wait_condition_predicates(&WaitCondition::Actionable),
+            &obscured
         ));
-        assert!(condition_matches(
-            &WaitCondition::Enabled,
-            &state,
-            None,
-            None
+    }
+
+    #[test]
+    fn test_wait_condition_uses_interaction_scroll_for_event_delivery_checks() {
+        assert!(wait_condition_uses_interaction_scroll(
+            &WaitCondition::Actionable
         ));
-        assert!(!condition_matches(
-            &WaitCondition::Editable,
-            &state,
-            None,
-            None
+        assert!(wait_condition_uses_interaction_scroll(
+            &WaitCondition::ReceivesEvents
         ));
-        assert!(condition_matches(
-            &WaitCondition::TextContains,
-            &state,
-            Some("hello"),
-            None
+        assert!(!wait_condition_uses_interaction_scroll(
+            &WaitCondition::Visible
         ));
-        assert!(!condition_matches(
-            &WaitCondition::TextContains,
-            &state,
-            Some("missing"),
-            None
-        ));
-        assert!(condition_matches(
-            &WaitCondition::ValueEquals,
-            &state,
-            None,
-            Some("expected")
-        ));
-        assert!(!condition_matches(
-            &WaitCondition::ValueEquals,
-            &state,
-            None,
-            Some("other")
-        ));
-        assert!(!condition_matches(
-            &WaitCondition::NavigationSettled,
-            &state,
-            None,
-            None
-        ));
-        assert!(!condition_matches(
-            &WaitCondition::RevisionChanged,
-            &state,
-            None,
-            None
+        assert!(!wait_condition_uses_interaction_scroll(
+            &WaitCondition::Stable
         ));
     }
 }

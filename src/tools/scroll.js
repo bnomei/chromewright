@@ -10,14 +10,16 @@
 
   const actualScroll = window.scrollY - beforeScrollY;
   const scrollHeight = Math.max(
-    document.documentElement.scrollHeight,
-    document.body.scrollHeight
+    document.documentElement ? document.documentElement.scrollHeight : 0,
+    document.body ? document.body.scrollHeight : 0
   );
   const scrollTop = window.scrollY;
   const clientHeight =
-    window.innerHeight || document.documentElement.clientHeight;
+    window.innerHeight ||
+    (document.documentElement ? document.documentElement.clientHeight : 0);
+  const isAtTop = Math.abs(scrollTop) <= 1;
   const isAtBottom =
     Math.abs(scrollHeight - scrollTop - clientHeight) <= 1;
 
-  return JSON.stringify({ actualScroll, isAtBottom });
+  return JSON.stringify({ actualScroll, isAtBottom, scrollY: scrollTop, isAtTop });
 })()

@@ -344,6 +344,7 @@ fn test_wait_tool_navigation_settled() {
                 selector: None,
                 index: None,
                 node_ref: None,
+                cursor: None,
                 condition: WaitCondition::NavigationSettled,
                 text: None,
                 value: None,

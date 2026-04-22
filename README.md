@@ -111,9 +111,13 @@ Raw JavaScript evaluation and path-based screenshot capture are intentionally ou
 High-level action tools now return updated document metadata by default; call `snapshot` when you need
 the full YAML snapshot plus actionable-node list.
 For targeted DOM reads, use `snapshot` to choose a node and reuse its `cursor`, then call
-`inspect_node`; keep `evaluate` as the explicit operator escape hatch when the bounded inspection
-surface is insufficient. During the migration, targetable tools still accept `selector`, `index`,
-and `node_ref`, but `cursor` is the preferred follow-up handle.
+`inspect_node` as the default targeted inspection tool; keep `evaluate` as the explicit operator
+escape hatch when the bounded inspection surface is insufficient. During the migration, targetable
+inspection and interaction tools still accept `selector`, `index`, and `node_ref`, but `cursor`
+is the preferred follow-up handle.
+Non-targeted `scroll` and `press_key` calls also return compact follow-up state for the next tool
+decision: fresh `document` metadata plus `viewport_after` or `focus_after` when those hints are
+available.
 See [docs/tool-description-index.md](docs/tool-description-index.md) for the concise tool-description
 index and wording rules.
 

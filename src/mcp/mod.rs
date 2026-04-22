@@ -100,7 +100,7 @@ register_mcp_tools! {
     // ---- Page Content and Extraction ----
     browser_get_markdown => tools::markdown::GetMarkdownTool, "Read page content as markdown. Extraction only; use snapshot for actions.";
     browser_snapshot => tools::snapshot::SnapshotTool, "Capture page state and node cursors. Next: inspect_node, click, input, select, hover, wait.";
-    browser_inspect_node => tools::inspect_node::InspectNodeTool, "Inspect one node. Prefer cursor after snapshot; selector/index/node_ref still work.";
+    browser_inspect_node => tools::inspect_node::InspectNodeTool, "Inspect one node after snapshot. Prefer cursor; selector/index/node_ref still work.";
     // browser_get_text => tools::extract::ExtractContentTool, "Extract text or HTML content from the page or an element";
 
     // ---- Interaction ----
@@ -108,8 +108,8 @@ register_mcp_tools! {
     browser_hover => tools::hover::HoverTool, "Reveal hover state. Usually after snapshot; next snapshot or click.";
     browser_select => tools::select::SelectTool, "Choose a dropdown value. Usually after snapshot; next wait or snapshot.";
     browser_input_fill => tools::input::InputTool, "Type into an input. Usually after snapshot; next press_key, click, or wait.";
-    browser_press_key => tools::press_key::PressKeyTool, "Press a keyboard key. Next: snapshot or wait if page state may change.";
-    browser_scroll => tools::scroll::ScrollTool, "Scroll the page. Next: snapshot for newly revealed content.";
+    browser_press_key => tools::press_key::PressKeyTool, "Press a keyboard key. Returns focus hints; snapshot only for broader rereads.";
+    browser_scroll => tools::scroll::ScrollTool, "Scroll the page. Returns viewport hints; snapshot only for broader rereads.";
     browser_wait => tools::wait::WaitTool, "Pause for load, revision change, or node state. Use after actions or before rereading.";
 
     // ---- Tab Management ----
