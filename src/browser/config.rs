@@ -1,4 +1,10 @@
+use crate::error::{BrowserError, Result};
+use serde::Deserialize;
 use std::path::PathBuf;
+use std::time::Duration;
+
+const DEVTOOLS_VERSION_PATH: &str = "/json/version";
+const DEVTOOLS_VERSION_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Options for launching a new browser instance
 #[derive(Debug, Clone)]
@@ -87,17 +93,103 @@ impl LaunchOptions {
 /// Options for connecting to an existing browser instance
 #[derive(Debug, Clone)]
 pub struct ConnectionOptions {
-    /// WebSocket URL for Chrome DevTools Protocol
+    /// Chrome DevTools browser WebSocket URL, or a stable DevTools HTTP endpoint
+    /// such as `http://127.0.0.1:9222`.
     pub ws_url: String,
 }
 
 impl ConnectionOptions {
-    /// Create new ConnectionOptions with WebSocket URL
+    /// Create new ConnectionOptions with a Chrome browser WebSocket URL or a
+    /// stable DevTools HTTP endpoint.
     pub fn new<S: Into<String>>(ws_url: S) -> Self {
         Self {
             ws_url: ws_url.into(),
         }
     }
+
+    /// Resolve the configured endpoint into the browser-scoped DevTools WebSocket URL
+    /// expected by `headless_chrome`.
+    pub fn resolved_ws_url(&self) -> Result<String> {
+        resolve_browser_ws_url(&self.ws_url)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct DevToolsVersionResponse {
+    #[serde(rename = "webSocketDebuggerUrl")]
+    web_socket_debugger_url: String,
+}
+
+fn resolve_browser_ws_url(endpoint: &str) -> Result<String> {
+    let trimmed = endpoint.trim();
+    if trimmed.is_empty() {
+        return Err(BrowserError::ConnectionFailed(
+            "Chrome DevTools endpoint cannot be empty".to_string(),
+        ));
+    }
+
+    if is_browser_ws_url(trimmed) {
+        return Ok(trimmed.to_string());
+    }
+
+    let version_url = devtools_version_url(trimmed)?;
+    fetch_browser_ws_url(&version_url)
+}
+
+fn is_browser_ws_url(endpoint: &str) -> bool {
+    endpoint.starts_with("ws://") || endpoint.starts_with("wss://")
+}
+
+fn devtools_version_url(endpoint: &str) -> Result<String> {
+    if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
+        let endpoint = endpoint.trim_end_matches('/');
+        if endpoint.ends_with(DEVTOOLS_VERSION_PATH) {
+            return Ok(endpoint.to_string());
+        }
+        return Ok(format!("{endpoint}{DEVTOOLS_VERSION_PATH}"));
+    }
+
+    Err(BrowserError::ConnectionFailed(format!(
+        "Unsupported browser endpoint '{endpoint}'. Use a browser websocket URL or an http(s) DevTools address such as http://127.0.0.1:9222"
+    )))
+}
+
+fn fetch_browser_ws_url(version_url: &str) -> Result<String> {
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(DEVTOOLS_VERSION_TIMEOUT))
+        .build()
+        .into();
+
+    let mut response = agent.get(version_url).call().map_err(|err| {
+        BrowserError::ConnectionFailed(format!(
+            "Failed to resolve Chrome browser websocket from {version_url}: {err}"
+        ))
+    })?;
+
+    let body = response.body_mut().read_to_string().map_err(|err| {
+        BrowserError::ConnectionFailed(format!(
+            "Failed to read Chrome DevTools metadata from {version_url}: {err}"
+        ))
+    })?;
+
+    parse_browser_ws_url_from_version_body(version_url, &body)
+}
+
+fn parse_browser_ws_url_from_version_body(version_url: &str, body: &str) -> Result<String> {
+    let payload: DevToolsVersionResponse = serde_json::from_str(body).map_err(|err| {
+        BrowserError::ConnectionFailed(format!(
+            "Failed to parse Chrome DevTools metadata from {version_url}: {err}"
+        ))
+    })?;
+
+    let ws_url = payload.web_socket_debugger_url.trim();
+    if ws_url.is_empty() {
+        return Err(BrowserError::ConnectionFailed(format!(
+            "Chrome DevTools metadata at {version_url} did not include webSocketDebuggerUrl"
+        )));
+    }
+
+    Ok(ws_url.to_string())
 }
 
 #[cfg(test)]
@@ -134,5 +226,57 @@ mod tests {
         let opts = ConnectionOptions::new("ws://localhost:9222");
 
         assert_eq!(opts.ws_url, "ws://localhost:9222");
+    }
+
+    #[test]
+    fn test_connection_options_passes_websocket_urls_through() {
+        let opts = ConnectionOptions::new("ws://127.0.0.1:9222/devtools/browser/test");
+
+        assert_eq!(
+            opts.resolved_ws_url()
+                .expect("websocket URLs should pass through"),
+            "ws://127.0.0.1:9222/devtools/browser/test"
+        );
+    }
+
+    #[test]
+    fn test_connection_options_appends_json_version_for_http_origin() {
+        assert_eq!(
+            devtools_version_url("http://127.0.0.1:9222").expect("http origin should normalize"),
+            "http://127.0.0.1:9222/json/version"
+        );
+    }
+
+    #[test]
+    fn test_connection_options_keeps_explicit_json_version_url() {
+        assert_eq!(
+            devtools_version_url("http://127.0.0.1:9222/json/version")
+                .expect("explicit json/version should be preserved"),
+            "http://127.0.0.1:9222/json/version"
+        );
+    }
+
+    #[test]
+    fn test_connection_options_rejects_unknown_scheme() {
+        let err = ConnectionOptions::new("localhost:9222")
+            .resolved_ws_url()
+            .expect_err("unknown schemes should fail");
+
+        assert!(matches!(err, BrowserError::ConnectionFailed(_)));
+        assert!(
+            err.to_string()
+                .contains("Unsupported browser endpoint 'localhost:9222'")
+        );
+    }
+
+    #[test]
+    fn test_connection_options_parses_devtools_version_body() {
+        let resolved = parse_browser_ws_url_from_version_body(
+            "http://127.0.0.1:9222/json/version",
+            r#"{"webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/browser/fake"}"#,
+        )
+        .expect("version body should expose websocket URL");
+
+        assert_eq!(resolved, "ws://127.0.0.1:9222/devtools/browser/fake");
     }
 }

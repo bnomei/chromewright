@@ -1,7 +1,7 @@
-use crate::error::Result;
+use crate::error::{BrowserError, Result};
 use crate::tools::utils::validate_navigation_url;
 use crate::tools::{
-    DocumentEnvelopeOptions, Tool, ToolContext, ToolResult, build_document_envelope,
+    build_document_envelope, DocumentEnvelopeOptions, Tool, ToolContext, ToolResult,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -26,8 +26,20 @@ pub struct NewTabOutput {
     #[serde(flatten)]
     pub envelope: crate::tools::DocumentEnvelope,
     pub action: String,
+    pub tab_id: String,
+    pub tab: TabNavigationInfo,
+    pub active_tab: TabNavigationInfo,
     pub url: String,
     pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TabNavigationInfo {
+    pub tab_id: String,
+    pub index: usize,
+    pub active: bool,
+    pub title: String,
+    pub url: String,
 }
 
 impl Tool for NewTabTool {
@@ -44,13 +56,51 @@ impl Tool for NewTabTool {
 
     fn execute_typed(&self, params: NewTabParams, context: &mut ToolContext) -> Result<ToolResult> {
         let normalized_url = validate_navigation_url(&params.url, params.allow_unsafe)?;
-        context.session.open_tab_entry(&normalized_url)?;
+        let opened = context.session.open_tab(&normalized_url)?;
         context.invalidate_dom();
+        let tab_list = context.session.tab_overview()?;
+        let tab = tab_list
+            .iter()
+            .enumerate()
+            .find(|(_, tab)| tab.id == opened.id)
+            .map(|(index, tab)| TabNavigationInfo {
+                tab_id: tab.id.clone(),
+                index,
+                active: tab.active,
+                title: tab.title.clone(),
+                url: tab.url.clone(),
+            })
+            .ok_or_else(|| {
+                BrowserError::TabOperationFailed(format!(
+                    "Opened tab {} was not present in the tab overview",
+                    opened.id
+                ))
+            })?;
+        let active_tab = tab_list
+            .iter()
+            .enumerate()
+            .find(|(_, tab)| tab.active)
+            .map(|(index, tab)| TabNavigationInfo {
+                tab_id: tab.id.clone(),
+                index,
+                active: tab.active,
+                title: tab.title.clone(),
+                url: tab.url.clone(),
+            })
+            .ok_or_else(|| {
+                BrowserError::TabOperationFailed(format!(
+                    "Opened tab {} was not active after creation",
+                    opened.id
+                ))
+            })?;
         let envelope = build_document_envelope(context, None, DocumentEnvelopeOptions::minimal())?;
         Ok(context.finish(ToolResult::success_with(NewTabOutput {
             envelope,
             action: "new_tab".to_string(),
             message: format!("Opened a new tab for {}", normalized_url),
+            tab_id: tab.tab_id.clone(),
+            tab,
+            active_tab,
             url: normalized_url,
         })))
     }
@@ -59,8 +109,8 @@ impl Tool for NewTabTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::browser::BrowserSession;
     use crate::browser::backend::FakeSessionBackend;
+    use crate::browser::BrowserSession;
 
     #[test]
     fn test_new_tab_tool_executes_against_fake_backend() {
@@ -82,6 +132,11 @@ mod tests {
         let data = result.data.expect("new_tab should include data");
         assert_eq!(data["action"].as_str(), Some("new_tab"));
         assert_eq!(data["url"].as_str(), Some("https://second.example"));
+        assert_eq!(data["tab_id"].as_str(), Some("tab-2"));
+        assert_eq!(data["tab"]["tab_id"].as_str(), Some("tab-2"));
+        assert_eq!(data["tab"]["index"].as_u64(), Some(1));
+        assert_eq!(data["tab"]["active"].as_bool(), Some(true));
+        assert_eq!(data["active_tab"]["tab_id"].as_str(), Some("tab-2"));
         assert_eq!(
             data["document"]["url"].as_str(),
             Some("https://second.example")

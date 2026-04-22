@@ -8,7 +8,7 @@ use chromewright::tools::{
     select::SelectTool, snapshot::SnapshotTool, wait::WaitTool,
 };
 use log::info;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 fn snapshot_cursor_for_selector(snapshot_data: &Value, selector: &str) -> Cursor {
     let nodes = snapshot_data["nodes"]
@@ -34,6 +34,65 @@ fn snapshot_node_ref_for_selector(snapshot_data: &Value, selector: &str) -> Node
         .clone();
 
     serde_json::from_value(node_ref_value).expect("node_ref should deserialize")
+}
+
+#[test]
+#[ignore]
+fn test_read_links_tool_returns_raw_and_resolved_urls_via_registry() {
+    let Some(browser) = common::browser_or_skip() else {
+        return;
+    };
+    let session = browser.session();
+
+    let html = r#"
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Read Links Registry Test</title>
+            <base href="https://example.test/docs/">
+        </head>
+        <body>
+            <a href="guide">Guide</a>
+            <a href="https://www.rust-lang.org/">Rust</a>
+        </body>
+        </html>
+    "#;
+
+    common::navigate_encoded_html(session, html).expect("Failed to navigate");
+
+    let result = session
+        .execute_tool("read_links", json!({}))
+        .expect("read_links should execute");
+
+    assert!(result.success, "read_links should succeed");
+    let data = result.data.expect("read_links should return data");
+    let links = data["links"]
+        .as_array()
+        .expect("read_links should return a links array");
+    assert_eq!(data["count"].as_u64(), Some(2));
+
+    let guide_link = links
+        .iter()
+        .find(|link| link["text"].as_str() == Some("Guide"))
+        .expect("Guide link should be returned");
+    assert_eq!(guide_link["href"].as_str(), Some("guide"));
+    assert_eq!(
+        guide_link["resolved_url"].as_str(),
+        Some("https://example.test/docs/guide")
+    );
+
+    let rust_link = links
+        .iter()
+        .find(|link| link["text"].as_str() == Some("Rust"))
+        .expect("Rust link should be returned");
+    assert_eq!(
+        rust_link["href"].as_str(),
+        Some("https://www.rust-lang.org/")
+    );
+    assert_eq!(
+        rust_link["resolved_url"].as_str(),
+        Some("https://www.rust-lang.org/")
+    );
 }
 
 #[test]

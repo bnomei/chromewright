@@ -53,27 +53,26 @@ impl Tool for ExtractContentTool {
             Ok(result) => result,
             Err(BrowserError::EvaluationFailed(reason)) => {
                 if let Some(missing_selector) = missing_selector_from_reason(&reason) {
-                    let error = format!("Element not found: {}", missing_selector);
-                    return Ok(context.finish(ToolResult::failure_with(
-                        error.clone(),
-                        serde_json::json!({
-                            "code": "element_not_found",
-                            "error": error,
-                            "selector": missing_selector,
-                            "recovery": {
-                                "suggested_tool": "snapshot",
-                            }
-                        }),
-                    )));
+                    return Ok(
+                        context.finish(extract_missing_target_failure(&missing_selector, &format))
+                    );
                 }
 
                 return Err(BrowserError::EvaluationFailed(reason));
             }
             Err(other) => return Err(other),
         };
-        let content = match parse_extract_output(result.value) {
+        let content = match parse_extract_output(result.value, selector.as_deref()) {
             Ok(content) => content,
-            Err((reason, received_type)) => {
+            Err(ExtractFailure::MissingTarget(missing_selector)) => {
+                return Ok(
+                    context.finish(extract_missing_target_failure(&missing_selector, &format))
+                );
+            }
+            Err(ExtractFailure::InvalidPayload {
+                reason,
+                received_type,
+            }) => {
                 return Ok(context.finish(ToolResult::failure_with(
                     reason.clone(),
                     serde_json::json!({
@@ -98,6 +97,23 @@ impl Tool for ExtractContentTool {
     }
 }
 
+fn extract_missing_target_failure(selector: &str, format: &str) -> ToolResult {
+    let error = format!("Element not found: {}", selector);
+
+    ToolResult::failure_with(
+        error.clone(),
+        serde_json::json!({
+            "code": "element_not_found",
+            "error": error,
+            "selector": selector,
+            "format": format,
+            "recovery": {
+                "suggested_tool": "snapshot",
+            }
+        }),
+    )
+}
+
 fn missing_selector_from_reason(reason: &str) -> Option<String> {
     let (_, selector) = reason.rsplit_once("Element not found: ")?;
     let selector = selector.lines().next().unwrap_or(selector).trim();
@@ -108,19 +124,34 @@ fn missing_selector_from_reason(reason: &str) -> Option<String> {
     }
 }
 
+enum ExtractFailure {
+    MissingTarget(String),
+    InvalidPayload {
+        reason: String,
+        received_type: &'static str,
+    },
+}
+
 fn parse_extract_output(
     value: Option<Value>,
-) -> std::result::Result<String, (String, &'static str)> {
+    selector: Option<&str>,
+) -> std::result::Result<String, ExtractFailure> {
     match value {
         Some(Value::String(content)) => Ok(content),
         Some(other) => {
             let received_type = value_kind(&other);
-            Err((
-                format!("Extract returned an unexpected {received_type} payload"),
+            Err(ExtractFailure::InvalidPayload {
+                reason: format!("Extract returned an unexpected {received_type} payload"),
                 received_type,
-            ))
+            })
         }
-        None => Err(("Extract returned no content".to_string(), "null")),
+        None => match selector {
+            Some(selector) => Err(ExtractFailure::MissingTarget(selector.to_string())),
+            None => Err(ExtractFailure::InvalidPayload {
+                reason: "Extract returned no content".to_string(),
+                received_type: "null",
+            }),
+        },
     }
 }
 
@@ -170,6 +201,7 @@ mod tests {
 
     enum EvaluateOnlyOutcome {
         Success(Value),
+        NoValue,
         EvaluationFailed(&'static str),
     }
 
@@ -216,6 +248,11 @@ mod tests {
                     description: None,
                     type_name: Some(value_kind(value).to_string()),
                 }),
+                EvaluateOnlyOutcome::NoValue => Ok(ScriptEvaluation {
+                    value: None,
+                    description: None,
+                    type_name: Some("undefined".to_string()),
+                }),
                 EvaluateOnlyOutcome::EvaluationFailed(reason) => {
                     Err(BrowserError::EvaluationFailed((*reason).to_string()))
                 }
@@ -231,11 +268,19 @@ mod tests {
         }
 
         fn list_tabs(&self) -> crate::error::Result<Vec<TabDescriptor>> {
-            unreachable!("list_tabs is not used in this test")
+            Ok(vec![TabDescriptor {
+                id: "tab-1".to_string(),
+                title: "about:blank".to_string(),
+                url: "about:blank".to_string(),
+            }])
         }
 
         fn active_tab(&self) -> crate::error::Result<TabDescriptor> {
-            unreachable!("active_tab is not used in this test")
+            Ok(TabDescriptor {
+                id: "tab-1".to_string(),
+                title: "about:blank".to_string(),
+                url: "about:blank".to_string(),
+            })
         }
 
         fn open_tab(&self, _url: &str) -> crate::error::Result<TabDescriptor> {
@@ -325,6 +370,39 @@ mod tests {
             .expect("missing selector should include failure details");
         assert_eq!(data["code"].as_str(), Some("element_not_found"));
         assert_eq!(data["selector"].as_str(), Some("#missing"));
+        assert_eq!(data["format"].as_str(), Some("text"));
+        assert_eq!(
+            data["recovery"]["suggested_tool"].as_str(),
+            Some("snapshot")
+        );
+    }
+
+    #[test]
+    fn test_extract_tool_returns_missing_target_failure_when_selector_yields_no_payload() {
+        let session = BrowserSession::with_test_backend(EvaluateOnlyBackend {
+            outcome: EvaluateOnlyOutcome::NoValue,
+        });
+        let tool = ExtractContentTool::default();
+        let mut context = ToolContext::new(&session);
+
+        let result = tool
+            .execute_typed(
+                ExtractParams {
+                    selector: Some("#missing".to_string()),
+                    format: "html".to_string(),
+                },
+                &mut context,
+            )
+            .expect("missing selector should stay a tool failure");
+
+        assert!(!result.success);
+        assert_eq!(result.error.as_deref(), Some("Element not found: #missing"));
+        let data = result
+            .data
+            .expect("missing selector should include failure details");
+        assert_eq!(data["code"].as_str(), Some("element_not_found"));
+        assert_eq!(data["selector"].as_str(), Some("#missing"));
+        assert_eq!(data["format"].as_str(), Some("html"));
         assert_eq!(
             data["recovery"]["suggested_tool"].as_str(),
             Some("snapshot")
@@ -388,6 +466,8 @@ mod tests {
             .data
             .expect("invalid extract payload should include details");
         assert_eq!(data["code"].as_str(), Some("invalid_extract_payload"));
+        assert_eq!(data["selector"].as_str(), Some("#fake-target"));
+        assert_eq!(data["format"].as_str(), Some("text"));
         assert_eq!(data["received_type"].as_str(), Some("object"));
         assert_eq!(
             data["recovery"]["suggested_tool"].as_str(),

@@ -8,8 +8,8 @@ mod config;
 mod session;
 
 pub use config::{ConnectionOptions, LaunchOptions};
-pub use session::{BrowserSession, ClosedTabSummary, TabInfo};
 pub(crate) use session::MarkdownCacheEntry;
+pub use session::{BrowserSession, ClosedTabSummary, TabInfo};
 
 use crate::error::Result;
 
@@ -23,9 +23,12 @@ pub fn init_with_options(options: LaunchOptions) -> Result<BrowserSession> {
     BrowserSession::launch(options)
 }
 
-/// Connect to an existing browser instance
-pub fn connect(ws_url: &str) -> Result<BrowserSession> {
-    BrowserSession::connect(ConnectionOptions::new(ws_url))
+/// Connect to an existing browser instance.
+///
+/// Accepts either the browser-scoped DevTools WebSocket URL or a stable
+/// DevTools HTTP endpoint such as `http://127.0.0.1:9222`.
+pub fn connect(endpoint: &str) -> Result<BrowserSession> {
+    BrowserSession::connect(ConnectionOptions::new(endpoint))
 }
 
 #[cfg(test)]

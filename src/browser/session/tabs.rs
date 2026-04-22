@@ -31,7 +31,9 @@ impl BrowserSession {
     }
 
     pub(crate) fn open_tab_entry(&self, url: &str) -> Result<TabDescriptor> {
-        self.backend.open_tab(url)
+        let tab = self.backend.open_tab(url)?;
+        self.remember_managed_tab(tab.id.clone())?;
+        Ok(tab)
     }
 
     pub(crate) fn close_active_tab_summary(&self) -> Result<ClosedTabSummary> {
@@ -40,11 +42,15 @@ impl BrowserSession {
         let index = tabs.iter().position(|tab| tab.id == active.id).unwrap_or(0);
 
         self.backend.close_tab(&active.id, true)?;
+        self.forget_managed_tab(&active.id)?;
+        let active_tab = self.tab_overview()?.into_iter().find(|tab| tab.active);
 
         Ok(ClosedTabSummary {
             index,
+            id: active.id,
             title: active.title,
             url: active.url,
+            active_tab,
         })
     }
 }

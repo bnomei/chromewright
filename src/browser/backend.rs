@@ -113,8 +113,9 @@ impl ChromeSessionBackend {
     }
 
     pub(crate) fn connect(options: ConnectionOptions) -> Result<Self> {
-        let browser = Browser::connect(options.ws_url)
-            .map_err(|e| BrowserError::ConnectionFailed(e.to_string()))?;
+        let ws_url = options.resolved_ws_url()?;
+        let browser =
+            Browser::connect(ws_url).map_err(|e| BrowserError::ConnectionFailed(e.to_string()))?;
 
         Ok(Self {
             browser,

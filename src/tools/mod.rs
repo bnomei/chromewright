@@ -59,13 +59,15 @@ pub use wait::WaitParams;
 
 pub(crate) mod core;
 
-pub use core::{DocumentEnvelope, DynTool, TargetEnvelope, Tool, ToolContext, ToolDescriptor, ToolRegistry, ToolResult};
+pub use core::{
+    DocumentEnvelope, DynTool, TargetEnvelope, Tool, ToolContext, ToolDescriptor, ToolRegistry,
+    ToolResult,
+};
 #[allow(unused_imports)]
 pub(crate) use core::{
-    actionable_cursor_for_selector, build_document_envelope, duration_micros,
+    DocumentEnvelopeOptions, OPERATION_METRICS_METADATA_KEY, OperationMetrics, ResolvedTarget,
+    TargetResolution, actionable_cursor_for_selector, build_document_envelope, duration_micros,
     normalize_tool_outcome, resolve_target_with_cursor, tool_result_from_browser_error,
-    DocumentEnvelopeOptions, OperationMetrics, ResolvedTarget, TargetResolution,
-    OPERATION_METRICS_METADATA_KEY,
 };
 
 #[cfg(test)]

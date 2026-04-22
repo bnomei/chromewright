@@ -17,9 +17,9 @@ use rmcp::transport::streamable_http_server::{
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum Transport {
-    /// Standard input/output transport (default)
+    /// Standard input/output transport
     Stdio,
-    /// HTTP streamable transport
+    /// HTTP streamable transport (default)
     Http,
 }
 
@@ -34,15 +34,16 @@ enum BrowserMode {
 #[command(version)]
 #[command(about = "Browser automation MCP server", long_about = None)]
 struct Cli {
-    /// Launch browser in headed mode (default: headless)
+    /// Launch a new browser in headed mode instead of attaching to the default Chrome session
     #[arg(long, short = 'H', conflicts_with = "ws_endpoint")]
     headed: bool,
 
-    /// Path to custom browser executable
+    /// Path to custom browser executable for launch mode
     #[arg(long, value_name = "PATH", conflicts_with = "ws_endpoint")]
     executable_path: Option<PathBuf>,
 
-    /// WebSocket endpoint URL for remote browser connection
+    /// Browser WebSocket URL or stable DevTools HTTP endpoint for remote browser connection
+    /// Defaults to http://127.0.0.1:9222 when no launch-mode flags are provided.
     #[arg(
         long,
         value_name = "URL",
@@ -50,7 +51,7 @@ struct Cli {
     )]
     ws_endpoint: Option<String>,
 
-    /// Persistent browser profile directory
+    /// Persistent browser profile directory for launch mode
     #[arg(long, value_name = "DIR", conflicts_with = "ws_endpoint")]
     user_data_dir: Option<PathBuf>,
 
@@ -59,7 +60,7 @@ struct Cli {
     debug_port: Option<u16>,
 
     /// Transport type to use
-    #[arg(long, short = 't', value_enum, default_value = "stdio")]
+    #[arg(long, short = 't', value_enum, default_value = "http")]
     transport: Transport,
 
     /// Port for HTTP transport (default: 3000)
@@ -71,9 +72,22 @@ struct Cli {
     http_path: String,
 }
 
+const DEFAULT_WS_ENDPOINT: &str = "http://127.0.0.1:9222";
+
+fn wants_launch_mode(cli: &Cli) -> bool {
+    cli.headed
+        || cli.executable_path.is_some()
+        || cli.user_data_dir.is_some()
+        || cli.debug_port.is_some()
+}
+
 fn browser_mode_from_cli(cli: &Cli) -> BrowserMode {
     if let Some(ws_endpoint) = &cli.ws_endpoint {
         return BrowserMode::Connect(ConnectionOptions::new(ws_endpoint.clone()));
+    }
+
+    if !wants_launch_mode(cli) {
+        return BrowserMode::Connect(ConnectionOptions::new(DEFAULT_WS_ENDPOINT));
     }
 
     BrowserMode::Launch(LaunchOptions {
@@ -126,7 +140,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         BrowserMode::Connect(options) => {
             info!("Browser mode: connect");
-            info!("WebSocket endpoint: {}", options.ws_url);
+            info!("Browser endpoint: {}", options.ws_url);
         }
     }
 
@@ -226,17 +240,21 @@ mod tests {
     use clap::error::ErrorKind;
 
     #[test]
-    fn test_browser_mode_defaults_to_headless_launch() {
+    fn test_cli_defaults_to_streamable_http_transport() {
+        let cli = Cli::try_parse_from(["chromewright"]).expect("CLI should parse");
+
+        assert!(matches!(cli.transport, Transport::Http));
+    }
+
+    #[test]
+    fn test_browser_mode_defaults_to_devtools_http_attach() {
         let cli = Cli::try_parse_from(["chromewright"]).expect("CLI should parse");
 
         match browser_mode_from_cli(&cli) {
-            BrowserMode::Launch(options) => {
-                assert!(options.headless);
-                assert_eq!(options.chrome_path, None);
-                assert_eq!(options.user_data_dir, None);
-                assert_eq!(options.debug_port, None);
+            BrowserMode::Connect(options) => {
+                assert_eq!(options.ws_url, DEFAULT_WS_ENDPOINT);
             }
-            BrowserMode::Connect(_) => panic!("expected local launch mode"),
+            BrowserMode::Launch(_) => panic!("expected default attach mode"),
         }
     }
 
@@ -274,6 +292,18 @@ mod tests {
     }
 
     #[test]
+    fn test_headed_launch_without_ws_endpoint_uses_launch_mode() {
+        let cli = Cli::try_parse_from(["chromewright", "--headed"]).expect("CLI should parse");
+
+        match browser_mode_from_cli(&cli) {
+            BrowserMode::Launch(options) => {
+                assert!(!options.headless);
+            }
+            BrowserMode::Connect(_) => panic!("expected local launch mode"),
+        }
+    }
+
+    #[test]
     fn test_browser_mode_can_connect_to_existing_websocket() {
         let cli = Cli::try_parse_from([
             "chromewright",
@@ -285,6 +315,19 @@ mod tests {
         match browser_mode_from_cli(&cli) {
             BrowserMode::Connect(options) => {
                 assert_eq!(options.ws_url, "ws://127.0.0.1:9222/devtools/browser/test");
+            }
+            BrowserMode::Launch(_) => panic!("expected remote connect mode"),
+        }
+    }
+
+    #[test]
+    fn test_browser_mode_can_connect_to_devtools_http_origin() {
+        let cli = Cli::try_parse_from(["chromewright", "--ws-endpoint", "http://127.0.0.1:9222"])
+            .expect("CLI should parse");
+
+        match browser_mode_from_cli(&cli) {
+            BrowserMode::Connect(options) => {
+                assert_eq!(options.ws_url, "http://127.0.0.1:9222");
             }
             BrowserMode::Launch(_) => panic!("expected remote connect mode"),
         }

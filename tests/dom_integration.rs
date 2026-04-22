@@ -71,9 +71,11 @@ fn test_read_links() {
     let session = browser.session();
 
     let html = concat!(
-        "<html><head><title>Links Test</title></head><body>",
+        "<html><head><title>Links Test</title>",
+        "<base href=\"https://example.test/articles/\">",
+        "</head><body>",
         "<a href=\"https://example.com\">Example</a>",
-        "<a href=\"/path\">Relative</a>",
+        "<a href=\"guide/getting-started\">Relative</a>",
         "<a href=\"#anchor\">Anchor</a>",
         "<a href=\"https://rust-lang.org\">Rust</a>",
         "<a>No Href</a>",
@@ -81,7 +83,7 @@ fn test_read_links() {
         "</body></html>"
     );
 
-    common::navigate_html(session, html).expect("Failed navigate");
+    common::navigate_encoded_html(session, html).expect("Failed navigate");
 
     let tool = ReadLinksTool::default();
     let mut context = ToolContext::new(&session);
@@ -98,14 +100,14 @@ fn test_read_links() {
     info!("Links found: {}", count);
     for link in links {
         info!(
-            "  {} -> {}",
+            "  {} -> {} ({})",
             link["text"].as_str().unwrap_or(""),
-            link["href"].as_str().unwrap_or("")
+            link["href"].as_str().unwrap_or(""),
+            link["resolved_url"].as_str().unwrap_or("")
         );
     }
 
-    // Due to data: URL limitations, we may not get all links
-    assert!(count >= 2, "Expected at least 2 links");
+    assert!(count >= 4, "Expected at least 4 links");
     assert_eq!(links.len() as u64, count);
 
     let texts: Vec<&str> = links.iter().filter_map(|l| l["text"].as_str()).collect();
@@ -114,12 +116,30 @@ fn test_read_links() {
     assert!(texts.contains(&"Example"));
     assert!(texts.contains(&"Relative"));
 
-    // Verify href values
+    // Verify absolute href values remain unchanged.
     let ex_link = links
         .iter()
         .find(|l| l["text"].as_str() == Some("Example"))
         .expect("Example link not found");
     assert_eq!(ex_link["href"].as_str(), Some("https://example.com"));
+    assert_eq!(
+        ex_link["resolved_url"].as_str(),
+        Some("https://example.com/")
+    );
+
+    // Verify relative href values are preserved while exposing the resolved URL.
+    let relative_link = links
+        .iter()
+        .find(|l| l["text"].as_str() == Some("Relative"))
+        .expect("Relative link not found");
+    assert_eq!(
+        relative_link["href"].as_str(),
+        Some("guide/getting-started")
+    );
+    assert_eq!(
+        relative_link["resolved_url"].as_str(),
+        Some("https://example.test/articles/guide/getting-started")
+    );
 }
 
 #[test]

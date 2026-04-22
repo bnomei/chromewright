@@ -17,18 +17,18 @@
 //! ### Running the MCP Server
 //!
 //! ```bash
-//! # Run a headless local browser over stdio
+//! # Default: attach to Chrome on 127.0.0.1:9222 and serve streamable HTTP on localhost:3000/mcp
 //! cargo run --features mcp-server --bin chromewright
 //!
-//! # Run with a visible local browser
-//! cargo run --features mcp-server --bin chromewright -- --headed
+//! # Same default behavior with a release build
+//! cargo run --release --features mcp-server --bin chromewright
 //!
-//! # Connect to an existing Chrome DevTools WebSocket instead of launching Chrome
+//! # Use stdio transport instead
 //! cargo run --features mcp-server --bin chromewright -- \
-//!   --ws-endpoint ws://127.0.0.1:9222/devtools/browser/<id>
+//!   --transport stdio
 //!
-//! # Serve MCP over streamable HTTP on localhost:3000/mcp
-//! cargo run --features mcp-server --bin chromewright -- --transport http
+//! # Launch a visible browser instead of attaching to the default Chrome session
+//! cargo run --features mcp-server --bin chromewright -- --headed
 //! ```
 //!
 //! ## Library Usage (Advanced)

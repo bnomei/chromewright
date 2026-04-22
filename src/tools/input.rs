@@ -33,7 +33,8 @@ pub struct InputParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor: Option<Cursor>,
 
-    /// Text to type into the element
+    /// Text to type into the element. `value` is accepted as a backward-compatible input alias.
+    #[serde(alias = "value")]
     pub text: String,
 
     /// Clear existing content first (default: false)
@@ -181,7 +182,9 @@ fn input_actionability_predicates() -> &'static [ActionabilityPredicate] {
 
 #[cfg(test)]
 mod tests {
-    use super::build_input_js;
+    use super::{InputParams, build_input_js};
+    use schemars::schema_for;
+    use serde_json::json;
 
     #[test]
     fn test_input_js_prefers_selector_before_target_index() {
@@ -196,5 +199,74 @@ mod tests {
         assert!(input_js.contains("const element = resolveTargetElement(config);"));
         assert!(input_js.contains("querySelectorAcrossScopes("));
         assert!(input_js.contains("searchActionableIndex(config.target_index)"));
+    }
+
+    #[test]
+    fn test_input_params_deserializes_canonical_text_field() {
+        let params: InputParams = serde_json::from_value(json!({
+            "selector": "#query",
+            "text": "search",
+            "clear": true,
+        }))
+        .expect("canonical text field should deserialize");
+
+        assert_eq!(params.selector.as_deref(), Some("#query"));
+        assert_eq!(params.text, "search");
+        assert!(params.clear);
+    }
+
+    #[test]
+    fn test_input_params_deserializes_value_alias() {
+        let params: InputParams = serde_json::from_value(json!({
+            "selector": "#query",
+            "value": "search",
+            "clear": false,
+        }))
+        .expect("backward-compatible value alias should deserialize");
+
+        assert_eq!(params.selector.as_deref(), Some("#query"));
+        assert_eq!(params.text, "search");
+        assert!(!params.clear);
+    }
+
+    #[test]
+    fn test_input_params_serializes_text_as_canonical_field() {
+        let params = InputParams {
+            selector: Some("#query".to_string()),
+            index: None,
+            node_ref: None,
+            cursor: None,
+            text: "search".to_string(),
+            clear: false,
+        };
+
+        let serialized = serde_json::to_value(&params).expect("params should serialize");
+
+        assert_eq!(serialized.get("text"), Some(&json!("search")));
+        assert_eq!(serialized.get("value"), None);
+    }
+
+    #[test]
+    fn test_input_params_schema_keeps_text_property_and_mentions_alias() {
+        let schema = schema_for!(InputParams);
+        let schema_json = serde_json::to_value(&schema).expect("schema should serialize");
+        let properties = schema_json
+            .get("properties")
+            .and_then(|value| value.as_object())
+            .expect("input params schema should expose properties");
+        let text_property = properties
+            .get("text")
+            .expect("schema should keep text as the canonical property");
+
+        assert!(properties.contains_key("text"));
+        assert!(!properties.contains_key("value"));
+        assert_eq!(
+            text_property
+                .get("description")
+                .and_then(|value| value.as_str()),
+            Some(
+                "Text to type into the element. `value` is accepted as a backward-compatible input alias."
+            )
+        );
     }
 }

@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 /// Information about a browser tab
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct TabInfo {
+    /// Stable tab identifier
+    pub tab_id: String,
     /// Tab index
     pub index: usize,
     /// Whether this is the active tab
@@ -27,6 +29,7 @@ pub struct TabListTool;
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct TabListOutput {
     pub tab_list: Vec<TabInfo>,
+    pub active_tab: Option<TabInfo>,
     pub count: usize,
     pub summary: String,
 }
@@ -54,6 +57,7 @@ impl Tool for TabListTool {
             .into_iter()
             .enumerate()
             .map(|(index, tab)| TabInfo {
+                tab_id: tab.id,
                 index,
                 active: tab.active,
                 title: tab.title,
@@ -62,11 +66,13 @@ impl Tool for TabListTool {
             .collect();
 
         let active_index = tab_list.iter().position(|t| t.active);
+        let active_tab = active_index.map(|index| tab_list[index].clone());
         let summary = summarize_tab_list(&tab_list, active_index);
 
         Ok(context.finish(ToolResult::success_with(TabListOutput {
             count: tab_list.len(),
             summary,
+            active_tab,
             tab_list,
         })))
     }
@@ -101,10 +107,10 @@ fn summarize_tab_list(tab_list: &[TabInfo], active_index: Option<usize>) -> Stri
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::browser::BrowserSession;
     use crate::browser::backend::{
         FakeSessionBackend, ScriptEvaluation, SessionBackend, TabDescriptor,
     };
+    use crate::browser::BrowserSession;
     use crate::dom::{DocumentMetadata, DomTree};
     use crate::error::BrowserError;
     use crate::tools::{Tool, ToolContext};
@@ -115,12 +121,14 @@ mod tests {
         let summary = summarize_tab_list(
             &[
                 TabInfo {
+                    tab_id: "tab-1".to_string(),
                     index: 0,
                     active: false,
                     title: "First".to_string(),
                     url: "https://first.example".to_string(),
                 },
                 TabInfo {
+                    tab_id: "tab-2".to_string(),
                     index: 1,
                     active: true,
                     title: "Second".to_string(),
@@ -144,6 +152,7 @@ mod tests {
     fn test_summarize_tab_list_reports_unknown_active_tab() {
         let summary = summarize_tab_list(
             &[TabInfo {
+                tab_id: "tab-1".to_string(),
                 index: 0,
                 active: false,
                 title: "Only".to_string(),
@@ -168,12 +177,37 @@ mod tests {
 
         assert!(result.success);
         let data = result.data.expect("tab_list should include data");
+        assert_eq!(data["tab_list"][0]["tab_id"].as_str(), Some("tab-1"));
         assert_eq!(data["tab_list"][0]["active"].as_bool(), Some(false));
-        assert!(
-            data["summary"]
-                .as_str()
-                .expect("summary should be present")
-                .contains("Current Tab: unavailable")
+        assert!(data["active_tab"].is_null());
+        assert!(data["summary"]
+            .as_str()
+            .expect("summary should be present")
+            .contains("Current Tab: unavailable"));
+    }
+
+    #[test]
+    fn test_tab_list_tool_exposes_stable_tab_id_and_active_tab_metadata() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        session
+            .open_tab_entry("https://second.example")
+            .expect("second tab should open");
+
+        let tool = TabListTool::default();
+        let mut context = ToolContext::new(&session);
+        let result = tool
+            .execute_typed(TabListParams {}, &mut context)
+            .expect("tab_list should succeed");
+
+        assert!(result.success);
+        let data = result.data.expect("tab_list should include data");
+        assert_eq!(data["tab_list"][1]["tab_id"].as_str(), Some("tab-2"));
+        assert_eq!(data["tab_list"][1]["active"].as_bool(), Some(true));
+        assert_eq!(data["active_tab"]["tab_id"].as_str(), Some("tab-2"));
+        assert_eq!(data["active_tab"]["index"].as_u64(), Some(1));
+        assert_eq!(
+            data["active_tab"]["url"].as_str(),
+            Some("https://second.example")
         );
     }
 

@@ -15,9 +15,21 @@ pub struct CloseTabTool;
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CloseTabOutput {
     pub index: usize,
+    pub tab_id: String,
     pub title: String,
     pub url: String,
+    pub closed_tab: TabState,
+    pub active_tab: Option<TabState>,
     pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TabState {
+    pub tab_id: String,
+    pub index: usize,
+    pub active: bool,
+    pub title: String,
+    pub url: String,
 }
 
 impl Tool for CloseTabTool {
@@ -62,12 +74,35 @@ impl Tool for CloseTabTool {
             Err(other) => return Err(other),
         };
         let message = close_tab_message(closed.index, &closed.title, &closed.url);
+        let active_tab = context
+            .session
+            .tab_overview()?
+            .into_iter()
+            .enumerate()
+            .find(|(_, tab)| tab.active)
+            .map(|(index, tab)| TabState {
+                tab_id: tab.id,
+                index,
+                active: tab.active,
+                title: tab.title,
+                url: tab.url,
+            });
+        let closed_tab = TabState {
+            tab_id: closed.id.clone(),
+            index: closed.index,
+            active: false,
+            title: closed.title.clone(),
+            url: closed.url.clone(),
+        };
 
         Ok(context.finish(ToolResult::success_with(CloseTabOutput {
             index: closed.index,
+            tab_id: closed.id,
             message,
             title: closed.title,
             url: closed.url,
+            closed_tab,
+            active_tab,
         })))
     }
 }
@@ -98,8 +133,8 @@ fn close_tab_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::browser::BrowserSession;
     use crate::browser::backend::FakeSessionBackend;
+    use crate::browser::BrowserSession;
 
     #[test]
     fn test_close_tab_message_includes_index_title_and_url() {
@@ -125,7 +160,13 @@ mod tests {
         assert!(result.success);
         let data = result.data.expect("close_tab should include data");
         assert_eq!(data["index"].as_u64(), Some(1));
+        assert_eq!(data["tab_id"].as_str(), Some("tab-2"));
         assert_eq!(data["url"].as_str(), Some("https://second.example"));
+        assert_eq!(data["closed_tab"]["tab_id"].as_str(), Some("tab-2"));
+        assert_eq!(data["closed_tab"]["index"].as_u64(), Some(1));
+        assert_eq!(data["active_tab"]["tab_id"].as_str(), Some("tab-1"));
+        assert_eq!(data["active_tab"]["index"].as_u64(), Some(0));
+        assert_eq!(data["active_tab"]["active"].as_bool(), Some(true));
         assert_eq!(
             session
                 .tab_overview()

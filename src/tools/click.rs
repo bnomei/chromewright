@@ -2,7 +2,8 @@ use crate::dom::{Cursor, NodeRef};
 use crate::error::{BrowserError, Result};
 use crate::tools::{
     DocumentEnvelope, TargetEnvelope, TargetResolution, Tool, ToolContext, ToolResult,
-    actionability::ActionabilityPredicate, browser_kernel::render_browser_kernel_script,
+    actionability::ActionabilityPredicate,
+    browser_kernel::render_browser_kernel_script,
     services::interaction::{
         ActionabilityWaitState, DEFAULT_ACTIONABILITY_TIMEOUT_MS, TargetStatus,
         build_actionability_failure, build_interaction_failure, build_interaction_handoff,

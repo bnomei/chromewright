@@ -1,14 +1,13 @@
-use crate::browser::backend::{
-    ChromeSessionBackend, ScriptEvaluation, SessionBackend,
-};
 #[cfg(test)]
 use crate::browser::backend::{
-    DEBUG_PORT_END, DEBUG_PORT_START, FakeSessionBackend, build_launch_options, choose_debug_port,
+    build_launch_options, choose_debug_port, FakeSessionBackend, DEBUG_PORT_END, DEBUG_PORT_START,
 };
+use crate::browser::backend::{ChromeSessionBackend, ScriptEvaluation, SessionBackend};
 use crate::browser::{ConnectionOptions, LaunchOptions};
 use crate::dom::{DocumentMetadata, DomTree};
-use crate::error::Result;
+use crate::error::{BrowserError, Result};
 use crate::tools::{ToolContext, ToolRegistry};
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -22,11 +21,27 @@ pub(crate) use cache::MarkdownCacheEntry;
 pub struct BrowserSession {
     backend: Arc<dyn SessionBackend>,
 
+    /// Retains whether the session launched a disposable browser or attached
+    /// to an existing browser instance.
+    #[cfg_attr(not(test), allow(dead_code))]
+    origin: SessionOrigin,
+
+    /// Tracks tabs explicitly owned by this session so attach-mode callers can
+    /// distinguish them from pre-existing browser tabs.
+    managed_tab_ids: Mutex<HashSet<String>>,
+
     /// Tool registry for executing browser automation tools
     tool_registry: ToolRegistry,
 
     /// Cache the most recent markdown extraction by document revision.
     markdown_cache: Mutex<Option<Arc<MarkdownCacheEntry>>>,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SessionOrigin {
+    Launched,
+    Connected,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -40,19 +55,28 @@ pub struct TabInfo {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ClosedTabSummary {
     pub index: usize,
+    pub id: String,
     pub title: String,
     pub url: String,
+    pub active_tab: Option<TabInfo>,
 }
 
 impl BrowserSession {
     /// Launch a new browser instance with the given options
     pub fn launch(options: LaunchOptions) -> Result<Self> {
-        Self::from_backend(ChromeSessionBackend::launch(options)?)
+        Self::from_backend_with_origin(
+            ChromeSessionBackend::launch(options)?,
+            SessionOrigin::Launched,
+        )
     }
 
-    /// Connect to an existing browser instance via WebSocket
+    /// Connect to an existing browser instance via the browser WebSocket URL or
+    /// a stable DevTools HTTP endpoint such as `http://127.0.0.1:9222`.
     pub fn connect(options: ConnectionOptions) -> Result<Self> {
-        Self::from_backend(ChromeSessionBackend::connect(options)?)
+        Self::from_backend_with_origin(
+            ChromeSessionBackend::connect(options)?,
+            SessionOrigin::Connected,
+        )
     }
 
     /// Launch a browser with default options
@@ -166,20 +190,92 @@ impl BrowserSession {
 
     /// Close all open tabs in the current session backend.
     pub fn close(&self) -> Result<()> {
-        self.backend.close()
+        self.backend.close()?;
+        self.clear_managed_tabs()
     }
 
-    fn from_backend<B: SessionBackend + 'static>(backend: B) -> Result<Self> {
+    fn from_backend_with_origin<B: SessionBackend + 'static>(
+        backend: B,
+        origin: SessionOrigin,
+    ) -> Result<Self> {
+        let managed_tab_ids = match origin {
+            SessionOrigin::Launched => backend
+                .list_tabs()?
+                .into_iter()
+                .map(|tab| tab.id)
+                .collect::<HashSet<_>>(),
+            SessionOrigin::Connected => HashSet::new(),
+        };
+
         Ok(Self {
             backend: Arc::new(backend),
+            origin,
+            managed_tab_ids: Mutex::new(managed_tab_ids),
             tool_registry: ToolRegistry::with_defaults(),
             markdown_cache: Mutex::new(None),
         })
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn session_origin(&self) -> SessionOrigin {
+        self.origin
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn is_connected_session(&self) -> bool {
+        self.origin == SessionOrigin::Connected
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn is_tab_managed(&self, tab_id: &str) -> Result<bool> {
+        Ok(self.managed_tab_ids()?.contains(tab_id))
+    }
+
+    pub(crate) fn remember_managed_tab(&self, tab_id: impl Into<String>) -> Result<()> {
+        self.managed_tab_ids()?.insert(tab_id.into());
+        Ok(())
+    }
+
+    pub(crate) fn forget_managed_tab(&self, tab_id: &str) -> Result<()> {
+        self.managed_tab_ids()?.remove(tab_id);
+        Ok(())
+    }
+
+    fn clear_managed_tabs(&self) -> Result<()> {
+        self.managed_tab_ids()?.clear();
+        Ok(())
+    }
+
+    fn managed_tab_ids(&self) -> Result<std::sync::MutexGuard<'_, HashSet<String>>> {
+        self.managed_tab_ids.lock().map_err(|e| {
+            BrowserError::TabOperationFailed(format!("Failed to access managed tab state: {}", e))
+        })
+    }
+
     #[cfg(test)]
     pub(crate) fn with_test_backend<B: SessionBackend + 'static>(backend: B) -> Self {
-        Self::from_backend(backend).expect("test backend should construct")
+        Self::from_backend_with_origin(backend, SessionOrigin::Launched)
+            .expect("test backend should construct")
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_test_backend_origin<B: SessionBackend + 'static>(
+        backend: B,
+        origin: SessionOrigin,
+    ) -> Self {
+        Self::from_backend_with_origin(backend, origin).expect("test backend should construct")
+    }
+
+    #[cfg(test)]
+    pub(crate) fn managed_tab_ids_for_test(&self) -> Vec<String> {
+        let mut ids = self
+            .managed_tab_ids()
+            .expect("managed tab state should be readable")
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        ids.sort();
+        ids
     }
 }
 
@@ -257,18 +353,14 @@ mod tests {
             launch_opts.idle_browser_timeout,
             Duration::from_secs(60 * 60)
         );
-        assert!(
-            launch_opts
-                .ignore_default_args
-                .iter()
-                .any(|arg| *arg == OsStr::new("--enable-automation"))
-        );
-        assert!(
-            launch_opts
-                .args
-                .iter()
-                .any(|arg| { *arg == OsStr::new("--disable-blink-features=AutomationControlled") })
-        );
+        assert!(launch_opts
+            .ignore_default_args
+            .iter()
+            .any(|arg| *arg == OsStr::new("--enable-automation")));
+        assert!(launch_opts
+            .args
+            .iter()
+            .any(|arg| { *arg == OsStr::new("--disable-blink-features=AutomationControlled") }));
     }
 
     #[test]
@@ -316,12 +408,24 @@ mod tests {
             )
             .expect("new_tab should execute");
         assert!(new_tab.success);
+        let new_tab_data = new_tab.data.expect("new_tab should include data");
+        assert_eq!(new_tab_data["tab_id"].as_str(), Some("tab-2"));
+        assert_eq!(new_tab_data["tab"]["tab_id"].as_str(), Some("tab-2"));
+        assert_eq!(new_tab_data["active_tab"]["tab_id"].as_str(), Some("tab-2"));
 
         let tab_list = session
             .execute_tool("tab_list", json!({}))
             .expect("tab_list should execute");
         let tab_list_data = tab_list.data.expect("tab_list should include data");
         assert_eq!(tab_list_data["count"].as_u64(), Some(2));
+        assert_eq!(
+            tab_list_data["tab_list"][1]["tab_id"].as_str(),
+            Some("tab-2")
+        );
+        assert_eq!(
+            tab_list_data["active_tab"]["tab_id"].as_str(),
+            Some("tab-2")
+        );
         assert_eq!(
             tab_list_data["tab_list"][1]["url"].as_str(),
             Some("https://second.example")
@@ -339,6 +443,9 @@ mod tests {
             .expect("close_tab should execute");
         let closed_data = closed.data.expect("close_tab should include data");
         assert_eq!(closed_data["index"].as_u64(), Some(0));
+        assert_eq!(closed_data["tab_id"].as_str(), Some("tab-1"));
+        assert_eq!(closed_data["closed_tab"]["tab_id"].as_str(), Some("tab-1"));
+        assert_eq!(closed_data["active_tab"]["tab_id"].as_str(), Some("tab-2"));
         assert_eq!(closed_data["url"].as_str(), Some("about:blank"));
 
         let remaining = session
@@ -369,12 +476,10 @@ mod tests {
             .data
             .expect("invalid parameter failure should include details");
         assert_eq!(data["code"].as_str(), Some("invalid_argument"));
-        assert!(
-            data["error"]
-                .as_str()
-                .unwrap_or_default()
-                .contains("Invalid parameters")
-        );
+        assert!(data["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Invalid parameters"));
     }
 
     #[test]
@@ -394,12 +499,83 @@ mod tests {
         let data = result.data.expect("close failure should include details");
         assert_eq!(data["code"].as_str(), Some("tool_execution_failed"));
         assert_eq!(data["tool"].as_str(), Some("close"));
-        assert!(
-            data["error"]
-                .as_str()
-                .unwrap_or_default()
-                .contains("stuck.example")
+        assert!(data["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("stuck.example"));
+    }
+
+    #[test]
+    fn test_launch_session_seeds_and_tracks_managed_tabs() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+
+        assert_eq!(session.session_origin(), SessionOrigin::Launched);
+        assert!(!session.is_connected_session());
+
+        let initial_id = session.list_tabs().expect("initial tabs should list")[0]
+            .id
+            .clone();
+        assert!(session
+            .is_tab_managed(&initial_id)
+            .expect("managed state should read"));
+
+        let opened = session
+            .open_tab_entry("https://managed.example")
+            .expect("managed tab should open");
+        assert!(session
+            .is_tab_managed(&opened.id)
+            .expect("opened tab should be tracked"));
+        assert_eq!(
+            session.managed_tab_ids_for_test(),
+            vec![initial_id, opened.id.clone()]
         );
+
+        session.close().expect("session close should succeed");
+        assert!(session.managed_tab_ids_for_test().is_empty());
+    }
+
+    #[test]
+    fn test_connected_session_tracks_only_tabs_opened_through_session() {
+        let session = BrowserSession::with_test_backend_origin(
+            FakeSessionBackend::new(),
+            SessionOrigin::Connected,
+        );
+
+        assert_eq!(session.session_origin(), SessionOrigin::Connected);
+        assert!(session.is_connected_session());
+
+        let existing_id = session.list_tabs().expect("initial tabs should list")[0]
+            .id
+            .clone();
+        assert!(!session
+            .is_tab_managed(&existing_id)
+            .expect("existing connected tab should be readable"));
+
+        let opened = session
+            .open_tab_entry("https://managed.example")
+            .expect("managed tab should open");
+        assert!(session
+            .is_tab_managed(&opened.id)
+            .expect("opened tab should be tracked"));
+        assert_eq!(session.managed_tab_ids_for_test(), vec![opened.id.clone()]);
+
+        let closed = session
+            .close_active_tab_summary()
+            .expect("active managed tab should close");
+        assert_eq!(closed.url, "https://managed.example");
+        assert_eq!(closed.id, opened.id);
+        let active_tab = closed
+            .active_tab
+            .expect("remaining about:blank tab should become active");
+        assert_eq!(active_tab.id, existing_id);
+        assert!(active_tab.active);
+        assert!(!session
+            .is_tab_managed(&opened.id)
+            .expect("closed tab should be forgotten"));
+        assert!(session.managed_tab_ids_for_test().is_empty());
+        assert!(!session
+            .is_tab_managed(&existing_id)
+            .expect("pre-existing tab should stay unmanaged"));
     }
 
     #[test]

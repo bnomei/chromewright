@@ -4,7 +4,7 @@ use crate::error::BrowserError;
 use crate::error::Result;
 use crate::tools::snapshot::{RenderMode, render_aria_tree};
 use crate::tools::{
-    close, close_tab, click, evaluate, extract, go_back, go_forward, hover, input, inspect_node,
+    click, close, close_tab, evaluate, extract, go_back, go_forward, hover, input, inspect_node,
     markdown, navigate, new_tab, press_key, read_links, screenshot, scroll, select, snapshot,
     switch_tab, tab_list, wait,
 };

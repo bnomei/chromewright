@@ -13,6 +13,8 @@ pub struct Link {
     pub text: String,
     /// The href attribute of the link
     pub href: String,
+    /// The fully resolved absolute URL for the link target
+    pub resolved_url: String,
 }
 
 #[derive(Default)]
@@ -48,7 +50,8 @@ impl Tool for ReadLinksTool {
                 Array.from(document.querySelectorAll('a[href]'))
                     .map(el => ({
                         text: el.innerText || '',
-                        href: el.getAttribute('href') || ''
+                        href: el.getAttribute('href') || '',
+                        resolved_url: el.href || ''
                     }))
                     .filter(link => link.href !== '')
             )
@@ -223,5 +226,31 @@ mod tests {
             .as_object()
             .expect("metrics metadata should be present on failures");
         assert_eq!(metrics["browser_evaluations"].as_u64(), Some(1));
+    }
+
+    #[test]
+    fn test_parse_links_output_deserializes_resolved_urls() {
+        let links = parse_links_output(Some(serde_json::json!([
+            {
+                "text": "Guide",
+                "href": "guide/getting-started",
+                "resolved_url": "https://example.test/articles/guide/getting-started"
+            },
+            {
+                "text": "Rust",
+                "href": "https://www.rust-lang.org/",
+                "resolved_url": "https://www.rust-lang.org/"
+            }
+        ])))
+        .expect("payload with resolved URLs should deserialize");
+
+        assert_eq!(links.len(), 2);
+        assert_eq!(links[0].href, "guide/getting-started");
+        assert_eq!(
+            links[0].resolved_url,
+            "https://example.test/articles/guide/getting-started"
+        );
+        assert_eq!(links[1].href, "https://www.rust-lang.org/");
+        assert_eq!(links[1].resolved_url, "https://www.rust-lang.org/");
     }
 }
