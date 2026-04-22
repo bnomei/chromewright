@@ -1,25 +1,13 @@
 use crate::dom::{Cursor, DocumentMetadata, NodeRef};
 use crate::error::{BrowserError, Result};
 use crate::tools::{
-    DocumentEnvelopeOptions, TargetEnvelope, TargetResolution, Tool, ToolContext, ToolResult,
-    build_document_envelope, resolve_target_with_cursor,
+    TargetEnvelope, Tool, ToolContext, ToolResult, services::inspection::execute_inspect_node,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 const INSPECT_NODE_JS: &str = include_str!("inspect_node.js");
-const DEFAULT_STYLE_NAMES: &[&str] = &[
-    "display",
-    "visibility",
-    "pointer-events",
-    "position",
-    "z-index",
-    "opacity",
-    "cursor",
-    "overflow",
-];
-const MAX_STYLE_NAMES: usize = 12;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -179,30 +167,30 @@ pub struct BoundedMapSection {
 }
 
 #[derive(Debug, Deserialize)]
-struct InspectNodeProbePayload {
-    success: bool,
+pub(crate) struct InspectNodeProbePayload {
+    pub success: bool,
     #[serde(default)]
-    code: Option<String>,
+    pub code: Option<String>,
     #[serde(default)]
-    error: Option<String>,
+    pub error: Option<String>,
     #[serde(default)]
-    actionable_index: Option<usize>,
+    pub actionable_index: Option<usize>,
     #[serde(default)]
-    identity: Option<InspectIdentity>,
+    pub identity: Option<InspectIdentity>,
     #[serde(default)]
-    accessibility: Option<InspectAccessibility>,
+    pub accessibility: Option<InspectAccessibility>,
     #[serde(default)]
-    form_state: Option<InspectFormState>,
+    pub form_state: Option<InspectFormState>,
     #[serde(default)]
-    layout: Option<InspectLayout>,
+    pub layout: Option<InspectLayout>,
     #[serde(default)]
-    context: Option<InspectContext>,
+    pub context: Option<InspectContext>,
     #[serde(default)]
-    boundary: Option<InspectBoundary>,
+    pub boundary: Option<InspectBoundary>,
     #[serde(default)]
-    boundaries: Option<Vec<InspectBoundary>>,
+    pub boundaries: Option<Vec<InspectBoundary>>,
     #[serde(default)]
-    sections: Option<InspectSections>,
+    pub sections: Option<InspectSections>,
 }
 
 impl Tool for InspectNodeTool {
@@ -218,150 +206,18 @@ impl Tool for InspectNodeTool {
         params: InspectNodeParams,
         context: &mut ToolContext,
     ) -> Result<ToolResult> {
-        let InspectNodeParams {
-            selector,
-            index,
-            node_ref,
-            cursor,
-            detail,
-            style_names,
-        } = params;
-        let target = {
-            let dom = context.get_dom()?;
-            match resolve_target_with_cursor(
-                "inspect_node",
-                selector,
-                index,
-                node_ref,
-                cursor,
-                Some(dom),
-            )? {
-                TargetResolution::Resolved(target) => target,
-                TargetResolution::Failure(failure) => return Ok(failure),
-            }
-        };
-
-        let target_index = target
-            .cursor
-            .as_ref()
-            .map(|cursor| cursor.index)
-            .or(target.index);
-        let styles = if style_names.is_empty() {
-            DEFAULT_STYLE_NAMES
-                .iter()
-                .map(|name| (*name).to_string())
-                .collect::<Vec<_>>()
-        } else {
-            style_names
-                .into_iter()
-                .take(MAX_STYLE_NAMES)
-                .collect::<Vec<_>>()
-        };
-        let detail_name = match detail {
-            InspectDetail::Compact => "compact",
-            InspectDetail::Full => "full",
-        };
-        let config = serde_json::json!({
-            "selector": target.selector,
-            "target_index": target_index,
-            "detail": detail_name,
-            "style_names": styles,
-        });
-        let inspect_js = INSPECT_NODE_JS.replace("__INSPECT_CONFIG__", &config.to_string());
-        let evaluation = context
-            .session
-            .tab()?
-            .evaluate(&inspect_js, false)
-            .map_err(|e| BrowserError::ToolExecutionFailed {
-                tool: "inspect_node".to_string(),
-                reason: e.to_string(),
-            })?;
-        let payload = decode_probe_payload(evaluation.value)?;
-
-        if !payload.success {
-            let error = payload
-                .error
-                .clone()
-                .unwrap_or_else(|| "Node inspection failed".to_string());
-            let boundaries = payload.boundaries.unwrap_or_default();
-            return Ok(ToolResult::failure_with(
-                error.clone(),
-                serde_json::json!({
-                    "code": payload.code.unwrap_or_else(|| "inspect_failed".to_string()),
-                    "error": error,
-                    "target": target.to_target_envelope(),
-                    "boundaries": boundaries,
-                }),
-            ));
-        }
-
-        let mut envelope =
-            build_document_envelope(context, Some(&target), DocumentEnvelopeOptions::minimal())?;
-        let mut target_envelope = envelope
-            .target
-            .take()
-            .expect("inspect_node should keep target");
-        if target_envelope.cursor.is_none() {
-            target_envelope.cursor = match payload.actionable_index {
-                Some(index) => context.get_dom()?.cursor_for_index(index),
-                None => None,
-            };
-        }
-        let cursor = target_envelope.cursor.clone();
-        if cursor.is_none() {
-            let error = if payload
-                .context
-                .as_ref()
-                .map(|context| context.frame_depth > 0)
-                .unwrap_or(false)
-            {
-                "inspect_node matched an element inside an iframe, but it is not cursor-addressable yet"
-                    .to_string()
-            } else {
-                "inspect_node requires a selector that resolves to an actionable cursor".to_string()
-            };
-            let code = if payload
-                .context
-                .as_ref()
-                .map(|context| context.frame_depth > 0)
-                .unwrap_or(false)
-            {
-                "unsupported_frame_context"
-            } else {
-                "selector_not_cursor_addressable"
-            };
-
-            return Ok(ToolResult::failure_with(
-                error.clone(),
-                serde_json::json!({
-                    "code": code,
-                    "error": error,
-                    "target": target_envelope,
-                    "context": payload.context,
-                    "boundary": payload.boundary,
-                }),
-            ));
-        }
-
-        Ok(ToolResult::success_with(InspectNodeOutput {
-            action: "inspect_node".to_string(),
-            document: envelope.document,
-            target: target_envelope,
-            cursor,
-            identity: payload.identity.expect("probe should include identity"),
-            accessibility: payload
-                .accessibility
-                .expect("probe should include accessibility"),
-            form_state: payload.form_state.expect("probe should include form_state"),
-            layout: payload.layout.expect("probe should include layout"),
-            context: payload.context.expect("probe should include context"),
-            boundary: payload.boundary,
-            sections: payload.sections,
-        }))
+        execute_inspect_node(params, context)
     }
 }
 
-fn decode_probe_payload(value: Option<serde_json::Value>) -> Result<InspectNodeProbePayload> {
+pub(crate) fn build_inspect_node_js(config: &serde_json::Value) -> String {
+    use crate::tools::browser_kernel::render_browser_kernel_script;
+    render_browser_kernel_script(INSPECT_NODE_JS, "__INSPECT_CONFIG__", config)
+}
+
+pub(crate) fn decode_probe_payload(
+    value: Option<serde_json::Value>,
+) -> Result<InspectNodeProbePayload> {
     let parsed = if let Some(serde_json::Value::String(json_str)) = value {
         serde_json::from_str::<serde_json::Value>(&json_str).map_err(BrowserError::from)?
     } else {
@@ -378,6 +234,9 @@ fn decode_probe_payload(value: Option<serde_json::Value>) -> Result<InspectNodeP
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::browser::BrowserSession;
+    use crate::browser::backend::FakeSessionBackend;
+    use crate::tools::{OPERATION_METRICS_METADATA_KEY, Tool, ToolContext};
 
     #[test]
     fn test_decode_probe_payload_accepts_json_string() {
@@ -421,13 +280,85 @@ mod tests {
 
     #[test]
     fn test_inspect_node_js_prefers_selector_before_target_index() {
-        assert!(INSPECT_NODE_JS.contains("if (config.selector) {"));
+        let inspect_js = build_inspect_node_js(&serde_json::json!({
+            "selector": "#save",
+            "target_index": 1,
+            "detail": "compact",
+            "style_names": [],
+        }));
+
+        assert!(inspect_js.contains("function resolveTargetMatch(config, options)"));
         assert!(
-            INSPECT_NODE_JS
-                .contains("selectorSearch = querySelectorAcrossScopes(config.selector);")
+            inspect_js.contains(
+                "const resolved = resolveTargetMatch(config, { collectBoundaries: true });"
+            )
         );
+        assert!(inspect_js.contains("querySelectorAcrossScopes("));
+        assert!(inspect_js.contains("searchActionableIndex(config.target_index)"));
+    }
+
+    #[test]
+    fn test_inspect_node_tool_executes_against_fake_backend_and_attaches_metrics() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        let tool = InspectNodeTool::default();
+        let mut context = ToolContext::new(&session);
+
+        let result = tool
+            .execute_typed(
+                InspectNodeParams {
+                    selector: Some("#fake-target".to_string()),
+                    index: None,
+                    node_ref: None,
+                    cursor: None,
+                    detail: InspectDetail::Compact,
+                    style_names: Vec::new(),
+                },
+                &mut context,
+            )
+            .expect("inspect_node should succeed");
+
+        assert!(result.success);
+        let data = result.data.expect("inspect_node should include data");
+        assert_eq!(data["identity"]["tag"].as_str(), Some("button"));
+        assert!(result.metadata.contains_key(OPERATION_METRICS_METADATA_KEY));
+    }
+
+    #[test]
+    fn test_inspect_node_tool_returns_structured_failure_for_incomplete_probe_payload() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        let tool = InspectNodeTool::default();
+        let mut context = ToolContext::new(&session);
+
+        let result = tool
+            .execute_typed(
+                InspectNodeParams {
+                    selector: Some("#fake-target".to_string()),
+                    index: None,
+                    node_ref: None,
+                    cursor: None,
+                    detail: InspectDetail::Compact,
+                    style_names: vec!["__incomplete_payload__".to_string()],
+                },
+                &mut context,
+            )
+            .expect("incomplete inspect payload should stay a tool failure");
+
+        assert!(!result.success);
+        let data = result
+            .data
+            .expect("incomplete inspect payload should include details");
+        assert_eq!(data["code"].as_str(), Some("inspect_payload_incomplete"));
+        assert_eq!(
+            data["recovery"]["suggested_tool"].as_str(),
+            Some("snapshot")
+        );
+        let missing_fields = data["missing_fields"]
+            .as_array()
+            .expect("missing_fields should be present");
         assert!(
-            INSPECT_NODE_JS.contains("if (!match && typeof config.target_index === 'number') {")
+            missing_fields
+                .iter()
+                .any(|field| field.as_str() == Some("identity"))
         );
     }
 }

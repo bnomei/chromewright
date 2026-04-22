@@ -207,12 +207,7 @@ impl Tool for PressKeyTool {
         params: PressKeyParams,
         context: &mut ToolContext,
     ) -> Result<ToolResult> {
-        context.session.tab()?.press_key(&params.key).map_err(|e| {
-            BrowserError::ToolExecutionFailed {
-                tool: "press_key".to_string(),
-                reason: e.to_string(),
-            }
-        })?;
+        context.session.press_key(&params.key)?;
 
         context.invalidate_dom();
 
@@ -239,7 +234,10 @@ impl Tool for PressKeyTool {
         let envelope = DocumentEnvelope {
             document: match document {
                 Some(document) => document,
-                None => context.session.document_metadata()?,
+                None => {
+                    context.record_browser_evaluation();
+                    context.session.document_metadata()?
+                }
             },
             target: None,
             snapshot: None,
@@ -247,11 +245,11 @@ impl Tool for PressKeyTool {
             interactive_count: None,
         };
 
-        Ok(ToolResult::success_with(PressKeyOutput {
+        Ok(context.finish(ToolResult::success_with(PressKeyOutput {
             envelope,
             key: params.key,
             focus_after,
-        }))
+        })))
     }
 }
 
@@ -273,13 +271,16 @@ fn deepest_active_actionable_index(node: &AriaNode) -> Option<usize> {
 }
 
 fn read_focus_summary(context: &mut ToolContext) -> Result<Option<FocusSummary>> {
+    context.record_browser_evaluation();
     let result = context
         .session
-        .tab()?
         .evaluate(FOCUS_AFTER_JS, false)
-        .map_err(|e| BrowserError::ToolExecutionFailed {
-            tool: "press_key".to_string(),
-            reason: e.to_string(),
+        .map_err(|e| match e {
+            BrowserError::EvaluationFailed(reason) => BrowserError::ToolExecutionFailed {
+                tool: "press_key".to_string(),
+                reason,
+            },
+            other => other,
         })?;
 
     Ok(parse_focus_summary(result.value))
@@ -357,7 +358,7 @@ mod tests {
         let mut dom = DomTree::new(root);
         dom.document.document_id = "doc-1".to_string();
         dom.document.revision = "rev-1".to_string();
-        dom.selectors = vec!["form > input.search".to_string()];
+        dom.replace_selectors(vec!["form > input.search".to_string()]);
 
         let cursor = active_cursor(&dom).expect("active cursor should resolve");
         assert_eq!(cursor.selector, "form > input.search");

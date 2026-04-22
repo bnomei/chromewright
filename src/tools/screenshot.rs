@@ -48,16 +48,7 @@ impl Tool for ScreenshotTool {
             ));
         }
 
-        let screenshot_data = context
-            .session
-            .tab()?
-            .capture_screenshot(
-                headless_chrome::protocol::cdp::Page::CaptureScreenshotFormatOption::Png,
-                None,
-                None,
-                params.full_page,
-            )
-            .map_err(|e| BrowserError::ScreenshotFailed(e.to_string()))?;
+        let screenshot_data = context.session.capture_screenshot(params.full_page)?;
 
         let output_path = resolve_output_path(&params.path)?;
         if let Some(parent) = output_path.parent() {
@@ -73,12 +64,12 @@ impl Tool for ScreenshotTool {
             BrowserError::ScreenshotFailed(format!("Failed to save screenshot: {}", e))
         })?;
 
-        Ok(ToolResult::success_with(ScreenshotOutput {
+        Ok(context.finish(ToolResult::success_with(ScreenshotOutput {
             path: params.path,
             resolved_path: output_path.display().to_string(),
             size_bytes: screenshot_data.len(),
             full_page: params.full_page,
-        }))
+        })))
     }
 }
 
@@ -114,7 +105,12 @@ fn resolve_output_path(path: &str) -> Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_output_path;
+    use super::{ScreenshotParams, ScreenshotTool, resolve_output_path};
+    use crate::browser::BrowserSession;
+    use crate::browser::backend::FakeSessionBackend;
+    use crate::tools::{Tool, ToolContext};
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn test_resolve_output_path_rejects_absolute_paths() {
@@ -132,5 +128,45 @@ mod tests {
     fn test_resolve_output_path_accepts_safe_relative_paths() {
         let result = resolve_output_path("artifacts/test.png").expect("path should resolve");
         assert!(result.ends_with("artifacts/test.png"));
+    }
+
+    #[test]
+    fn test_screenshot_tool_uses_session_backend_on_fake_backend() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        let tool = ScreenshotTool::default();
+        let mut context = ToolContext::new(&session);
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after unix epoch")
+            .as_nanos();
+        let relative_path = format!("target/test-artifacts/fake-screenshot-{unique}.png");
+
+        let result = tool
+            .execute_typed(
+                ScreenshotParams {
+                    path: relative_path,
+                    full_page: true,
+                    confirm_unsafe: true,
+                },
+                &mut context,
+            )
+            .expect("screenshot should succeed on fake backend");
+
+        assert!(result.success);
+        let data = result.data.expect("screenshot should include data");
+        assert_eq!(data["full_page"].as_bool(), Some(true));
+        assert!(data["size_bytes"].as_u64().unwrap_or_default() > 0);
+
+        let resolved_path = PathBuf::from(
+            data["resolved_path"]
+                .as_str()
+                .expect("resolved path should be returned"),
+        );
+        let bytes = std::fs::read(&resolved_path).expect("screenshot file should exist");
+        assert!(
+            bytes.starts_with(&[137, 80, 78, 71]),
+            "screenshot should be a PNG"
+        );
+        std::fs::remove_file(&resolved_path).expect("test screenshot should be removable");
     }
 }

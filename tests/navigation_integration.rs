@@ -9,24 +9,24 @@ use log::info;
 #[test]
 #[ignore] // Requires Chrome to be installed
 fn test_go_back_tool() {
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     // Navigate to first page
-    session
-        .navigate("data:text/html,<html><body><h1>Page 1</h1></body></html>")
-        .expect("Failed to navigate to page 1");
-
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::navigate_and_wait(
+        session,
+        "data:text/html,<html><body><h1>Page 1</h1></body></html>",
+    )
+    .expect("Failed to navigate to page 1");
 
     // Navigate to second page
-    session
-        .navigate("data:text/html,<html><body><h1>Page 2</h1></body></html>")
-        .expect("Failed to navigate to page 2");
-
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::navigate_and_wait(
+        session,
+        "data:text/html,<html><body><h1>Page 2</h1></body></html>",
+    )
+    .expect("Failed to navigate to page 2");
 
     // Verify we're on page 2
     let current_url = session.tab().unwrap().get_url();
@@ -55,7 +55,7 @@ fn test_go_back_tool() {
     assert!(data["document"]["revision"].as_str().is_some());
     assert!(data["snapshot"].is_null());
 
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::wait_for_url_contains(session, "Page 1").expect("Should return to page 1");
 
     // Verify we went back to page 1
     let new_url = session.tab().unwrap().get_url();
@@ -65,29 +65,28 @@ fn test_go_back_tool() {
 #[test]
 #[ignore]
 fn test_go_forward_tool() {
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     // Navigate to first page
-    session
-        .navigate("data:text/html,<html><body><h1>Page 1</h1></body></html>")
-        .expect("Failed to navigate to page 1");
-
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::navigate_and_wait(
+        session,
+        "data:text/html,<html><body><h1>Page 1</h1></body></html>",
+    )
+    .expect("Failed to navigate to page 1");
 
     // Navigate to second page
-    session
-        .navigate("data:text/html,<html><body><h1>Page 2</h1></body></html>")
-        .expect("Failed to navigate to page 2");
-
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::navigate_and_wait(
+        session,
+        "data:text/html,<html><body><h1>Page 2</h1></body></html>",
+    )
+    .expect("Failed to navigate to page 2");
 
     // Go back to page 1
     session.go_back().expect("Failed to go back");
-
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::wait_for_url_contains(session, "Page 1").expect("Should return to page 1");
 
     // Verify we're on page 1
     let current_url = session.tab().unwrap().get_url();
@@ -116,7 +115,7 @@ fn test_go_forward_tool() {
     assert!(data["document"]["revision"].as_str().is_some());
     assert!(data["snapshot"].is_null());
 
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::wait_for_url_contains(session, "Page 2").expect("Should advance to page 2");
 
     // Verify we went forward to page 2
     let new_url = session.tab().unwrap().get_url();
@@ -127,35 +126,35 @@ fn test_go_forward_tool() {
 #[ignore]
 fn test_navigation_workflow() {
     // Test a complete workflow: navigate to multiple pages, go back, go forward
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     // Navigate to page 1
-    session
-        .navigate("data:text/html,<html><body><h1>Page 1</h1><a id='link' href='data:text/html,<html><body><h1>Page 2</h1></body></html>'>Next</a></body></html>")
+    common::navigate_and_wait(
+        session,
+        "data:text/html,<html><body><h1>Page 1</h1><a id='link' href='data:text/html,<html><body><h1>Page 2</h1></body></html>'>Next</a></body></html>",
+    )
         .expect("Failed to navigate to page 1");
-
-    std::thread::sleep(std::time::Duration::from_millis(500));
 
     info!("On page 1");
 
     // Navigate to page 2
-    session
-        .navigate("data:text/html,<html><body><h1>Page 2</h1></body></html>")
-        .expect("Failed to navigate to page 2");
-
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::navigate_and_wait(
+        session,
+        "data:text/html,<html><body><h1>Page 2</h1></body></html>",
+    )
+    .expect("Failed to navigate to page 2");
 
     info!("On page 2");
 
     // Navigate to page 3
-    session
-        .navigate("data:text/html,<html><body><h1>Page 3</h1></body></html>")
-        .expect("Failed to navigate to page 3");
-
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::navigate_and_wait(
+        session,
+        "data:text/html,<html><body><h1>Page 3</h1></body></html>",
+    )
+    .expect("Failed to navigate to page 3");
 
     info!("On page 3");
 
@@ -172,7 +171,7 @@ fn test_navigation_workflow() {
     assert!(result.success);
     info!("Went back to page 2");
 
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::wait_for_url_contains(session, "Page 2").expect("Should return to page 2");
 
     // Go back to page 1
     let mut context = ToolContext::new(&session);
@@ -183,7 +182,7 @@ fn test_navigation_workflow() {
     assert!(result.success);
     info!("Went back to page 1");
 
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::wait_for_url_contains(session, "Page 1").expect("Should return to page 1");
 
     // Verify we're on page 1
     let current_url = session.tab().unwrap().get_url();
@@ -198,7 +197,7 @@ fn test_navigation_workflow() {
     assert!(result.success);
     info!("Went forward to page 2");
 
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::wait_for_url_contains(session, "Page 2").expect("Should advance to page 2");
 
     // Verify we're on page 2
     let current_url = session.tab().unwrap().get_url();
@@ -208,17 +207,17 @@ fn test_navigation_workflow() {
 #[test]
 #[ignore]
 fn test_close_tool() {
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     // Navigate to a page
-    session
-        .navigate("data:text/html,<html><body><h1>Test Page</h1></body></html>")
-        .expect("Failed to navigate");
-
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::navigate_and_wait(
+        session,
+        "data:text/html,<html><body><h1>Test Page</h1></body></html>",
+    )
+    .expect("Failed to navigate");
 
     // Verify browser is working
     let tabs = session.get_tabs().expect("Failed to get tabs");
@@ -245,29 +244,29 @@ fn test_close_tool() {
 
     assert_eq!(
         data["message"].as_str(),
-        Some("Browser closed successfully")
+        Some("Closed 1 tab(s) in the current session")
     );
+    assert_eq!(data["closed_tabs"].as_u64(), Some(1));
 
     // Note: After closing, subsequent operations may fail
     // The browser tabs should be closed
-    std::thread::sleep(std::time::Duration::from_millis(500));
 }
 
 #[test]
 #[ignore]
 fn test_go_back_on_first_page() {
     // Test that going back on the first page doesn't crash
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     // Navigate to only one page
-    session
-        .navigate("data:text/html,<html><body><h1>First Page</h1></body></html>")
-        .expect("Failed to navigate");
-
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::navigate_and_wait(
+        session,
+        "data:text/html,<html><body><h1>First Page</h1></body></html>",
+    )
+    .expect("Failed to navigate");
 
     // Create tool and context
     let tool = GoBackTool::default();
@@ -292,17 +291,17 @@ fn test_go_back_on_first_page() {
 #[ignore]
 fn test_go_forward_on_last_page() {
     // Test that going forward when there's no forward history doesn't crash
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     // Navigate to a page
-    session
-        .navigate("data:text/html,<html><body><h1>Page</h1></body></html>")
-        .expect("Failed to navigate");
-
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::navigate_and_wait(
+        session,
+        "data:text/html,<html><body><h1>Page</h1></body></html>",
+    )
+    .expect("Failed to navigate");
 
     // Create tool and context
     let tool = GoForwardTool::default();
@@ -326,14 +325,16 @@ fn test_go_forward_on_last_page() {
 #[test]
 #[ignore]
 fn test_wait_tool_navigation_settled() {
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
-    session
-        .navigate("data:text/html,<html><body><h1>Settled</h1></body></html>")
-        .expect("Failed to navigate");
+    common::navigate_and_wait(
+        session,
+        "data:text/html,<html><body><h1>Settled</h1></body></html>",
+    )
+    .expect("Failed to navigate");
 
     let tool = WaitTool::default();
     let mut context = ToolContext::new(&session);

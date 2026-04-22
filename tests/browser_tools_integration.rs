@@ -39,10 +39,10 @@ fn snapshot_node_ref_for_selector(snapshot_data: &Value, selector: &str) -> Node
 #[test]
 #[ignore] // Requires Chrome to be installed
 fn test_select_tool() {
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     // Create a page with a select dropdown
     let html = r#"
@@ -64,10 +64,7 @@ fn test_select_tool() {
         </html>
     "#;
 
-    let data_url = format!("data:text/html,{}", html);
-    session.navigate(&data_url).expect("Failed to navigate");
-
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::navigate_html(session, html).expect("Failed to navigate");
 
     // Create tool and context
     let tool = SelectTool::default();
@@ -112,10 +109,10 @@ fn test_select_tool() {
 #[test]
 #[ignore]
 fn test_hover_tool() {
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     // Create a page with a hoverable element
     let html = r#"
@@ -133,10 +130,7 @@ fn test_hover_tool() {
         </html>
     "#;
 
-    let data_url = format!("data:text/html,{}", html);
-    session.navigate(&data_url).expect("Failed to navigate");
-
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::navigate_html(session, html).expect("Failed to navigate");
 
     // Create tool and context
     let tool = HoverTool::default();
@@ -182,10 +176,10 @@ fn test_hover_tool() {
 #[test]
 #[ignore]
 fn test_scroll_tool_with_amount() {
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     // Create a long page
     let html = r#"
@@ -199,10 +193,7 @@ fn test_scroll_tool_with_amount() {
         </html>
     "#;
 
-    let data_url = format!("data:text/html,{}", html);
-    session.navigate(&data_url).expect("Failed to navigate");
-
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::navigate_html(session, html).expect("Failed to navigate");
 
     // Create tool and context
     let tool = ScrollTool::default();
@@ -233,10 +224,10 @@ fn test_scroll_tool_with_amount() {
 #[test]
 #[ignore]
 fn test_scroll_tool_to_bottom() {
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     // Create a page
     let html = r#"
@@ -249,10 +240,7 @@ fn test_scroll_tool_to_bottom() {
         </html>
     "#;
 
-    let data_url = format!("data:text/html,{}", html);
-    session.navigate(&data_url).expect("Failed to navigate");
-
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::navigate_html(session, html).expect("Failed to navigate");
 
     // Create tool and context
     let tool = ScrollTool::default();
@@ -286,10 +274,10 @@ fn test_scroll_tool_to_bottom() {
 #[test]
 #[ignore]
 fn test_scroll_tool_returns_compact_viewport_follow_up_state() {
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     let html = r#"
         <!DOCTYPE html>
@@ -301,9 +289,7 @@ fn test_scroll_tool_returns_compact_viewport_follow_up_state() {
         </html>
     "#;
 
-    let data_url = format!("data:text/html,{}", html);
-    session.navigate(&data_url).expect("Failed to navigate");
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::navigate_html(session, html).expect("Failed to navigate");
 
     let tool = ScrollTool::default();
     let mut context = ToolContext::new(&session);
@@ -338,10 +324,10 @@ fn test_scroll_tool_returns_compact_viewport_follow_up_state() {
 #[test]
 #[ignore]
 fn test_select_with_index() {
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     // Create a page with a select dropdown
     let html = r#"
@@ -357,10 +343,7 @@ fn test_select_with_index() {
         </html>
     "#;
 
-    let data_url = format!("data:text/html,{}", html);
-    session.navigate(&data_url).expect("Failed to navigate");
-
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::navigate_html(session, html).expect("Failed to navigate");
 
     let snapshot_tool = SnapshotTool::default();
     let tool = SelectTool::default();
@@ -395,10 +378,10 @@ fn test_select_with_index() {
 #[test]
 #[ignore]
 fn test_select_tool_reports_rebound_handoff_after_replacement() {
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     let html = r#"
         <!DOCTYPE html>
@@ -423,9 +406,7 @@ fn test_select_tool_reports_rebound_handoff_after_replacement() {
         </html>
     "#;
 
-    let data_url = format!("data:text/html,{}", html);
-    session.navigate(&data_url).expect("Failed to navigate");
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::navigate_html(session, html).expect("Failed to navigate");
 
     let tool = SelectTool::default();
     let mut context = ToolContext::new(&session);
@@ -478,10 +459,10 @@ fn test_select_tool_reports_rebound_handoff_after_replacement() {
 #[test]
 #[ignore]
 fn test_wait_tool_text_contains() {
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     let html = r#"
         <!DOCTYPE html>
@@ -497,8 +478,7 @@ fn test_wait_tool_text_contains() {
         </html>
     "#;
 
-    let data_url = format!("data:text/html,{}", html);
-    session.navigate(&data_url).expect("Failed to navigate");
+    common::navigate_html(session, html).expect("Failed to navigate");
 
     let tool = WaitTool::default();
     let mut context = ToolContext::new(&session);
@@ -531,10 +511,10 @@ fn test_wait_tool_text_contains() {
 #[test]
 #[ignore]
 fn test_wait_tool_reuses_snapshot_node_ref_inside_same_origin_iframe() {
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     let html = r#"
         <!DOCTYPE html>
@@ -545,9 +525,7 @@ fn test_wait_tool_reuses_snapshot_node_ref_inside_same_origin_iframe() {
         </html>
     "#;
 
-    let data_url = format!("data:text/html,{}", html);
-    session.navigate(&data_url).expect("Failed to navigate");
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::navigate_html(session, html).expect("Failed to navigate");
 
     let snapshot_tool = SnapshotTool::default();
     let wait_tool = WaitTool::default();
@@ -593,10 +571,10 @@ fn test_wait_tool_reuses_snapshot_node_ref_inside_same_origin_iframe() {
 #[test]
 #[ignore]
 fn test_wait_tool_actionable_auto_waits_and_returns_handoff() {
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     let html = r#"
         <!DOCTYPE html>
@@ -611,9 +589,7 @@ fn test_wait_tool_actionable_auto_waits_and_returns_handoff() {
         </html>
     "#;
 
-    let data_url = format!("data:text/html,{}", html);
-    session.navigate(&data_url).expect("Failed to navigate");
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::navigate_html(session, html).expect("Failed to navigate");
 
     let tool = WaitTool::default();
     let mut context = ToolContext::new(&session);
@@ -646,10 +622,10 @@ fn test_wait_tool_actionable_auto_waits_and_returns_handoff() {
 #[test]
 #[ignore]
 fn test_wait_tool_stable_waits_for_layout_settle() {
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     let html = r#"
         <!DOCTYPE html>
@@ -671,9 +647,7 @@ fn test_wait_tool_stable_waits_for_layout_settle() {
         </html>
     "#;
 
-    let data_url = format!("data:text/html,{}", html);
-    session.navigate(&data_url).expect("Failed to navigate");
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::navigate_html(session, html).expect("Failed to navigate");
 
     let tool = WaitTool::default();
     let mut context = ToolContext::new(&session);
@@ -703,10 +677,10 @@ fn test_wait_tool_stable_waits_for_layout_settle() {
 #[test]
 #[ignore]
 fn test_wait_tool_receives_events_waits_for_overlay_to_clear() {
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     let html = r#"
         <!DOCTYPE html>
@@ -721,9 +695,7 @@ fn test_wait_tool_receives_events_waits_for_overlay_to_clear() {
         </html>
     "#;
 
-    let data_url = format!("data:text/html,{}", html);
-    session.navigate(&data_url).expect("Failed to navigate");
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::navigate_html(session, html).expect("Failed to navigate");
 
     let tool = WaitTool::default();
     let mut context = ToolContext::new(&session);
@@ -753,10 +725,10 @@ fn test_wait_tool_receives_events_waits_for_overlay_to_clear() {
 #[test]
 #[ignore]
 fn test_click_tool_auto_waits_and_reports_rebound_handoff() {
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     let html = r#"
         <!DOCTYPE html>
@@ -779,9 +751,7 @@ fn test_click_tool_auto_waits_and_reports_rebound_handoff() {
         </html>
     "#;
 
-    let data_url = format!("data:text/html,{}", html);
-    session.navigate(&data_url).expect("Failed to navigate");
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::navigate_html(session, html).expect("Failed to navigate");
 
     let tool = ClickTool::default();
     let mut context = ToolContext::new(&session);
@@ -822,10 +792,10 @@ fn test_click_tool_auto_waits_and_reports_rebound_handoff() {
 #[test]
 #[ignore]
 fn test_click_tool_hidden_target_returns_structured_failure() {
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     let html = r#"
         <!DOCTYPE html>
@@ -836,9 +806,7 @@ fn test_click_tool_hidden_target_returns_structured_failure() {
         </html>
     "#;
 
-    let data_url = format!("data:text/html,{}", html);
-    session.navigate(&data_url).expect("Failed to navigate");
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::navigate_html(session, html).expect("Failed to navigate");
 
     let tool = ClickTool::default();
     let mut context = ToolContext::new(&session);
@@ -867,10 +835,10 @@ fn test_click_tool_hidden_target_returns_structured_failure() {
 #[test]
 #[ignore]
 fn test_click_tool_offscreen_target_auto_scrolls_into_view() {
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     let html = r#"
         <!DOCTYPE html>
@@ -888,9 +856,7 @@ fn test_click_tool_offscreen_target_auto_scrolls_into_view() {
         </html>
     "#;
 
-    let data_url = format!("data:text/html,{}", html);
-    session.navigate(&data_url).expect("Failed to navigate");
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::navigate_html(session, html).expect("Failed to navigate");
 
     let tool = ClickTool::default();
     let mut context = ToolContext::new(&session);
@@ -945,10 +911,10 @@ fn test_click_tool_offscreen_target_auto_scrolls_into_view() {
 #[test]
 #[ignore]
 fn test_input_tool_disabled_target_returns_structured_failure() {
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     let html = r#"
         <!DOCTYPE html>
@@ -959,9 +925,7 @@ fn test_input_tool_disabled_target_returns_structured_failure() {
         </html>
     "#;
 
-    let data_url = format!("data:text/html,{}", html);
-    session.navigate(&data_url).expect("Failed to navigate");
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::navigate_html(session, html).expect("Failed to navigate");
 
     let tool = InputTool::default();
     let mut context = ToolContext::new(&session);
@@ -988,10 +952,10 @@ fn test_input_tool_disabled_target_returns_structured_failure() {
 #[test]
 #[ignore]
 fn test_hover_tool_obscured_target_returns_structured_failure() {
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     let html = r#"
         <!DOCTYPE html>
@@ -1003,9 +967,7 @@ fn test_hover_tool_obscured_target_returns_structured_failure() {
         </html>
     "#;
 
-    let data_url = format!("data:text/html,{}", html);
-    session.navigate(&data_url).expect("Failed to navigate");
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::navigate_html(session, html).expect("Failed to navigate");
 
     let tool = HoverTool::default();
     let mut context = ToolContext::new(&session);
@@ -1042,10 +1004,10 @@ fn test_hover_tool_obscured_target_returns_structured_failure() {
 #[test]
 #[ignore]
 fn test_inspect_node_with_snapshot_cursor() {
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     let html = r#"
         <!DOCTYPE html>
@@ -1056,9 +1018,7 @@ fn test_inspect_node_with_snapshot_cursor() {
         </html>
     "#;
 
-    let data_url = format!("data:text/html,{}", html);
-    session.navigate(&data_url).expect("Failed to navigate");
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::navigate_html(session, html).expect("Failed to navigate");
     session
         .tab()
         .expect("tab should exist")
@@ -1109,10 +1069,10 @@ fn test_inspect_node_with_snapshot_cursor() {
 #[test]
 #[ignore]
 fn test_inspect_node_handles_shadow_dom() {
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     let html = r#"
         <!DOCTYPE html>
@@ -1128,9 +1088,7 @@ fn test_inspect_node_handles_shadow_dom() {
         </html>
     "#;
 
-    let data_url = format!("data:text/html,{}", html);
-    session.navigate(&data_url).expect("Failed to navigate");
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::navigate_html(session, html).expect("Failed to navigate");
 
     let snapshot_tool = SnapshotTool::default();
     let inspect_tool = InspectNodeTool::default();
@@ -1176,10 +1134,10 @@ fn test_inspect_node_handles_shadow_dom() {
 #[test]
 #[ignore]
 fn test_inspect_node_compact_surface_covers_focus_disabled_and_viewport_visibility() {
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     let html = r#"
         <!DOCTYPE html>
@@ -1193,9 +1151,7 @@ fn test_inspect_node_compact_surface_covers_focus_disabled_and_viewport_visibili
         </html>
     "#;
 
-    let data_url = format!("data:text/html,{}", html);
-    session.navigate(&data_url).expect("Failed to navigate");
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::navigate_html(session, html).expect("Failed to navigate");
     session
         .tab()
         .expect("tab should exist")
@@ -1297,10 +1253,10 @@ fn test_inspect_node_compact_surface_covers_focus_disabled_and_viewport_visibili
 #[test]
 #[ignore]
 fn test_inspect_node_selector_normalizes_to_cursor() {
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     let html = r#"
         <!DOCTYPE html>
@@ -1311,9 +1267,7 @@ fn test_inspect_node_selector_normalizes_to_cursor() {
         </html>
     "#;
 
-    let data_url = format!("data:text/html,{}", html);
-    session.navigate(&data_url).expect("Failed to navigate");
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::navigate_html(session, html).expect("Failed to navigate");
 
     let inspect_tool = InspectNodeTool::default();
     let mut context = ToolContext::new(&session);
@@ -1341,10 +1295,10 @@ fn test_inspect_node_selector_normalizes_to_cursor() {
 #[test]
 #[ignore]
 fn test_inspect_node_bounds_heavy_fields() {
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     let long_text = "x".repeat(3000);
     let html = format!(
@@ -1358,9 +1312,7 @@ fn test_inspect_node_bounds_heavy_fields() {
     "#
     );
 
-    let data_url = format!("data:text/html,{}", html);
-    session.navigate(&data_url).expect("Failed to navigate");
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::navigate_html(session, html).expect("Failed to navigate");
 
     let inspect_tool = InspectNodeTool::default();
     let mut context = ToolContext::new(&session);
@@ -1412,10 +1364,10 @@ fn test_inspect_node_bounds_heavy_fields() {
 #[test]
 #[ignore]
 fn test_inspect_node_reports_cross_origin_iframe_boundary() {
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     let html = r#"
         <!DOCTYPE html>
@@ -1426,9 +1378,7 @@ fn test_inspect_node_reports_cross_origin_iframe_boundary() {
         </html>
     "#;
 
-    let data_url = format!("data:text/html,{}", html);
-    session.navigate(&data_url).expect("Failed to navigate");
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::navigate_html(session, html).expect("Failed to navigate");
 
     let inspect_tool = InspectNodeTool::default();
     let mut context = ToolContext::new(&session);
@@ -1459,10 +1409,10 @@ fn test_inspect_node_reports_cross_origin_iframe_boundary() {
 #[test]
 #[ignore]
 fn test_inspect_node_handles_same_origin_iframe() {
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     let html = r#"
         <!DOCTYPE html>
@@ -1473,9 +1423,7 @@ fn test_inspect_node_handles_same_origin_iframe() {
         </html>
     "#;
 
-    let data_url = format!("data:text/html,{}", html);
-    session.navigate(&data_url).expect("Failed to navigate");
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::navigate_html(session, html).expect("Failed to navigate");
 
     let inspect_tool = InspectNodeTool::default();
     let mut context = ToolContext::new(&session);
@@ -1504,10 +1452,10 @@ fn test_inspect_node_handles_same_origin_iframe() {
 #[test]
 #[ignore]
 fn test_inspect_node_reuses_snapshot_cursor_inside_same_origin_iframe() {
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     let html = r#"
         <!DOCTYPE html>
@@ -1518,9 +1466,7 @@ fn test_inspect_node_reuses_snapshot_cursor_inside_same_origin_iframe() {
         </html>
     "#;
 
-    let data_url = format!("data:text/html,{}", html);
-    session.navigate(&data_url).expect("Failed to navigate");
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::navigate_html(session, html).expect("Failed to navigate");
 
     let snapshot_tool = SnapshotTool::default();
     let inspect_tool = InspectNodeTool::default();

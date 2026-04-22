@@ -33,18 +33,20 @@ impl Tool for GoForwardTool {
         _params: GoForwardParams,
         context: &mut ToolContext,
     ) -> Result<ToolResult> {
-        context
-            .session
-            .go_forward()
-            .map_err(|e| BrowserError::ToolExecutionFailed {
+        let metrics = context.session.go_forward_with_metrics().map_err(|e| {
+            BrowserError::ToolExecutionFailed {
                 tool: "go_forward".to_string(),
                 reason: e.to_string(),
-            })?;
+            }
+        })?;
+        context.record_browser_evaluations(metrics.browser_evaluations);
+        context.record_poll_iterations(metrics.poll_iterations);
 
         context.invalidate_dom();
-        Ok(ToolResult::success_with(GoForwardOutput {
-            envelope: build_document_envelope(context, None, DocumentEnvelopeOptions::minimal())?,
+        let envelope = build_document_envelope(context, None, DocumentEnvelopeOptions::minimal())?;
+        Ok(context.finish(ToolResult::success_with(GoForwardOutput {
+            envelope,
             action: "go_forward".to_string(),
-        }))
+        })))
     }
 }

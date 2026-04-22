@@ -134,6 +134,26 @@ Once operator tools are registered, `evaluate` and `screenshot` still require `c
 per call. High-level `navigate` and `new_tab` also reject unsafe schemes such as `data:` and `file:`
 unless the caller passes `allow_unsafe = true`.
 
+## Operation Metrics
+
+Tool results now flow through a shared `ToolContext::finish()` path, which attaches repo-native
+`operation_metrics` metadata on `ToolResult.metadata` in Rust and forwards the same metadata
+through MCP tool metadata. Every finished result includes serialized output size, and measured hot
+paths add the relevant counters below:
+
+- browser evaluation count
+- poll iterations
+- DOM extraction count and extraction time
+- snapshot render time
+- handoff rebuild count and time
+- serialized output size
+
+The lightweight validation surface for these metrics is in the normal test suite:
+
+```bash
+cargo test --locked --all-features operation_metrics
+```
+
 ## Requirements
 
 - Rust 1.85+

@@ -43,12 +43,10 @@ pub struct ScrollOutput {
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 struct RawScrollOutput {
-    #[serde(default)]
     actual_scroll: i64,
-    #[serde(default)]
     is_at_bottom: bool,
-    scroll_y: Option<i64>,
-    is_at_top: Option<bool>,
+    scroll_y: i64,
+    is_at_top: bool,
 }
 
 impl Tool for ScrollTool {
@@ -65,38 +63,51 @@ impl Tool for ScrollTool {
         });
         let scroll_js = SCROLL_JS.replace("__SCROLL_CONFIG__", &config.to_string());
 
+        context.record_browser_evaluation();
         let result = context
             .session
-            .tab()?
             .evaluate(&scroll_js, true)
-            .map_err(|e| BrowserError::ToolExecutionFailed {
-                tool: "scroll".to_string(),
-                reason: e.to_string(),
+            .map_err(|e| match e {
+                BrowserError::EvaluationFailed(reason) => BrowserError::ToolExecutionFailed {
+                    tool: "scroll".to_string(),
+                    reason,
+                },
+                other => other,
             })?;
+
+        let result_json = match parse_raw_scroll_output(result.value) {
+            Ok(result_json) => result_json,
+            Err((reason, received_type)) => {
+                return Ok(context.finish(ToolResult::failure_with(
+                    reason.clone(),
+                    serde_json::json!({
+                        "code": "invalid_scroll_payload",
+                        "error": reason,
+                        "received_type": received_type,
+                        "recovery": {
+                            "suggested_tool": "snapshot",
+                        }
+                    }),
+                )));
+            }
+        };
 
         context.invalidate_dom();
         let envelope = build_document_envelope(context, None, DocumentEnvelopeOptions::minimal())?;
 
-        Ok(ToolResult::success_with(parse_scroll_output(
-            result.value,
+        Ok(context.finish(ToolResult::success_with(build_scroll_output(
+            result_json,
             envelope,
-        )))
+        ))))
     }
 }
 
-fn parse_scroll_output(
-    value: Option<serde_json::Value>,
-    envelope: DocumentEnvelope,
-) -> ScrollOutput {
-    let result_json = parse_raw_scroll_output(value);
-    let viewport_after = match (result_json.scroll_y, result_json.is_at_top) {
-        (Some(scroll_y), Some(is_at_top)) => Some(ViewportAfter {
-            scroll_y,
-            is_at_top,
-            is_at_bottom: result_json.is_at_bottom,
-        }),
-        _ => None,
-    };
+fn build_scroll_output(result_json: RawScrollOutput, envelope: DocumentEnvelope) -> ScrollOutput {
+    let viewport_after = Some(ViewportAfter {
+        scroll_y: result_json.scroll_y,
+        is_at_top: result_json.is_at_top,
+        is_at_bottom: result_json.is_at_bottom,
+    });
 
     let message = if result_json.is_at_bottom {
         format!(
@@ -119,19 +130,131 @@ fn parse_scroll_output(
     }
 }
 
-fn parse_raw_scroll_output(value: Option<serde_json::Value>) -> RawScrollOutput {
+fn parse_raw_scroll_output(
+    value: Option<serde_json::Value>,
+) -> std::result::Result<RawScrollOutput, (String, &'static str)> {
     match value {
         Some(serde_json::Value::String(json_str)) => {
-            serde_json::from_str(&json_str).unwrap_or_default()
+            serde_json::from_str(&json_str).map_err(|error| {
+                (
+                    format!("Failed to parse scroll result: {}", error),
+                    "string",
+                )
+            })
         }
-        Some(other) => serde_json::from_value(other).unwrap_or_default(),
-        None => RawScrollOutput::default(),
+        Some(other) => {
+            let received_type = value_kind(&other);
+            serde_json::from_value(other).map_err(|error| {
+                (
+                    format!("Failed to deserialize scroll result: {}", error),
+                    received_type,
+                )
+            })
+        }
+        None => Err(("Scroll returned no data".to_string(), "null")),
+    }
+}
+
+fn value_kind(value: &serde_json::Value) -> &'static str {
+    match value {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "boolean",
+        serde_json::Value::Number(_) => "number",
+        serde_json::Value::String(_) => "string",
+        serde_json::Value::Array(_) => "array",
+        serde_json::Value::Object(_) => "object",
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::browser::BrowserSession;
+    use crate::browser::backend::{ScriptEvaluation, SessionBackend, TabDescriptor};
+    use crate::tools::{OPERATION_METRICS_METADATA_KEY, Tool, ToolContext};
+    use crate::{dom::DocumentMetadata, dom::DomTree};
+    use serde_json::Value;
+    use std::any::Any;
+    use std::time::Duration;
+
+    struct InvalidScrollPayloadBackend;
+
+    impl SessionBackend for InvalidScrollPayloadBackend {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn navigate(&self, _url: &str) -> crate::error::Result<()> {
+            unreachable!("navigate is not used in this test")
+        }
+
+        fn wait_for_navigation(&self) -> crate::error::Result<()> {
+            unreachable!("wait_for_navigation is not used in this test")
+        }
+
+        fn wait_for_document_ready_with_timeout(
+            &self,
+            _timeout: Duration,
+        ) -> crate::error::Result<()> {
+            unreachable!("wait_for_document_ready_with_timeout is not used in this test")
+        }
+
+        fn document_metadata(&self) -> crate::error::Result<DocumentMetadata> {
+            unreachable!("document_metadata is not used in this test")
+        }
+
+        fn extract_dom(&self) -> crate::error::Result<DomTree> {
+            unreachable!("extract_dom is not used in this test")
+        }
+
+        fn extract_dom_with_prefix(&self, _prefix: &str) -> crate::error::Result<DomTree> {
+            unreachable!("extract_dom_with_prefix is not used in this test")
+        }
+
+        fn evaluate(
+            &self,
+            _script: &str,
+            _await_promise: bool,
+        ) -> crate::error::Result<ScriptEvaluation> {
+            Ok(ScriptEvaluation {
+                value: Some(Value::String("not-json".to_string())),
+                description: None,
+                type_name: Some("String".to_string()),
+            })
+        }
+
+        fn capture_screenshot(&self, _full_page: bool) -> crate::error::Result<Vec<u8>> {
+            unreachable!("capture_screenshot is not used in this test")
+        }
+
+        fn press_key(&self, _key: &str) -> crate::error::Result<()> {
+            unreachable!("press_key is not used in this test")
+        }
+
+        fn list_tabs(&self) -> crate::error::Result<Vec<TabDescriptor>> {
+            unreachable!("list_tabs is not used in this test")
+        }
+
+        fn active_tab(&self) -> crate::error::Result<TabDescriptor> {
+            unreachable!("active_tab is not used in this test")
+        }
+
+        fn open_tab(&self, _url: &str) -> crate::error::Result<TabDescriptor> {
+            unreachable!("open_tab is not used in this test")
+        }
+
+        fn activate_tab(&self, _tab_id: &str) -> crate::error::Result<()> {
+            unreachable!("activate_tab is not used in this test")
+        }
+
+        fn close_tab(&self, _tab_id: &str, _with_unload: bool) -> crate::error::Result<()> {
+            unreachable!("close_tab is not used in this test")
+        }
+
+        fn close(&self) -> crate::error::Result<()> {
+            unreachable!("close is not used in this test")
+        }
+    }
 
     #[test]
     fn test_scroll_params_with_amount() {
@@ -163,11 +286,12 @@ mod tests {
 
     #[test]
     fn test_parse_scroll_output_from_string_payload() {
-        let output = parse_scroll_output(
-            Some(serde_json::Value::String(
+        let output = build_scroll_output(
+            parse_raw_scroll_output(Some(serde_json::Value::String(
                 r#"{"actualScroll":420,"isAtBottom":true,"scrollY":860,"isAtTop":false}"#
                     .to_string(),
-            )),
+            )))
+            .expect("scroll payload should parse"),
             empty_envelope(),
         );
 
@@ -185,16 +309,13 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_scroll_output_falls_back_for_invalid_payload() {
-        let output = parse_scroll_output(
-            Some(serde_json::Value::String("not json".to_string())),
-            empty_envelope(),
-        );
+    fn test_parse_raw_scroll_output_rejects_invalid_payload() {
+        let error =
+            parse_raw_scroll_output(Some(serde_json::Value::String("not json".to_string())))
+                .expect_err("invalid scroll payload should fail");
 
-        assert_eq!(output.scrolled, 0);
-        assert!(!output.is_at_bottom);
-        assert!(output.message.contains("Did not reach the bottom"));
-        assert_eq!(output.viewport_after, None);
+        assert!(error.0.contains("Failed to parse scroll result"));
+        assert_eq!(error.1, "string");
     }
 
     #[test]
@@ -219,6 +340,39 @@ mod tests {
             value["viewport_after"]["is_at_top"],
             serde_json::json!(false)
         );
+    }
+
+    #[test]
+    fn test_scroll_tool_returns_structured_failure_for_invalid_payload() {
+        let session = BrowserSession::with_test_backend(InvalidScrollPayloadBackend);
+        let tool = ScrollTool::default();
+        let mut context = ToolContext::new(&session);
+
+        let result = tool
+            .execute_typed(ScrollParams { amount: None }, &mut context)
+            .expect("invalid scroll payload should stay a tool failure");
+
+        assert!(!result.success);
+        assert!(
+            result
+                .error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Failed to parse scroll result")
+        );
+        let data = result
+            .data
+            .expect("invalid scroll payload failure should include details");
+        assert_eq!(data["code"].as_str(), Some("invalid_scroll_payload"));
+        assert_eq!(data["received_type"].as_str(), Some("string"));
+        assert_eq!(
+            data["recovery"]["suggested_tool"].as_str(),
+            Some("snapshot")
+        );
+        let metrics = result.metadata[OPERATION_METRICS_METADATA_KEY]
+            .as_object()
+            .expect("metrics metadata should be present on failures");
+        assert_eq!(metrics["browser_evaluations"].as_u64(), Some(1));
     }
 
     fn empty_envelope() -> DocumentEnvelope {

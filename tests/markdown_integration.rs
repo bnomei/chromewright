@@ -7,10 +7,10 @@ use log::info;
 #[test]
 #[ignore] // Requires Chrome to be installed
 fn test_basic_markdown_extraction() {
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     // Create a simple article page
     let html = r#"
@@ -29,10 +29,7 @@ fn test_basic_markdown_extraction() {
         </html>
     "#;
 
-    let data_url = format!("data:text/html,{}", urlencoding::encode(html));
-    session.navigate(&data_url).expect("Failed to navigate");
-
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::navigate_encoded_html(session, html).expect("Failed to navigate");
 
     // Create tool and context
     let tool = GetMarkdownTool::default();
@@ -79,10 +76,10 @@ fn test_basic_markdown_extraction() {
 #[test]
 #[ignore]
 fn test_readability_filtering() {
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     // Create a page with navigation, sidebar, and main content
     let html = r#"
@@ -119,10 +116,7 @@ fn test_readability_filtering() {
         </html>
     "#;
 
-    let data_url = format!("data:text/html,{}", urlencoding::encode(html));
-    session.navigate(&data_url).expect("Failed to navigate");
-
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::navigate_encoded_html(session, html).expect("Failed to navigate");
 
     let tool = GetMarkdownTool::default();
     let mut context = ToolContext::new(&session);
@@ -156,10 +150,10 @@ fn test_readability_filtering() {
 #[test]
 #[ignore]
 fn test_markdown_pagination() {
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     // Create a long article that will require multiple pages
     let mut paragraphs = String::new();
@@ -188,10 +182,7 @@ fn test_markdown_pagination() {
         paragraphs
     );
 
-    let data_url = format!("data:text/html,{}", urlencoding::encode(&html));
-    session.navigate(&data_url).expect("Failed to navigate");
-
-    std::thread::sleep(std::time::Duration::from_millis(1000));
+    common::navigate_encoded_html(session, &html).expect("Failed to navigate");
 
     let tool = GetMarkdownTool::default();
     let mut context = ToolContext::new(&session);
@@ -280,10 +271,10 @@ fn test_markdown_pagination() {
 #[test]
 #[ignore]
 fn test_empty_page() {
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     let html = r#"
         <!DOCTYPE html>
@@ -296,10 +287,7 @@ fn test_empty_page() {
         </html>
     "#;
 
-    let data_url = format!("data:text/html,{}", urlencoding::encode(html));
-    session.navigate(&data_url).expect("Failed to navigate");
-
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::navigate_encoded_html(session, html).expect("Failed to navigate");
 
     let tool = GetMarkdownTool::default();
     let mut context = ToolContext::new(&session);
@@ -324,10 +312,10 @@ fn test_empty_page() {
 #[test]
 #[ignore]
 fn test_table_conversion() {
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     let html = r#"
         <!DOCTYPE html>
@@ -364,10 +352,7 @@ fn test_table_conversion() {
         </html>
     "#;
 
-    let data_url = format!("data:text/html,{}", urlencoding::encode(html));
-    session.navigate(&data_url).expect("Failed to navigate");
-
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::navigate_encoded_html(session, html).expect("Failed to navigate");
 
     let tool = GetMarkdownTool::default();
     let mut context = ToolContext::new(&session);
@@ -397,10 +382,10 @@ fn test_table_conversion() {
 #[test]
 #[ignore]
 fn test_double_execution_same_page() {
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     // Create a simple article page
     let html = r#"
@@ -420,10 +405,7 @@ fn test_double_execution_same_page() {
         </html>
     "#;
 
-    let data_url = format!("data:text/html,{}", urlencoding::encode(html));
-    session.navigate(&data_url).expect("Failed to navigate");
-
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::navigate_encoded_html(session, html).expect("Failed to navigate");
 
     let tool = GetMarkdownTool::default();
     let mut context = ToolContext::new(&session);
@@ -484,10 +466,10 @@ fn test_double_execution_same_page() {
 #[test]
 #[ignore]
 fn test_page_clamping() {
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     let html = r#"
         <!DOCTYPE html>
@@ -504,10 +486,7 @@ fn test_page_clamping() {
         </html>
     "#;
 
-    let data_url = format!("data:text/html,{}", urlencoding::encode(html));
-    session.navigate(&data_url).expect("Failed to navigate");
-
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::navigate_encoded_html(session, html).expect("Failed to navigate");
 
     let tool = GetMarkdownTool::default();
     let mut context = ToolContext::new(&session);
@@ -535,10 +514,10 @@ fn test_page_clamping() {
 #[test]
 #[ignore]
 fn test_markdown_extraction_waits_for_delayed_content() {
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     let html = r#"
         <!DOCTYPE html>
@@ -560,8 +539,7 @@ fn test_markdown_extraction_waits_for_delayed_content() {
         </html>
     "#;
 
-    let data_url = format!("data:text/html,{}", urlencoding::encode(html));
-    session.navigate(&data_url).expect("Failed to navigate");
+    common::navigate_encoded_html(session, html).expect("Failed to navigate");
 
     let tool = GetMarkdownTool::default();
     let mut context = ToolContext::new(&session);

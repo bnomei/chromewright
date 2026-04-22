@@ -35,28 +35,26 @@ impl Tool for SwitchTabTool {
         params: SwitchTabParams,
         context: &mut ToolContext,
     ) -> Result<ToolResult> {
-        // Get all tabs to validate index
-        let tabs = context.session.get_tabs()?;
+        let tabs = context.session.tab_overview()?;
+
+        if tabs.is_empty() {
+            return Ok(context.finish(ToolResult::failure("No tabs available")));
+        }
 
         if params.index >= tabs.len() {
-            return Ok(ToolResult::failure(format!(
+            return Ok(context.finish(ToolResult::failure(format!(
                 "Invalid tab index: {}. Valid range: 0-{}",
                 params.index,
                 tabs.len() - 1
-            )));
+            ))));
         }
 
-        // Get the tab at the specified index
-        let target_tab = tabs[params.index].clone();
+        let target_id = tabs[params.index].id.clone();
+        context.session.activate_tab_by_id(&target_id)?;
+        let tabs = context.session.tab_overview()?;
+        let title = tabs[params.index].title.clone();
+        let url = tabs[params.index].url.clone();
 
-        // Activate the tab and keep the session hint coherent.
-        context.session.activate_tab(&target_tab)?;
-
-        // Get updated tab info
-        let title = target_tab.get_title().unwrap_or_default();
-        let url = target_tab.get_url();
-
-        // Build tab list summary
         let summary = format_switch_summary(
             params.index,
             &tabs
@@ -64,18 +62,18 @@ impl Tool for SwitchTabTool {
                 .enumerate()
                 .map(|(idx, tab)| TabSummaryLine {
                     index: idx,
-                    title: tab.get_title().unwrap_or_default(),
-                    url: tab.get_url(),
+                    title: tab.title.clone(),
+                    url: tab.url.clone(),
                 })
                 .collect::<Vec<_>>(),
         );
 
-        Ok(ToolResult::success_with(SwitchTabOutput {
+        Ok(context.finish(ToolResult::success_with(SwitchTabOutput {
             index: params.index,
             message: summary,
             title,
             url,
-        }))
+        })))
     }
 }
 
@@ -99,6 +97,8 @@ fn format_switch_summary(index: usize, tabs: &[TabSummaryLine]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::browser::BrowserSession;
+    use crate::browser::backend::FakeSessionBackend;
 
     #[test]
     fn test_format_switch_summary_lists_all_tabs() {
@@ -121,5 +121,31 @@ mod tests {
         assert!(summary.contains("Switched to tab 2"));
         assert!(summary.contains("[0] First"));
         assert!(summary.contains("[2] Second"));
+    }
+
+    #[test]
+    fn test_switch_tab_tool_executes_against_fake_backend() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        session
+            .open_tab_entry("https://second.example")
+            .expect("second tab should open");
+
+        let tool = SwitchTabTool::default();
+        let mut context = ToolContext::new(&session);
+        let result = tool
+            .execute_typed(SwitchTabParams { index: 0 }, &mut context)
+            .expect("switch_tab should succeed");
+
+        assert!(result.success);
+        let data = result.data.expect("switch_tab should include data");
+        assert_eq!(data["index"].as_u64(), Some(0));
+        assert_eq!(data["url"].as_str(), Some("about:blank"));
+
+        let active_index = session
+            .tab_overview()
+            .expect("tabs should load")
+            .iter()
+            .position(|tab| tab.active);
+        assert_eq!(active_index, Some(0));
     }
 }

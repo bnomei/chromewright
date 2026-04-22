@@ -45,16 +45,47 @@ impl Tool for EvaluateTool {
             ));
         }
 
+        context.record_browser_evaluation();
         let result = context
             .session
-            .tab()?
-            .evaluate(&params.code, params.await_promise)
-            .map_err(|e| BrowserError::EvaluationFailed(e.to_string()))?;
+            .evaluate(&params.code, params.await_promise)?;
 
         let result_value = result.value.unwrap_or(Value::Null);
 
-        Ok(ToolResult::success_with(EvaluateOutput {
+        Ok(context.finish(ToolResult::success_with(EvaluateOutput {
             result: result_value,
-        }))
+        })))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::browser::BrowserSession;
+    use crate::browser::backend::FakeSessionBackend;
+    use crate::tools::{OPERATION_METRICS_METADATA_KEY, Tool, ToolContext};
+
+    #[test]
+    fn test_evaluate_tool_records_browser_evaluation_metrics() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        let tool = EvaluateTool::default();
+        let mut context = ToolContext::new(&session);
+
+        let result = tool
+            .execute_typed(
+                EvaluateParams {
+                    code: "document.readyState".to_string(),
+                    await_promise: false,
+                    confirm_unsafe: true,
+                },
+                &mut context,
+            )
+            .expect("evaluate should succeed");
+
+        assert!(result.success);
+        let metrics = result.metadata[OPERATION_METRICS_METADATA_KEY]
+            .as_object()
+            .expect("metrics metadata should be present");
+        assert_eq!(metrics["browser_evaluations"].as_u64(), Some(1));
     }
 }

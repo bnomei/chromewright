@@ -5,7 +5,9 @@
 pub mod handler;
 pub use handler::BrowserServer;
 
-use crate::tools::{self, Tool, ToolContext, ToolResult as InternalToolResult};
+use crate::tools::{
+    self, Tool, ToolContext, ToolResult as InternalToolResult, normalize_tool_outcome,
+};
 use rmcp::{
     ErrorData as McpError,
     handler::server::wrapper::Parameters,
@@ -64,6 +66,15 @@ fn convert_result(result: InternalToolResult) -> Result<CallToolResult, McpError
     }
 }
 
+fn convert_tool_outcome(
+    outcome: crate::error::Result<InternalToolResult>,
+    context: &ToolContext<'_>,
+) -> Result<CallToolResult, McpError> {
+    let result = normalize_tool_outcome(outcome, context)
+        .map_err(|error| McpError::internal_error(error.to_string(), None))?;
+    convert_result(result)
+}
+
 /// Macro to register MCP tools by automatically generating wrapper functions
 macro_rules! register_mcp_tools {
     ($($mcp_name:ident => $tool_type:ty, $description:expr);* $(;)?) => {
@@ -80,9 +91,7 @@ macro_rules! register_mcp_tools {
                 ) -> Result<CallToolResult, McpError> {
                     let mut context = ToolContext::new(self.session());
                     let tool = <$tool_type>::default();
-                    let result = tool.execute_typed(params.0, &mut context)
-                        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-                    convert_result(result)
+                    convert_tool_outcome(tool.execute_typed(params.0, &mut context), &context)
                 }
             )*
         }
@@ -95,13 +104,14 @@ register_mcp_tools! {
     browser_navigate => tools::navigate::NavigateTool, "Open a URL. Next: wait or snapshot.";
     browser_go_back => tools::go_back::GoBackTool, "Go back in history. Next: wait or snapshot.";
     browser_go_forward => tools::go_forward::GoForwardTool, "Go forward in history. Next: wait or snapshot.";
-    browser_close => tools::close::CloseTool, "Close the browser when the task is done.";
+    browser_close => tools::close::CloseTool, "Close all open tabs in the current session.";
 
     // ---- Page Content and Extraction ----
     browser_get_markdown => tools::markdown::GetMarkdownTool, "Read page content as markdown. Extraction only; use snapshot for actions.";
+    browser_get_text => tools::extract::ExtractContentTool, "Read text or HTML from the page or a selector. Use when markdown is too lossy.";
+    browser_read_links => tools::read_links::ReadLinksTool, "List page links. Next: click or navigate.";
     browser_snapshot => tools::snapshot::SnapshotTool, "Capture page state and node cursors. Next: inspect_node, click, input, select, hover, wait.";
     browser_inspect_node => tools::inspect_node::InspectNodeTool, "Inspect one node after snapshot. Prefer cursor; selector/index/node_ref still work.";
-    // browser_get_text => tools::extract::ExtractContentTool, "Extract text or HTML content from the page or an element";
 
     // ---- Interaction ----
     browser_click => tools::click::ClickTool, "Activate an element. Usually after snapshot; next wait or snapshot.";
@@ -121,9 +131,14 @@ register_mcp_tools! {
 
 #[cfg(test)]
 mod tests {
-    use super::convert_result;
+    use super::{convert_result, convert_tool_outcome};
+    use crate::browser::BrowserSession;
+    use crate::browser::backend::FakeSessionBackend;
+    use crate::error::BrowserError;
     use crate::mcp::BrowserServer;
-    use crate::tools::ToolResult as InternalToolResult;
+    use crate::tools::{
+        OPERATION_METRICS_METADATA_KEY, ToolContext, ToolResult as InternalToolResult,
+    };
     use serde_json::json;
     use std::collections::HashMap;
 
@@ -206,6 +221,57 @@ mod tests {
     }
 
     #[test]
+    fn test_convert_tool_outcome_preserves_structured_tool_failures_from_browser_errors() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        let mut context = ToolContext::new(&session);
+        context.record_browser_evaluation();
+
+        let result = convert_tool_outcome(
+            Err(BrowserError::ToolExecutionFailed {
+                tool: "close".to_string(),
+                reason: "Session close encountered 1 error(s)".to_string(),
+            }),
+            &context,
+        )
+        .expect("tool execution failures should stay structured");
+
+        assert_eq!(
+            result.structured_content,
+            Some(json!({
+                "code": "tool_execution_failed",
+                "error": "Session close encountered 1 error(s)",
+                "tool": "close",
+            }))
+        );
+        assert_eq!(result.is_error, Some(true));
+        assert_eq!(
+            result
+                .meta
+                .as_ref()
+                .and_then(|meta| meta.0.get(OPERATION_METRICS_METADATA_KEY))
+                .and_then(|metrics| metrics.get("browser_evaluations"))
+                .and_then(|value| value.as_u64()),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn test_convert_tool_outcome_keeps_internal_errors_for_browser_infra_failures() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        let context = ToolContext::new(&session);
+
+        let error = convert_tool_outcome(
+            Err(BrowserError::ChromeError(
+                "CDP connection dropped".to_string(),
+            )),
+            &context,
+        )
+        .expect_err("browser infrastructure failures should remain internal");
+
+        assert!(error.to_string().contains("CDP connection dropped"));
+    }
+
+    #[test]
     fn test_mcp_tools_advertise_output_schemas() {
         let tools = BrowserServer::tool_router().list_all();
 
@@ -279,6 +345,8 @@ mod tests {
 
         let expectations = [
             ("browser_get_markdown", ["snapshot"].as_slice()),
+            ("browser_get_text", ["markdown"].as_slice()),
+            ("browser_read_links", ["click", "navigate"].as_slice()),
             (
                 "browser_snapshot",
                 ["cursors", "inspect_node", "click", "wait"].as_slice(),
@@ -304,5 +372,23 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_mcp_surface_exports_default_extraction_tools() {
+        let tool_names: Vec<String> = BrowserServer::tool_router()
+            .list_all()
+            .into_iter()
+            .map(|tool| tool.name.to_string())
+            .collect();
+
+        assert!(
+            tool_names.iter().any(|name| name == "browser_get_text"),
+            "browser_get_text should be exported via MCP"
+        );
+        assert!(
+            tool_names.iter().any(|name| name == "browser_read_links"),
+            "browser_read_links should be exported via MCP"
+        );
     }
 }

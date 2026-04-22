@@ -36,7 +36,7 @@ impl Tool for SnapshotTool {
             envelope.snapshot = envelope.snapshot.take();
         }
 
-        Ok(ToolResult::success_with(envelope))
+        Ok(context.finish(ToolResult::success_with(envelope)))
     }
 }
 

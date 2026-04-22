@@ -6,14 +6,17 @@ use log::info;
 #[ignore] // Requires Chrome to be installed
 fn test_dom_extraction() {
     // Launch browser
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     // Navigate to a simple page
-    session.navigate("data:text/html,<html><body><button id='test-btn'>Click me</button><a href='#'>Link</a></body></html>")
-        .expect("Failed to navigate");
+    common::navigate_and_wait(
+        session,
+        "data:text/html,<html><body><button id='test-btn'>Click me</button><a href='#'>Link</a></body></html>",
+    )
+    .expect("Failed to navigate");
 
     // Extract DOM
     let dom = session.extract_dom().expect("Failed to extract DOM");
@@ -35,18 +38,18 @@ fn test_dom_extraction() {
 #[test]
 #[ignore]
 fn test_simplified_dom_extraction() {
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     // Page with script and style tags that should be removed
     // Use a simple HTML page
-    session.navigate("data:text/html,<html><head></head><body><p>Hello</p><button>Click</button></body></html>")
-        .expect("Failed to navigate");
-
-    // Small delay to let page render
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::navigate_and_wait(
+        session,
+        "data:text/html,<html><head></head><body><p>Hello</p><button>Click</button></body></html>",
+    )
+    .expect("Failed to navigate");
 
     // Extract simplified DOM
     let dom = session.extract_dom().expect("Failed to extract DOM");
@@ -62,10 +65,10 @@ fn test_simplified_dom_extraction() {
 fn test_read_links() {
     use chromewright::tools::{ReadLinksParams, Tool, ToolContext, read_links::ReadLinksTool};
 
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     let html = concat!(
         "<html><head><title>Links Test</title></head><body>",
@@ -78,11 +81,7 @@ fn test_read_links() {
         "</body></html>"
     );
 
-    session
-        .navigate(&format!("data:text/html,{}", html))
-        .expect("Failed navigate");
-
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::navigate_html(session, html).expect("Failed navigate");
 
     let tool = ReadLinksTool::default();
     let mut context = ToolContext::new(&session);
@@ -128,10 +127,10 @@ fn test_read_links() {
 fn test_press_key_enter() {
     use chromewright::tools::{PressKeyParams, Tool, ToolContext, press_key::PressKeyTool};
 
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     // Create a page with an input field that responds to Enter key
     let html = r#"
@@ -151,11 +150,7 @@ fn test_press_key_enter() {
         </html>
     "#;
 
-    session
-        .navigate(&format!("data:text/html,{}", html))
-        .expect("Failed to navigate");
-
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::navigate_html(session, html).expect("Failed to navigate");
 
     // Focus the input element first
     session
@@ -166,7 +161,13 @@ fn test_press_key_enter() {
         .click()
         .expect("Failed to click input");
 
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    common::wait_for_eval_truthy(
+        session,
+        "input focus",
+        "document.activeElement && document.activeElement.id === 'input1'",
+        std::time::Duration::from_secs(5),
+    )
+    .expect("Input should receive focus");
 
     // Create tool and context
     let tool = PressKeyTool::default();
@@ -199,7 +200,13 @@ fn test_press_key_enter() {
         Some("textbox")
     );
 
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    common::wait_for_eval_truthy(
+        session,
+        "enter key output",
+        "document.getElementById('output').textContent === 'Enter pressed!'",
+        std::time::Duration::from_secs(5),
+    )
+    .expect("Enter key handler should update the output");
 
     // Verify that the event was triggered
     let output = session
@@ -227,10 +234,10 @@ fn test_press_key_enter() {
 fn test_snapshot_tool_exposes_document_metadata_and_node_refs() {
     use chromewright::tools::{SnapshotParams, Tool, ToolContext, snapshot::SnapshotTool};
 
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     let html = r#"
         <html>
@@ -241,12 +248,7 @@ fn test_snapshot_tool_exposes_document_metadata_and_node_refs() {
         </html>
     "#;
 
-    session
-        .navigate(&format!("data:text/html,{}", html))
-        .expect("Failed to navigate");
-    session
-        .wait_for_document_ready_with_timeout(std::time::Duration::from_secs(5))
-        .expect("Failed to wait for page readiness");
+    common::navigate_html(session, html).expect("Failed to navigate");
 
     let tool = SnapshotTool::default();
     let mut context = ToolContext::new(&session);
@@ -293,10 +295,10 @@ fn test_stale_node_ref_returns_structured_failure() {
         ClickParams, SnapshotParams, Tool, ToolContext, click::ClickTool, snapshot::SnapshotTool,
     };
 
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     let html = r#"
         <html>
@@ -307,12 +309,7 @@ fn test_stale_node_ref_returns_structured_failure() {
         </html>
     "#;
 
-    session
-        .navigate(&format!("data:text/html,{}", html))
-        .expect("Failed to navigate");
-    session
-        .wait_for_document_ready_with_timeout(std::time::Duration::from_secs(5))
-        .expect("Failed to wait for page readiness");
+    common::navigate_html(session, html).expect("Failed to navigate");
 
     let snapshot_tool = SnapshotTool::default();
     let click_tool = ClickTool::default();
@@ -365,10 +362,10 @@ fn test_click_tool_reports_detached_handoff_after_target_removal() {
         ClickParams, SnapshotParams, Tool, ToolContext, click::ClickTool, snapshot::SnapshotTool,
     };
 
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     let html = r#"
         <html>
@@ -379,12 +376,7 @@ fn test_click_tool_reports_detached_handoff_after_target_removal() {
         </html>
     "#;
 
-    session
-        .navigate(&format!("data:text/html,{}", html))
-        .expect("Failed to navigate");
-    session
-        .wait_for_document_ready_with_timeout(std::time::Duration::from_secs(5))
-        .expect("Failed to wait for page readiness");
+    common::navigate_html(session, html).expect("Failed to navigate");
 
     let snapshot_tool = SnapshotTool::default();
     let click_tool = ClickTool::default();
@@ -426,10 +418,10 @@ fn test_click_tool_reports_detached_handoff_after_target_removal() {
 fn test_same_origin_iframe_content_is_included_in_snapshot() {
     use chromewright::tools::{SnapshotParams, Tool, ToolContext, snapshot::SnapshotTool};
 
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     let html = r#"
         <html>
@@ -439,12 +431,7 @@ fn test_same_origin_iframe_content_is_included_in_snapshot() {
         </html>
     "#;
 
-    session
-        .navigate(&format!("data:text/html,{}", html))
-        .expect("Failed to navigate");
-    session
-        .wait_for_document_ready_with_timeout(std::time::Duration::from_secs(5))
-        .expect("Failed to wait for page readiness");
+    common::navigate_html(session, html).expect("Failed to navigate");
 
     let initial_metadata = session
         .document_metadata()
@@ -612,10 +599,10 @@ fn test_same_origin_iframe_content_is_included_in_snapshot() {
 fn test_snapshot_tool_exposes_cursor_for_same_origin_iframe_node() {
     use chromewright::tools::{SnapshotParams, Tool, ToolContext, snapshot::SnapshotTool};
 
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     let html = r#"
         <html>
@@ -625,12 +612,7 @@ fn test_snapshot_tool_exposes_cursor_for_same_origin_iframe_node() {
         </html>
     "#;
 
-    session
-        .navigate(&format!("data:text/html,{}", html))
-        .expect("Failed to navigate");
-    session
-        .wait_for_document_ready_with_timeout(std::time::Duration::from_secs(5))
-        .expect("Failed to wait for page readiness");
+    common::navigate_html(session, html).expect("Failed to navigate");
 
     let tool = SnapshotTool::default();
     let mut context = ToolContext::new(&session);

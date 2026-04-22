@@ -62,10 +62,46 @@ impl Tool for NavigateTool {
         }
 
         context.invalidate_dom();
-        Ok(ToolResult::success_with(NavigateOutput {
-            envelope: build_document_envelope(context, None, DocumentEnvelopeOptions::minimal())?,
+        let envelope = build_document_envelope(context, None, DocumentEnvelopeOptions::minimal())?;
+        Ok(context.finish(ToolResult::success_with(NavigateOutput {
+            envelope,
             action: "navigate".to_string(),
             url: normalized_url,
-        }))
+        })))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::browser::BrowserSession;
+    use crate::browser::backend::FakeSessionBackend;
+
+    #[test]
+    fn test_navigate_tool_executes_against_fake_backend() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        let tool = NavigateTool::default();
+        let mut context = ToolContext::new(&session);
+
+        let result = tool
+            .execute_typed(
+                NavigateParams {
+                    url: "https://example.com/docs".to_string(),
+                    wait_for_load: true,
+                    allow_unsafe: false,
+                },
+                &mut context,
+            )
+            .expect("navigate should succeed");
+
+        assert!(result.success);
+        let data = result.data.expect("navigate should include data");
+        assert_eq!(data["action"].as_str(), Some("navigate"));
+        assert_eq!(data["url"].as_str(), Some("https://example.com/docs"));
+        assert_eq!(
+            data["document"]["url"].as_str(),
+            Some("https://example.com/docs")
+        );
+        assert_eq!(data["document"]["ready_state"].as_str(), Some("complete"));
     }
 }

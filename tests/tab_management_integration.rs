@@ -11,17 +11,17 @@ use log::info;
 fn test_new_tab() {
     use chromewright::tools::{NewTabParams, Tool, ToolContext, new_tab::NewTabTool};
 
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     // Navigate to initial page
-    session
-        .navigate("data:text/html,<html><body><h1>First Tab</h1></body></html>")
-        .expect("Failed to navigate");
-
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::navigate_and_wait(
+        session,
+        "data:text/html,<html><body><h1>First Tab</h1></body></html>",
+    )
+    .expect("Failed to navigate");
 
     // Get initial tab count
     let initial_tabs = session.get_tabs().expect("Failed to get tabs");
@@ -62,7 +62,7 @@ fn test_new_tab() {
         serde_json::to_string_pretty(&data).unwrap()
     );
 
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::wait_for_tab_count(session, initial_count + 1).expect("Second tab should appear");
 
     // Verify tab count increased
     let final_tabs = session.get_tabs().expect("Failed to get tabs");
@@ -79,17 +79,17 @@ fn test_new_tab() {
 #[test]
 #[ignore] // Requires Chrome to be installed
 fn test_tab_list() {
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     // Navigate to a simple page
-    session
-        .navigate("data:text/html,<html><body><h1>First Tab</h1></body></html>")
-        .expect("Failed to navigate");
-
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::navigate_and_wait(
+        session,
+        "data:text/html,<html><body><h1>First Tab</h1></body></html>",
+    )
+    .expect("Failed to navigate");
 
     // Create tool and context
     let tool = TabListTool::default();
@@ -131,17 +131,17 @@ fn test_tab_list() {
 #[test]
 #[ignore]
 fn test_new_tab_and_switch() {
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     // Navigate to initial page
-    session
-        .navigate("data:text/html,<html><body><h1>First Tab</h1></body></html>")
-        .expect("Failed to navigate");
-
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::navigate_and_wait(
+        session,
+        "data:text/html,<html><body><h1>First Tab</h1></body></html>",
+    )
+    .expect("Failed to navigate");
 
     // Create a new tab
     let new_tab_tool = NewTabTool::default();
@@ -159,7 +159,7 @@ fn test_new_tab_and_switch() {
 
     assert!(result.success, "New tab creation should succeed");
 
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::wait_for_tab_count_at_least(session, 2).expect("New tab should be listed");
 
     // List tabs to verify count increased by 1
     let tab_list_tool = TabListTool::default();
@@ -193,7 +193,7 @@ fn test_new_tab_and_switch() {
         serde_json::to_string_pretty(&data).unwrap()
     );
 
-    std::thread::sleep(std::time::Duration::from_millis(300));
+    common::wait_for_url_contains(session, "First Tab").expect("First tab should become active");
 
     let mut context = ToolContext::new(&session);
     let result = tab_list_tool
@@ -216,16 +216,16 @@ fn test_new_tab_and_switch() {
 #[test]
 #[ignore]
 fn test_switch_tab_invalid_index() {
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
-    session
-        .navigate("data:text/html,<html><body><h1>Tab</h1></body></html>")
-        .expect("Failed to navigate");
-
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::navigate_and_wait(
+        session,
+        "data:text/html,<html><body><h1>Tab</h1></body></html>",
+    )
+    .expect("Failed to navigate");
 
     // Try to switch to invalid index
     let switch_tab_tool = SwitchTabTool::default();
@@ -244,17 +244,17 @@ fn test_switch_tab_invalid_index() {
 #[test]
 #[ignore]
 fn test_close_tab() {
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     // Create two tabs
-    session
-        .navigate("data:text/html,<html><body><h1>First Tab</h1></body></html>")
-        .expect("Failed to navigate");
-
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::navigate_and_wait(
+        session,
+        "data:text/html,<html><body><h1>First Tab</h1></body></html>",
+    )
+    .expect("Failed to navigate");
 
     let new_tab_tool = NewTabTool::default();
     let mut context = ToolContext::new(&session);
@@ -269,7 +269,7 @@ fn test_close_tab() {
         )
         .expect("Failed to create new tab");
 
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::wait_for_tab_count_at_least(session, 2).expect("Second tab should be listed");
 
     // Verify we have at least 2 tabs
     let tab_list_tool = TabListTool::default();
@@ -301,7 +301,8 @@ fn test_close_tab() {
         serde_json::to_string_pretty(&result.data.unwrap()).unwrap()
     );
 
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    common::wait_for_tab_count(session, (count_before - 1) as usize)
+        .expect("Tab count should decrease after close");
 
     // Verify we now have one less tab
     let mut context = ToolContext::new(&session);
@@ -335,17 +336,17 @@ fn test_close_tab() {
 #[ignore]
 fn test_tab_workflow() {
     // Test a complete workflow: create multiple tabs, switch between them, list them, and close one
-    let _guard = common::browser_test_guard();
-    let Some(session) = common::launch_or_skip() else {
+    let Some(browser) = common::browser_or_skip() else {
         return;
     };
+    let session = browser.session();
 
     // Start with first tab
-    session
-        .navigate("data:text/html,<html><body><h1>Tab 1</h1></body></html>")
-        .expect("Failed to navigate");
-
-    std::thread::sleep(std::time::Duration::from_millis(300));
+    common::navigate_and_wait(
+        session,
+        "data:text/html,<html><body><h1>Tab 1</h1></body></html>",
+    )
+    .expect("Failed to navigate");
 
     // Create second tab
     let new_tab_tool = NewTabTool::default();
@@ -361,7 +362,7 @@ fn test_tab_workflow() {
         )
         .expect("Failed to create tab 2");
 
-    std::thread::sleep(std::time::Duration::from_millis(300));
+    common::wait_for_tab_count_at_least(session, 2).expect("Second tab should be listed");
 
     // Create third tab
     let mut context = ToolContext::new(&session);
@@ -375,7 +376,7 @@ fn test_tab_workflow() {
         )
         .expect("Failed to create tab 3");
 
-    std::thread::sleep(std::time::Duration::from_millis(300));
+    common::wait_for_tab_count_at_least(session, 3).expect("Third tab should be listed");
 
     // List all tabs
     let tab_list_tool = TabListTool::default();
@@ -404,7 +405,7 @@ fn test_tab_workflow() {
     assert!(result.success);
     assert_eq!(result.data.unwrap()["index"].as_u64(), Some(1));
 
-    std::thread::sleep(std::time::Duration::from_millis(300));
+    common::wait_for_url_contains(session, "Tab 2").expect("Second tab should become active");
 
     // Close the current tab (tab 2, index 1)
     let close_tab_tool = CloseTabTool::default();
@@ -420,7 +421,8 @@ fn test_tab_workflow() {
         result.data.unwrap()["message"].as_str().unwrap()
     );
 
-    std::thread::sleep(std::time::Duration::from_millis(300));
+    common::wait_for_tab_count(session, (count - 1) as usize)
+        .expect("Closing a tab should reduce the tab count");
 
     // List tabs again to verify we have 2 tabs left
     let mut context = ToolContext::new(&session);

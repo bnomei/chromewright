@@ -3,6 +3,7 @@
 //! This module provides functionality for launching and managing Chrome/Chromium browser instances.
 //! It includes configuration options, session management, and browser lifecycle control.
 
+pub(crate) mod backend;
 pub mod config;
 pub mod session;
 

@@ -3,6 +3,7 @@ use crate::error::{BrowserError, Result};
 use headless_chrome::Tab;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 /// Revision-scoped reference to an actionable node in a snapshot.
@@ -69,11 +70,26 @@ pub struct DomTree {
     /// Root AriaNode (usually a fragment)
     pub root: AriaNode,
 
-    /// Array of CSS selectors indexed by element index
-    pub selectors: Vec<String>,
+    indexed: IndexedSnapshot,
+}
 
-    /// List of iframe indices (for multi-frame snapshots)
-    pub iframe_indices: Vec<usize>,
+#[derive(Debug, Clone, Default)]
+struct IndexedSnapshot {
+    records: BTreeMap<usize, IndexedNodeRecord>,
+    frame_boundaries: Vec<FrameBoundaryRecord>,
+}
+
+#[derive(Debug, Clone)]
+struct IndexedNodeRecord {
+    selector: Option<String>,
+    role: String,
+    name: String,
+    path: Vec<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FrameBoundaryRecord {
+    index: usize,
 }
 
 /// Snapshot extraction response from JavaScript
@@ -82,7 +98,8 @@ struct SnapshotResponse {
     document: DocumentMetadata,
     root: AriaNode,
     selectors: Vec<String>,
-    iframe_indices: Vec<usize>,
+    #[serde(rename = "iframe_indices", default)]
+    _iframe_indices: Vec<usize>,
 }
 
 impl Default for SnapshotResponse {
@@ -91,7 +108,7 @@ impl Default for SnapshotResponse {
             document: DocumentMetadata::default(),
             root: AriaNode::fragment(),
             selectors: Vec::new(),
-            iframe_indices: Vec::new(),
+            _iframe_indices: Vec::new(),
         }
     }
 }
@@ -101,9 +118,85 @@ impl Default for DomTree {
         Self {
             document: DocumentMetadata::default(),
             root: AriaNode::fragment(),
-            selectors: Vec::new(),
-            iframe_indices: Vec::new(),
+            indexed: IndexedSnapshot::default(),
         }
+    }
+}
+
+impl IndexedSnapshot {
+    fn from_root(root: &AriaNode, selector_overrides: &BTreeMap<usize, String>) -> Self {
+        let mut snapshot = Self::default();
+        let mut path = Vec::new();
+        snapshot.collect(root, &mut path, selector_overrides);
+        snapshot
+    }
+
+    fn collect(
+        &mut self,
+        node: &AriaNode,
+        path: &mut Vec<usize>,
+        selector_overrides: &BTreeMap<usize, String>,
+    ) {
+        if let Some(index) = node.index {
+            let selector = selector_overrides
+                .get(&index)
+                .filter(|value| !value.is_empty())
+                .cloned();
+
+            self.records.insert(
+                index,
+                IndexedNodeRecord {
+                    selector,
+                    role: node.role.clone(),
+                    name: node.name.clone(),
+                    path: path.clone(),
+                },
+            );
+
+            if node.role == "iframe" {
+                self.frame_boundaries.push(FrameBoundaryRecord { index });
+            }
+        }
+
+        for (child_position, child) in node.children.iter().enumerate() {
+            if let AriaChild::Node(child_node) = child {
+                path.push(child_position);
+                self.collect(child_node, path, selector_overrides);
+                path.pop();
+            }
+        }
+    }
+
+    fn selector_map(&self) -> BTreeMap<usize, String> {
+        self.records
+            .iter()
+            .filter_map(|(index, record)| {
+                record.selector.clone().map(|selector| (*index, selector))
+            })
+            .collect()
+    }
+
+    fn record(&self, index: usize) -> Option<&IndexedNodeRecord> {
+        self.records.get(&index)
+    }
+
+    fn interactive_indices(&self) -> Vec<usize> {
+        self.records.keys().copied().collect()
+    }
+
+    fn iframe_indices(&self) -> Vec<usize> {
+        self.frame_boundaries
+            .iter()
+            .map(|record| record.index)
+            .collect()
+    }
+
+    fn next_available_index(&self) -> usize {
+        self.records
+            .keys()
+            .next_back()
+            .map(|index| index + 1)
+            .unwrap_or(0)
     }
 }
 
@@ -145,16 +238,79 @@ struct LegacySnapshotResponse {
 }
 
 impl DomTree {
+    fn selector_map_from_slots(selectors: Vec<String>) -> BTreeMap<usize, String> {
+        selectors
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, selector)| (!selector.is_empty()).then_some((index, selector)))
+            .collect()
+    }
+
+    fn rebuild_indexed_from_selector_map(&mut self, selector_overrides: BTreeMap<usize, String>) {
+        self.indexed = IndexedSnapshot::from_root(&self.root, &selector_overrides);
+    }
+
+    fn selector_map(&self) -> BTreeMap<usize, String> {
+        self.indexed.selector_map()
+    }
+
+    fn node_at_path<'a>(node: &'a AriaNode, path: &[usize]) -> Option<&'a AriaNode> {
+        let mut current = node;
+        for &child_position in path {
+            current = match current.children.get(child_position) {
+                Some(AriaChild::Node(child_node)) => child_node,
+                _ => return None,
+            };
+        }
+        Some(current)
+    }
+
+    fn node_at_path_mut<'a>(node: &'a mut AriaNode, path: &[usize]) -> Option<&'a mut AriaNode> {
+        if let Some((&child_position, rest)) = path.split_first() {
+            match node.children.get_mut(child_position) {
+                Some(AriaChild::Node(child_node)) => Self::node_at_path_mut(child_node, rest),
+                _ => None,
+            }
+        } else {
+            Some(node)
+        }
+    }
+
+    fn rebase_children_indices(
+        children: &mut [AriaChild],
+        next_index: &mut usize,
+        remapped_indices: &mut BTreeMap<usize, usize>,
+    ) {
+        for child in children {
+            if let AriaChild::Node(child_node) = child {
+                Self::rebase_node_indices(child_node, next_index, remapped_indices);
+            }
+        }
+    }
+
+    fn rebase_node_indices(
+        node: &mut AriaNode,
+        next_index: &mut usize,
+        remapped_indices: &mut BTreeMap<usize, usize>,
+    ) {
+        if let Some(previous_index) = node.index {
+            let rebased_index = *next_index;
+            *next_index += 1;
+            node.index = Some(rebased_index);
+            remapped_indices.insert(previous_index, rebased_index);
+        }
+
+        Self::rebase_children_indices(&mut node.children, next_index, remapped_indices);
+    }
+
     /// Create a new DomTree from an AriaNode
     pub fn new(root: AriaNode) -> Self {
-        let mut tree = Self {
+        let indexed = IndexedSnapshot::from_root(&root, &BTreeMap::new());
+        Self {
             document: DocumentMetadata::default(),
             root,
-            selectors: Vec::new(),
-            iframe_indices: Vec::new(),
-        };
-        tree.rebuild_maps();
-        tree
+            indexed,
+        }
     }
 
     /// Build DOM tree from a browser tab
@@ -198,79 +354,51 @@ impl DomTree {
                     document: DocumentMetadata::default(),
                     root: legacy.root,
                     selectors: legacy.selectors,
-                    iframe_indices: legacy.iframe_indices,
+                    _iframe_indices: legacy.iframe_indices,
                 }
             }
         };
 
+        let SnapshotResponse {
+            document,
+            root,
+            selectors,
+            _iframe_indices: _,
+        } = response;
+        let indexed = IndexedSnapshot::from_root(&root, &Self::selector_map_from_slots(selectors));
+
         Ok(Self {
-            document: response.document,
-            root: response.root,
-            selectors: response.selectors,
-            iframe_indices: response.iframe_indices,
+            document,
+            root,
+            indexed,
         })
-    }
-
-    /// Rebuild the selectors array by traversing the tree
-    /// Note: This only resizes the array based on indices found.
-    /// Actual selectors are populated from JavaScript extraction.
-    fn rebuild_maps(&mut self) {
-        self.iframe_indices.clear();
-
-        // Find the maximum index in the tree
-        let max_index = self.find_max_index(&self.root.clone());
-
-        // Resize selectors array if needed
-        if let Some(max_idx) = max_index {
-            if self.selectors.len() <= max_idx {
-                self.selectors.resize(max_idx + 1, String::new());
-            }
-        }
-
-        // Collect iframe indices
-        let root = self.root.clone();
-        self.collect_iframe_indices(&root);
-    }
-
-    fn find_max_index(&self, node: &AriaNode) -> Option<usize> {
-        let mut max = node.index;
-
-        for child in &node.children {
-            if let AriaChild::Node(child_node) = child {
-                if let Some(child_max) = self.find_max_index(child_node) {
-                    max = match max {
-                        Some(current) => Some(current.max(child_max)),
-                        None => Some(child_max),
-                    };
-                }
-            }
-        }
-
-        max
-    }
-
-    fn collect_iframe_indices(&mut self, node: &AriaNode) {
-        if let Some(index) = node.index {
-            if node.role == "iframe" {
-                self.iframe_indices.push(index);
-            }
-        }
-
-        for child in &node.children {
-            if let AriaChild::Node(child_node) = child {
-                self.collect_iframe_indices(child_node);
-            }
-        }
     }
 
     /// Get CSS selector for a given index
     pub fn get_selector(&self, index: usize) -> Option<&String> {
-        self.selectors.get(index).filter(|s| !s.is_empty())
+        self.indexed.record(index)?.selector.as_ref()
+    }
+
+    /// Replace selector slots using legacy index-addressed input.
+    pub fn replace_selectors(&mut self, selectors: Vec<String>) {
+        self.rebuild_indexed_from_selector_map(Self::selector_map_from_slots(selectors));
+    }
+
+    /// Set or clear the selector for a specific actionable index.
+    pub fn set_selector(&mut self, index: usize, selector: impl Into<String>) {
+        let selector = selector.into();
+        let mut selectors = self.selector_map();
+        if selector.is_empty() {
+            selectors.remove(&index);
+        } else {
+            selectors.insert(index, selector);
+        }
+        self.rebuild_indexed_from_selector_map(selectors);
     }
 
     /// Build a revision-scoped node reference for an actionable index.
     pub fn node_ref_for_index(&self, index: usize) -> Option<NodeRef> {
-        self.find_node_by_index(index).map(|_| NodeRef {
+        self.indexed.record(index).map(|_| NodeRef {
             document_id: self.document.document_id.clone(),
             revision: self.document.revision.clone(),
             index,
@@ -279,16 +407,34 @@ impl DomTree {
 
     /// Build a reusable cursor for an actionable index.
     pub fn cursor_for_index(&self, index: usize) -> Option<Cursor> {
-        let node = self.find_node_by_index(index)?;
-        let selector = self.get_selector(index)?.clone();
+        let record = self.indexed.record(index)?;
+        let selector = record.selector.clone()?;
 
         Some(Cursor {
             node_ref: self.node_ref_for_index(index)?,
             selector,
             index,
-            role: node.role.clone(),
-            name: node.name.clone(),
+            role: record.role.clone(),
+            name: record.name.clone(),
         })
+    }
+
+    /// Return the actionable cursors whose selector matches the provided selector exactly.
+    pub fn cursors_for_selector(&self, selector: &str) -> Vec<Cursor> {
+        self.indexed
+            .records
+            .iter()
+            .filter_map(|(index, record)| {
+                (record.selector.as_deref() == Some(selector))
+                    .then(|| self.cursor_for_index(*index))
+            })
+            .flatten()
+            .collect()
+    }
+
+    /// Return the first actionable cursor whose selector matches the provided selector.
+    pub fn cursor_for_selector(&self, selector: &str) -> Option<Cursor> {
+        self.cursors_for_selector(selector).into_iter().next()
     }
 
     /// Collect the actionable nodes currently exposed to agents.
@@ -310,21 +456,7 @@ impl DomTree {
 
     /// Get all interactive element indices
     pub fn interactive_indices(&self) -> Vec<usize> {
-        let mut indices = Vec::new();
-        self.collect_indices(&self.root, &mut indices);
-        indices.sort();
-        indices
-    }
-
-    fn collect_indices(&self, node: &AriaNode, indices: &mut Vec<usize>) {
-        if let Some(index) = node.index {
-            indices.push(index);
-        }
-        for child in &node.children {
-            if let AriaChild::Node(child_node) = child {
-                self.collect_indices(child_node, indices);
-            }
-        }
+        self.indexed.interactive_indices()
     }
 
     /// Count total nodes in the tree
@@ -334,22 +466,24 @@ impl DomTree {
 
     /// Count interactive elements (elements with indices)
     pub fn count_interactive(&self) -> usize {
-        self.root.count_interactive()
+        self.indexed.records.len()
     }
 
     /// Find node by index
     pub fn find_node_by_index(&self, index: usize) -> Option<&AriaNode> {
-        self.root.find_by_index(index)
+        let record = self.indexed.record(index)?;
+        Self::node_at_path(&self.root, &record.path)
     }
 
     /// Find node by index (mutable)
     pub fn find_node_by_index_mut(&mut self, index: usize) -> Option<&mut AriaNode> {
-        self.root.find_by_index_mut(index)
+        let path = self.indexed.record(index)?.path.clone();
+        Self::node_at_path_mut(&mut self.root, &path)
     }
 
     /// Get all iframe indices for multi-frame snapshot handling
-    pub fn get_iframe_indices(&self) -> &[usize] {
-        &self.iframe_indices
+    pub fn get_iframe_indices(&self) -> Vec<usize> {
+        self.indexed.iframe_indices()
     }
 
     /// Convert the DOM tree to JSON
@@ -361,24 +495,28 @@ impl DomTree {
 
     /// Replace an iframe node's children with content from another snapshot
     /// Used for multi-frame snapshot assembly
-    pub fn inject_iframe_content(&mut self, iframe_index: usize, iframe_snapshot: DomTree) {
+    pub fn inject_iframe_content(&mut self, iframe_index: usize, mut iframe_snapshot: DomTree) {
+        let mut selector_overrides = self.selector_map();
+        let mut next_index = self.indexed.next_available_index();
+        let mut remapped_indices = BTreeMap::new();
+        Self::rebase_children_indices(
+            &mut iframe_snapshot.root.children,
+            &mut next_index,
+            &mut remapped_indices,
+        );
+
+        for (previous_index, selector) in iframe_snapshot.selector_map() {
+            if let Some(rebased_index) = remapped_indices.get(&previous_index) {
+                selector_overrides.insert(*rebased_index, selector);
+            }
+        }
+
         if let Some(iframe_node) = self.find_node_by_index_mut(iframe_index) {
             // Replace iframe's children with the snapshot's root children
             iframe_node.children = iframe_snapshot.root.children;
-
-            // Merge selectors (offset by current length)
-            let offset = self.selectors.len();
-            for selector in iframe_snapshot.selectors {
-                if !selector.is_empty() {
-                    self.selectors.push(selector);
-                }
-            }
-
-            // Update iframe indices with offset
-            for idx in iframe_snapshot.iframe_indices {
-                self.iframe_indices.push(idx + offset);
-            }
         }
+
+        self.rebuild_indexed_from_selector_map(selector_overrides);
     }
 
     /// Create a snapshot with multiple frames assembled
@@ -387,7 +525,7 @@ impl DomTree {
     where
         F: FnMut(usize) -> Option<DomTree>,
     {
-        let iframe_indices = self.iframe_indices.clone();
+        let iframe_indices = self.get_iframe_indices();
 
         for iframe_index in iframe_indices {
             if let Some(iframe_snapshot) = get_iframe_snapshot(iframe_index) {
@@ -458,7 +596,10 @@ mod tests {
         let mut tree = DomTree::new(root);
         tree.document.document_id = "doc-1".to_string();
         tree.document.revision = "rev-7".to_string();
-        tree.selectors = vec!["button.primary".to_string(), "a[href='/next']".to_string()];
+        tree.replace_selectors(vec![
+            "button.primary".to_string(),
+            "a[href='/next']".to_string(),
+        ]);
 
         let cursor = tree.cursor_for_index(1).expect("cursor should exist");
         assert_eq!(cursor.node_ref.document_id, "doc-1");
@@ -526,7 +667,10 @@ mod tests {
         let mut tree = DomTree::new(root);
         tree.document.document_id = "doc-1".to_string();
         tree.document.revision = "rev-2".to_string();
-        tree.selectors = vec!["button.primary".to_string(), "a[href='/next']".to_string()];
+        tree.replace_selectors(vec![
+            "button.primary".to_string(),
+            "a[href='/next']".to_string(),
+        ]);
 
         assert_eq!(
             tree.get_selector(0).map(String::as_str),
@@ -560,7 +704,7 @@ mod tests {
     }
 
     #[test]
-    fn test_rebuild_maps_tracks_iframe_indices() {
+    fn test_indexed_snapshot_tracks_iframe_boundaries() {
         let mut root = AriaNode::fragment();
         root.children.push(AriaChild::Node(Box::new(
             AriaNode::new("iframe", "Embedded").with_index(3),
@@ -568,8 +712,8 @@ mod tests {
 
         let tree = DomTree::new(root);
 
-        assert_eq!(tree.selectors.len(), 4);
-        assert_eq!(tree.get_iframe_indices(), &[3]);
+        assert_eq!(tree.get_iframe_indices(), vec![3]);
+        assert!(tree.find_node_by_index(3).is_some());
     }
 
     #[test]
@@ -597,10 +741,13 @@ mod tests {
         )));
 
         let mut main = DomTree::new(main_root);
-        main.selectors = vec!["#outer-frame".to_string()];
+        main.replace_selectors(vec!["#outer-frame".to_string()]);
 
         let mut nested = DomTree::new(nested_root);
-        nested.selectors = vec!["#inside-button".to_string(), "#nested-frame".to_string()];
+        nested.replace_selectors(vec![
+            "#inside-button".to_string(),
+            "#nested-frame".to_string(),
+        ]);
 
         let assembled = main.assemble_with_iframes(|index| {
             if index == 0 {
@@ -614,7 +761,10 @@ mod tests {
             .find_node_by_index(0)
             .expect("iframe should exist");
         assert_eq!(iframe_node.children.len(), 2);
-        assert!(assembled.selectors.contains(&"#nested-frame".to_string()));
+        assert_eq!(
+            assembled.get_selector(2).map(String::as_str),
+            Some("#nested-frame")
+        );
         assert!(assembled.get_iframe_indices().contains(&0));
         assert!(assembled.get_iframe_indices().contains(&2));
     }

@@ -1,17 +1,17 @@
+use crate::browser::backend::{
+    ChromeSessionBackend, ScriptEvaluation, SessionBackend, TabDescriptor,
+};
+#[cfg(test)]
+use crate::browser::backend::{
+    DEBUG_PORT_END, DEBUG_PORT_START, FakeSessionBackend, build_launch_options, choose_debug_port,
+};
 use crate::browser::config::{ConnectionOptions, LaunchOptions};
 use crate::dom::{DocumentMetadata, DomTree};
 use crate::error::{BrowserError, Result};
 use crate::tools::{ToolContext, ToolRegistry};
 use headless_chrome::{Browser, Tab};
-use std::ffi::OsStr;
-use std::sync::atomic::{AtomicU16, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
-use std::time::Duration;
-use std::time::Instant;
-
-const DEBUG_PORT_START: u16 = 40_000;
-const DEBUG_PORT_END: u16 = 59_999;
-static DEBUG_PORT_COUNTER: AtomicU16 = AtomicU16::new(DEBUG_PORT_START);
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 /// Wrapper for Tab and Element to maintain proper lifetime relationships
 pub struct TabElement<'a> {
@@ -33,51 +33,45 @@ pub(crate) struct MarkdownCacheEntry {
 
 /// Browser session that manages a Chrome/Chromium instance
 pub struct BrowserSession {
-    /// The underlying headless_chrome Browser instance
-    browser: Browser,
+    backend: Arc<dyn SessionBackend>,
 
     /// Tool registry for executing browser automation tools
     tool_registry: ToolRegistry,
-
-    /// Best-effort active-tab hint to avoid repeated cross-tab probing on steady-state calls.
-    active_tab_hint: RwLock<Option<Arc<Tab>>>,
 
     /// Cache the most recent markdown extraction by document revision.
     markdown_cache: Mutex<Option<Arc<MarkdownCacheEntry>>>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SessionTab {
+    pub id: String,
+    pub title: String,
+    pub url: String,
+    pub active: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ClosedTabSummary {
+    pub index: usize,
+    pub title: String,
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct HistoryNavigationMetrics {
+    pub browser_evaluations: u64,
+    pub poll_iterations: u64,
+}
+
 impl BrowserSession {
     /// Launch a new browser instance with the given options
     pub fn launch(options: LaunchOptions) -> Result<Self> {
-        let launch_opts = build_launch_options(options);
-
-        // Launch browser
-        let browser =
-            Browser::new(launch_opts).map_err(|e| BrowserError::LaunchFailed(e.to_string()))?;
-
-        let initial_tab = browser
-            .new_tab()
-            .map_err(|e| BrowserError::LaunchFailed(format!("Failed to create tab: {}", e)))?;
-
-        Ok(Self {
-            browser,
-            tool_registry: ToolRegistry::with_defaults(),
-            active_tab_hint: RwLock::new(Some(initial_tab)),
-            markdown_cache: Mutex::new(None),
-        })
+        Self::from_backend(ChromeSessionBackend::launch(options)?)
     }
 
     /// Connect to an existing browser instance via WebSocket
     pub fn connect(options: ConnectionOptions) -> Result<Self> {
-        let browser = Browser::connect(options.ws_url)
-            .map_err(|e| BrowserError::ConnectionFailed(e.to_string()))?;
-
-        Ok(Self {
-            browser,
-            tool_registry: ToolRegistry::with_defaults(),
-            active_tab_hint: RwLock::new(None),
-            markdown_cache: Mutex::new(None),
-        })
+        Self::from_backend(ChromeSessionBackend::connect(options)?)
     }
 
     /// Launch a browser with default options
@@ -85,226 +79,113 @@ impl BrowserSession {
         Self::launch(LaunchOptions::default())
     }
 
-    /// Get the active tab
+    /// Get the active tab.
+    ///
+    /// This is a Chrome-only escape hatch used by browser-backed tests and low-level integrations.
     pub fn tab(&self) -> Result<Arc<Tab>> {
         self.get_active_tab()
     }
 
-    /// Create a new tab and set it as active
+    /// Create a new tab and set it as active.
+    ///
+    /// This is a Chrome-only escape hatch used by browser-backed tests and low-level integrations.
     pub fn new_tab(&mut self) -> Result<Arc<Tab>> {
-        let tab = self.browser.new_tab().map_err(|e| {
-            BrowserError::TabOperationFailed(format!("Failed to create tab: {}", e))
-        })?;
-        self.set_active_tab_hint(Some(tab.clone()))?;
-        Ok(tab)
+        self.chrome_backend()?.create_tab_handle()
     }
 
-    /// Get all tabs
+    /// Get all tabs.
+    ///
+    /// This is a Chrome-only escape hatch used by browser-backed tests and low-level integrations.
     pub fn get_tabs(&self) -> Result<Vec<Arc<Tab>>> {
-        let tabs = self
-            .browser
-            .get_tabs()
-            .lock()
-            .map_err(|e| BrowserError::TabOperationFailed(format!("Failed to get tabs: {}", e)))?
-            .clone();
-
-        Ok(tabs)
+        self.chrome_backend()?.tabs()
     }
 
-    /// Get the currently active tab by checking the document visibility and focus state
+    /// Get the currently active tab.
+    ///
+    /// This is a Chrome-only escape hatch used by browser-backed tests and low-level integrations.
     pub fn get_active_tab(&self) -> Result<Arc<Tab>> {
-        if let Some(tab) = self.active_tab_hint()? {
-            return Ok(tab);
-        }
-
-        let tabs = self.get_tabs()?;
-
-        // First pass: check for both visibility and focus (strongest signal)
-        for tab in &tabs {
-            let result = tab.evaluate(
-                "document.visibilityState === 'visible' && document.hasFocus()",
-                false,
-            );
-            match result {
-                Ok(remote_object) => {
-                    if let Some(value) = remote_object.value {
-                        if value.as_bool().unwrap_or(false) {
-                            self.set_active_tab_hint(Some(tab.clone()))?;
-                            return Ok(tab.clone());
-                        }
-                    }
-                }
-                Err(e) => {
-                    log::debug!("Failed to check tab status: {}", e);
-                    continue;
-                }
-            }
-        }
-
-        // Second pass: check just for visibility (weaker signal, but better than nothing)
-        for tab in &tabs {
-            let result = tab.evaluate("document.visibilityState === 'visible'", false);
-            match result {
-                Ok(remote_object) => {
-                    if let Some(value) = remote_object.value {
-                        if value.as_bool().unwrap_or(false) {
-                            self.set_active_tab_hint(Some(tab.clone()))?;
-                            return Ok(tab.clone());
-                        }
-                    }
-                }
-                Err(_) => continue,
-            }
-        }
-
-        Err(BrowserError::TabOperationFailed(
-            "No active tab found".to_string(),
-        ))
+        self.chrome_backend()?.active_tab_handle()
     }
 
     /// Close the active tab
     pub fn close_active_tab(&mut self) -> Result<()> {
-        let active_tab = self.tab()?;
-        self.clear_active_tab_hint()?;
-        active_tab
-            .close(true)
-            .map_err(|e| BrowserError::TabOperationFailed(format!("Failed to close tab: {}", e)))?;
-
-        Ok(())
+        let active_tab = self.backend.active_tab()?;
+        self.backend.close_tab(&active_tab.id, true)
     }
 
-    /// Get the underlying Browser instance
+    /// Get the underlying Browser instance.
+    ///
+    /// This is a Chrome-only escape hatch used by browser-backed tests and low-level integrations.
     pub fn browser(&self) -> &Browser {
-        &self.browser
+        self.chrome_backend()
+            .expect("browser() is only available for the real Chrome backend")
+            .browser()
     }
 
     /// Activate the provided tab and remember it as the active-tab hint.
+    ///
+    /// This is a Chrome-only escape hatch used by browser-backed tests and low-level integrations.
     pub fn activate_tab(&self, tab: &Arc<Tab>) -> Result<()> {
-        tab.activate().map_err(|e| {
-            BrowserError::TabOperationFailed(format!("Failed to activate tab: {}", e))
-        })?;
-        self.set_active_tab_hint(Some(tab.clone()))?;
-        Ok(())
+        self.chrome_backend()?.activate_real_tab(tab)
     }
 
     /// Open a new tab, navigate to the URL, wait for the initial load, and mark it active.
+    ///
+    /// This is a Chrome-only escape hatch used by browser-backed tests and low-level integrations.
     pub fn open_tab(&self, url: &str) -> Result<Arc<Tab>> {
-        let tab = self.browser.new_tab().map_err(|e| {
-            BrowserError::TabOperationFailed(format!("Failed to create tab: {}", e))
-        })?;
-
-        tab.navigate_to(url).map_err(|e| {
-            BrowserError::NavigationFailed(format!("Failed to navigate to {}: {}", url, e))
-        })?;
-
-        tab.wait_until_navigated().map_err(|e| {
-            BrowserError::NavigationFailed(format!("Navigation to {} did not complete: {}", url, e))
-        })?;
-
-        self.activate_tab(&tab)?;
-        Ok(tab)
+        self.chrome_backend()?.open_real_tab(url)
     }
 
     /// Navigate to a URL using the active tab
     pub fn navigate(&self, url: &str) -> Result<()> {
-        self.tab()?.navigate_to(url).map_err(|e| {
-            BrowserError::NavigationFailed(format!("Failed to navigate to {}: {}", url, e))
-        })?;
-
-        Ok(())
+        self.backend.navigate(url)
     }
 
     /// Read document metadata from the active tab without rebuilding the full DOM snapshot.
     pub fn document_metadata(&self) -> Result<DocumentMetadata> {
-        let tab = self.tab()?;
-        self.document_metadata_for_tab(&tab)
-    }
-
-    /// Read document metadata from the provided tab without rebuilding the full DOM snapshot.
-    pub(crate) fn document_metadata_for_tab(&self, tab: &Arc<Tab>) -> Result<DocumentMetadata> {
-        DocumentMetadata::from_tab(tab)
+        self.backend.document_metadata()
     }
 
     /// Wait for navigation to complete
     pub fn wait_for_navigation(&self) -> Result<()> {
-        let tab = self.tab()?;
-        tab.wait_until_navigated()
-            .map_err(|e| BrowserError::NavigationFailed(format!("Navigation timeout: {}", e)))?;
-
-        self.wait_for_document_ready_with_tab(&tab, Duration::from_secs(30))?;
-
-        Ok(())
+        self.backend.wait_for_navigation()
     }
 
     /// Read the current document ready state from the active tab.
     pub fn document_ready_state(&self) -> Result<String> {
-        let tab = self.tab()?;
-        self.document_ready_state_for_tab(&tab)
-    }
-
-    fn document_ready_state_for_tab(&self, tab: &Arc<Tab>) -> Result<String> {
-        let result = tab.evaluate("document.readyState", false).map_err(|e| {
-            BrowserError::NavigationFailed(format!("Failed to read readyState: {}", e))
-        })?;
-
-        let ready_state = result
-            .value
-            .and_then(|value| value.as_str().map(str::to_string))
-            .ok_or_else(|| {
-                BrowserError::NavigationFailed(
-                    "Browser did not return a document.readyState value".to_string(),
-                )
-            })?;
-
-        Ok(ready_state)
+        Ok(self.document_metadata()?.ready_state)
     }
 
     /// Wait for the current document to reach the `complete` ready state.
     pub fn wait_for_document_ready_with_timeout(&self, timeout: Duration) -> Result<()> {
-        let tab = self.tab()?;
-        self.wait_for_document_ready_with_tab(&tab, timeout)
-    }
-
-    fn wait_for_document_ready_with_tab(&self, tab: &Arc<Tab>, timeout: Duration) -> Result<()> {
-        let start = Instant::now();
-        loop {
-            let ready_state = self.document_ready_state_for_tab(tab)?;
-            if ready_state == "complete" {
-                return Ok(());
-            }
-
-            if start.elapsed() >= timeout {
-                return Err(BrowserError::Timeout(format!(
-                    "Document did not reach readyState=complete within {} ms",
-                    timeout.as_millis()
-                )));
-            }
-
-            std::thread::sleep(Duration::from_millis(50));
-        }
+        self.backend.wait_for_document_ready_with_timeout(timeout)
     }
 
     fn wait_for_history_settle(
         &self,
-        tab: &Arc<Tab>,
         previous_url: &str,
         timeout: Duration,
-    ) -> Result<()> {
+    ) -> Result<HistoryNavigationMetrics> {
         let start = Instant::now();
         let mut observed_navigation = false;
+        let mut metrics = HistoryNavigationMetrics::default();
 
         loop {
-            let current_url = tab.get_url();
+            metrics.poll_iterations += 1;
+            let document = self.document_metadata()?;
+            let current_url = document.url;
             if current_url != previous_url {
                 observed_navigation = true;
             }
 
-            let ready_state = self.document_ready_state_for_tab(tab)?;
+            metrics.browser_evaluations += 1;
             let elapsed = start.elapsed();
             let grace_period = Duration::from_millis(500);
 
-            if ready_state == "complete" && (observed_navigation || elapsed >= grace_period) {
-                return Ok(());
+            if document.ready_state == "complete"
+                && (observed_navigation || elapsed >= grace_period)
+            {
+                return Ok(metrics);
             }
 
             if elapsed >= timeout {
@@ -320,14 +201,12 @@ impl BrowserSession {
 
     /// Extract the DOM tree from the active tab
     pub fn extract_dom(&self) -> Result<DomTree> {
-        let tab = self.tab()?;
-        DomTree::from_tab(&tab)
+        self.backend.extract_dom()
     }
 
     /// Extract the DOM tree with a custom ref prefix (for iframe handling)
     pub fn extract_dom_with_prefix(&self, prefix: &str) -> Result<DomTree> {
-        let tab = self.tab()?;
-        DomTree::from_tab_with_prefix(&tab, prefix)
+        self.backend.extract_dom_with_prefix(prefix)
     }
 
     /// Find an element by CSS selector using the provided tab
@@ -361,27 +240,6 @@ impl BrowserSession {
         self.tool_registry.execute(name, params, &mut context)
     }
 
-    fn active_tab_hint(&self) -> Result<Option<Arc<Tab>>> {
-        Ok(self
-            .active_tab_hint
-            .read()
-            .map_err(|e| {
-                BrowserError::TabOperationFailed(format!("Failed to read active tab hint: {}", e))
-            })?
-            .clone())
-    }
-
-    pub(crate) fn set_active_tab_hint(&self, tab: Option<Arc<Tab>>) -> Result<()> {
-        *self.active_tab_hint.write().map_err(|e| {
-            BrowserError::TabOperationFailed(format!("Failed to write active tab hint: {}", e))
-        })? = tab;
-        Ok(())
-    }
-
-    pub(crate) fn clear_active_tab_hint(&self) -> Result<()> {
-        self.set_active_tab_hint(None)
-    }
-
     pub(crate) fn markdown_cache_entry(
         &self,
         document: &DocumentMetadata,
@@ -411,10 +269,70 @@ impl BrowserSession {
         Ok(())
     }
 
+    pub(crate) fn tab_overview(&self) -> Result<Vec<SessionTab>> {
+        let tabs = self.backend.list_tabs()?;
+        let active_id = match self.backend.active_tab() {
+            Ok(tab) => Some(tab.id),
+            Err(BrowserError::TabOperationFailed(reason))
+                if reason.contains("No active tab found") =>
+            {
+                None
+            }
+            Err(err) => return Err(err),
+        };
+
+        Ok(tabs
+            .into_iter()
+            .map(|tab| SessionTab {
+                active: active_id.as_deref() == Some(tab.id.as_str()),
+                id: tab.id,
+                title: tab.title,
+                url: tab.url,
+            })
+            .collect())
+    }
+
+    pub(crate) fn activate_tab_by_id(&self, tab_id: &str) -> Result<()> {
+        self.backend.activate_tab(tab_id)
+    }
+
+    pub(crate) fn open_tab_entry(&self, url: &str) -> Result<TabDescriptor> {
+        self.backend.open_tab(url)
+    }
+
+    pub(crate) fn close_active_tab_summary(&self) -> Result<ClosedTabSummary> {
+        let tabs = self.backend.list_tabs()?;
+        let active = self.backend.active_tab()?;
+        let index = tabs.iter().position(|tab| tab.id == active.id).unwrap_or(0);
+
+        self.backend.close_tab(&active.id, true)?;
+
+        Ok(ClosedTabSummary {
+            index,
+            title: active.title,
+            url: active.url,
+        })
+    }
+
+    pub(crate) fn evaluate(&self, script: &str, await_promise: bool) -> Result<ScriptEvaluation> {
+        self.backend.evaluate(script, await_promise)
+    }
+
+    pub(crate) fn capture_screenshot(&self, full_page: bool) -> Result<Vec<u8>> {
+        self.backend.capture_screenshot(full_page)
+    }
+
+    pub(crate) fn press_key(&self, key: &str) -> Result<()> {
+        self.backend.press_key(key)
+    }
+
     /// Navigate back in browser history
     pub fn go_back(&self) -> Result<()> {
-        let tab = self.tab()?;
-        let previous_url = tab.get_url();
+        self.go_back_with_metrics().map(|_| ())
+    }
+
+    pub(crate) fn go_back_with_metrics(&self) -> Result<HistoryNavigationMetrics> {
+        let previous_url = self.document_metadata()?.url;
         let go_back_js = r#"
             (function() {
                 window.history.back();
@@ -422,17 +340,23 @@ impl BrowserSession {
             })()
         "#;
 
-        tab.evaluate(go_back_js, false)
+        self.evaluate(go_back_js, false)
             .map_err(|e| BrowserError::NavigationFailed(format!("Failed to go back: {}", e)))?;
-        self.wait_for_history_settle(&tab, &previous_url, Duration::from_secs(5))?;
+        let settle_metrics = self.wait_for_history_settle(&previous_url, Duration::from_secs(5))?;
 
-        Ok(())
+        Ok(HistoryNavigationMetrics {
+            browser_evaluations: settle_metrics.browser_evaluations + 1,
+            poll_iterations: settle_metrics.poll_iterations,
+        })
     }
 
     /// Navigate forward in browser history
     pub fn go_forward(&self) -> Result<()> {
-        let tab = self.tab()?;
-        let previous_url = tab.get_url();
+        self.go_forward_with_metrics().map(|_| ())
+    }
+
+    pub(crate) fn go_forward_with_metrics(&self) -> Result<HistoryNavigationMetrics> {
+        let previous_url = self.document_metadata()?.url;
         let go_forward_js = r#"
             (function() {
                 window.history.forward();
@@ -440,23 +364,43 @@ impl BrowserSession {
             })()
         "#;
 
-        tab.evaluate(go_forward_js, false)
+        self.evaluate(go_forward_js, false)
             .map_err(|e| BrowserError::NavigationFailed(format!("Failed to go forward: {}", e)))?;
-        self.wait_for_history_settle(&tab, &previous_url, Duration::from_secs(5))?;
+        let settle_metrics = self.wait_for_history_settle(&previous_url, Duration::from_secs(5))?;
 
-        Ok(())
+        Ok(HistoryNavigationMetrics {
+            browser_evaluations: settle_metrics.browser_evaluations + 1,
+            poll_iterations: settle_metrics.poll_iterations,
+        })
     }
 
-    /// Close the browser
+    /// Close all open tabs in the current session backend.
     pub fn close(&self) -> Result<()> {
-        // Note: The Browser struct doesn't have a public close method in headless_chrome
-        // The browser will be closed when the Browser instance is dropped
-        // We can close all tabs to effectively shut down
-        let tabs = self.get_tabs()?;
-        for tab in tabs {
-            let _ = tab.close(false); // Ignore errors on individual tab closes
-        }
-        Ok(())
+        self.backend.close()
+    }
+
+    fn from_backend<B: SessionBackend + 'static>(backend: B) -> Result<Self> {
+        Ok(Self {
+            backend: Arc::new(backend),
+            tool_registry: ToolRegistry::with_defaults(),
+            markdown_cache: Mutex::new(None),
+        })
+    }
+
+    fn chrome_backend(&self) -> Result<&ChromeSessionBackend> {
+        self.backend
+            .as_any()
+            .downcast_ref::<ChromeSessionBackend>()
+            .ok_or_else(|| {
+                BrowserError::TabOperationFailed(
+                    "This operation requires the real Chrome backend".to_string(),
+                )
+            })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_test_backend<B: SessionBackend + 'static>(backend: B) -> Self {
+        Self::from_backend(backend).expect("test backend should construct")
     }
 }
 
@@ -466,45 +410,12 @@ impl Default for BrowserSession {
     }
 }
 
-fn choose_debug_port() -> u16 {
-    let span = DEBUG_PORT_END - DEBUG_PORT_START + 1;
-    let offset = DEBUG_PORT_COUNTER.fetch_add(1, Ordering::Relaxed) % span;
-    DEBUG_PORT_START + offset
-}
-
-fn build_launch_options(options: LaunchOptions) -> headless_chrome::LaunchOptions<'static> {
-    let mut launch_opts = headless_chrome::LaunchOptions::default();
-
-    // Ignore default arguments to prevent detection by anti-bot services
-    launch_opts
-        .ignore_default_args
-        .push(OsStr::new("--enable-automation"));
-    launch_opts
-        .args
-        .push(OsStr::new("--disable-blink-features=AutomationControlled"));
-
-    // Keep the browser alive long enough for agent-driven sessions.
-    launch_opts.idle_browser_timeout = Duration::from_secs(60 * 60);
-    launch_opts.headless = options.headless;
-    launch_opts.window_size = Some((options.window_width, options.window_height));
-    launch_opts.port = Some(options.debug_port.unwrap_or_else(choose_debug_port));
-    launch_opts.sandbox = options.sandbox;
-
-    if let Some(path) = options.chrome_path {
-        launch_opts.path = Some(path);
-    }
-
-    if let Some(dir) = options.user_data_dir {
-        launch_opts.user_data_dir = Some(dir);
-    }
-
-    launch_opts
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::browser::launch_error_is_environmental;
+    use serde_json::json;
+    use std::ffi::OsStr;
 
     fn launch_or_skip(result: Result<BrowserSession>) -> Option<BrowserSession> {
         match result {
@@ -594,6 +505,129 @@ mod tests {
         let port = launch_opts.port.expect("port should be assigned");
 
         assert!((DEBUG_PORT_START..=DEBUG_PORT_END).contains(&port));
+    }
+
+    #[test]
+    fn test_fake_backend_execute_tool_navigate_updates_document_metadata() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+
+        let result = session
+            .execute_tool(
+                "navigate",
+                json!({
+                    "url": "https://example.com",
+                    "wait_for_load": true
+                }),
+            )
+            .expect("navigate should execute");
+
+        assert!(result.success);
+        let data = result.data.expect("navigate should include data");
+        assert_eq!(data["url"].as_str(), Some("https://example.com"));
+        assert_eq!(
+            data["document"]["url"].as_str(),
+            Some("https://example.com")
+        );
+        assert_eq!(data["document"]["ready_state"].as_str(), Some("complete"));
+    }
+
+    #[test]
+    fn test_fake_backend_execute_tool_tab_workflow() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+
+        let new_tab = session
+            .execute_tool(
+                "new_tab",
+                json!({
+                    "url": "https://second.example"
+                }),
+            )
+            .expect("new_tab should execute");
+        assert!(new_tab.success);
+
+        let tab_list = session
+            .execute_tool("tab_list", json!({}))
+            .expect("tab_list should execute");
+        let tab_list_data = tab_list.data.expect("tab_list should include data");
+        assert_eq!(tab_list_data["count"].as_u64(), Some(2));
+        assert_eq!(
+            tab_list_data["tab_list"][1]["url"].as_str(),
+            Some("https://second.example")
+        );
+        assert_eq!(tab_list_data["tab_list"][1]["active"].as_bool(), Some(true));
+
+        let switched = session
+            .execute_tool("switch_tab", json!({ "index": 0 }))
+            .expect("switch_tab should execute");
+        let switched_data = switched.data.expect("switch_tab should include data");
+        assert_eq!(switched_data["index"].as_u64(), Some(0));
+
+        let closed = session
+            .execute_tool("close_tab", json!({}))
+            .expect("close_tab should execute");
+        let closed_data = closed.data.expect("close_tab should include data");
+        assert_eq!(closed_data["index"].as_u64(), Some(0));
+        assert_eq!(closed_data["url"].as_str(), Some("about:blank"));
+
+        let remaining = session
+            .execute_tool("tab_list", json!({}))
+            .expect("tab_list should execute after close");
+        let remaining_data = remaining.data.expect("tab_list should include data");
+        assert_eq!(remaining_data["count"].as_u64(), Some(1));
+        assert_eq!(
+            remaining_data["tab_list"][0]["url"].as_str(),
+            Some("https://second.example")
+        );
+        assert_eq!(
+            remaining_data["tab_list"][0]["active"].as_bool(),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn test_execute_tool_returns_structured_failure_for_invalid_parameters() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+
+        let result = session
+            .execute_tool("switch_tab", json!({}))
+            .expect("invalid parameters should stay a tool failure");
+
+        assert!(!result.success);
+        let data = result
+            .data
+            .expect("invalid parameter failure should include details");
+        assert_eq!(data["code"].as_str(), Some("invalid_argument"));
+        assert!(
+            data["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("Invalid parameters")
+        );
+    }
+
+    #[test]
+    fn test_execute_tool_returns_structured_failure_for_close_errors() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::with_close_failures([
+            "https://stuck.example",
+        ]));
+        session
+            .open_tab_entry("https://stuck.example")
+            .expect("stuck tab should open");
+
+        let result = session
+            .execute_tool("close", json!({}))
+            .expect("close failures should stay a tool failure");
+
+        assert!(!result.success);
+        let data = result.data.expect("close failure should include details");
+        assert_eq!(data["code"].as_str(), Some("tool_execution_failed"));
+        assert_eq!(data["tool"].as_str(), Some("close"));
+        assert!(
+            data["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("stuck.example")
+        );
     }
 
     #[test]

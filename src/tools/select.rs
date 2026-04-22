@@ -3,6 +3,7 @@ use crate::error::{BrowserError, Result};
 use crate::tools::{
     DocumentEnvelope, TargetEnvelope, TargetResolution, Tool, ToolContext, ToolResult,
     actionability::ActionabilityPredicate,
+    browser_kernel::render_browser_kernel_script,
     click::{
         ActionabilityWaitState, DEFAULT_ACTIONABILITY_TIMEOUT_MS, TargetStatus,
         build_actionability_failure, build_interaction_failure, build_interaction_handoff,
@@ -75,17 +76,27 @@ impl Tool for SelectTool {
             match resolve_interaction_target("select", selector, index, node_ref, cursor, context)?
             {
                 TargetResolution::Resolved(target) => target,
-                TargetResolution::Failure(failure) => return Ok(failure),
+                TargetResolution::Failure(failure) => return Ok(context.finish(failure)),
             };
 
-        let tab = context.session.tab()?;
         let predicates = select_actionability_predicates();
-        match wait_for_actionability(&tab, &target, predicates, DEFAULT_ACTIONABILITY_TIMEOUT_MS)? {
+        match wait_for_actionability(
+            context,
+            &target,
+            predicates,
+            DEFAULT_ACTIONABILITY_TIMEOUT_MS,
+        )? {
             ActionabilityWaitState::Ready => {}
             ActionabilityWaitState::TimedOut(probe) => {
                 return build_actionability_failure(
-                    "select", &tab, &target, &probe, predicates, None,
-                );
+                    "select",
+                    context.session,
+                    &target,
+                    &probe,
+                    predicates,
+                    None,
+                )
+                .map(|result| context.finish(result));
             }
         }
 
@@ -94,19 +105,24 @@ impl Tool for SelectTool {
             "target_index": target.cursor.as_ref().map(|cursor| cursor.index).or(target.index),
             "value": value,
         });
-        let select_js = SELECT_JS.replace("__SELECT_CONFIG__", &select_config.to_string());
+        let select_js = build_select_js(&select_config);
 
-        let result =
-            tab.evaluate(&select_js, false)
-                .map_err(|e| BrowserError::ToolExecutionFailed {
+        context.record_browser_evaluation();
+        let result = context
+            .session
+            .evaluate(&select_js, false)
+            .map_err(|e| match e {
+                BrowserError::EvaluationFailed(reason) => BrowserError::ToolExecutionFailed {
                     tool: "select".to_string(),
-                    reason: e.to_string(),
-                })?;
+                    reason,
+                },
+                other => other,
+            })?;
 
         match parse_select_result(result.value)? {
             SelectParseResult::Success(selected_text) => {
-                let handoff = build_interaction_handoff(context, &tab, &target)?;
-                Ok(ToolResult::success_with(SelectOutput {
+                let handoff = build_interaction_handoff(context, &target)?;
+                Ok(context.finish(ToolResult::success_with(SelectOutput {
                     envelope: handoff.envelope,
                     action: "select".to_string(),
                     target_before: handoff.target_before,
@@ -114,13 +130,24 @@ impl Tool for SelectTool {
                     target_status: handoff.target_status,
                     value,
                     selected_text,
-                }))
+                })))
             }
-            SelectParseResult::Failure { code, error } => {
-                build_interaction_failure("select", &tab, &target, code, error, Vec::new(), None)
-            }
+            SelectParseResult::Failure { code, error } => build_interaction_failure(
+                "select",
+                context.session,
+                &target,
+                code,
+                error,
+                Vec::new(),
+                None,
+            )
+            .map(|result| context.finish(result)),
         }
     }
+}
+
+fn build_select_js(config: &serde_json::Value) -> String {
+    render_browser_kernel_script(SELECT_JS, "__SELECT_CONFIG__", config)
 }
 
 enum SelectParseResult {
@@ -243,12 +270,15 @@ mod tests {
 
     #[test]
     fn test_select_js_prefers_selector_before_target_index() {
-        assert!(super::SELECT_JS.contains("const selectorMatch = config.selector"));
-        assert!(super::SELECT_JS.contains("? querySelectorAcrossScopes(config.selector)"));
-        assert!(
-            super::SELECT_JS
-                .contains("const element =\n      selectorMatch && selectorMatch.isConnected")
-        );
-        assert!(super::SELECT_JS.contains("? searchActionableIndex(config.target_index)"));
+        let select_js = build_select_js(&serde_json::json!({
+            "selector": "#country-select",
+            "target_index": 5,
+            "value": "us",
+        }));
+
+        assert!(select_js.contains("function resolveTargetMatch(config, options)"));
+        assert!(select_js.contains("const element = resolveTargetElement(config);"));
+        assert!(select_js.contains("querySelectorAcrossScopes("));
+        assert!(select_js.contains("searchActionableIndex(config.target_index)"));
     }
 }

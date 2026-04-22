@@ -4,6 +4,7 @@
 //! includes implementations of common browser operations.
 
 pub(crate) mod actionability;
+pub(crate) mod browser_kernel;
 pub mod click;
 pub mod close;
 pub mod close_tab;
@@ -24,6 +25,7 @@ pub mod readability_script;
 pub mod screenshot;
 pub mod scroll;
 pub mod select;
+pub(crate) mod services;
 pub mod snapshot;
 pub mod switch_tab;
 pub mod tab_list;
@@ -63,6 +65,40 @@ use crate::tools::snapshot::{RenderMode, render_aria_tree};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
+
+pub(crate) const OPERATION_METRICS_METADATA_KEY: &str = "operation_metrics";
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub(crate) struct OperationMetrics {
+    pub browser_evaluations: u64,
+    pub poll_iterations: u64,
+    pub dom_extractions: u64,
+    pub dom_extraction_micros: u64,
+    pub dom_nodes_last: usize,
+    pub snapshot_render_micros: u64,
+    pub handoff_rebuilds: u64,
+    pub handoff_rebuild_micros: u64,
+    pub output_bytes: usize,
+}
+
+impl OperationMetrics {
+    fn is_empty(&self) -> bool {
+        self.browser_evaluations == 0
+            && self.poll_iterations == 0
+            && self.dom_extractions == 0
+            && self.dom_extraction_micros == 0
+            && self.dom_nodes_last == 0
+            && self.snapshot_render_micros == 0
+            && self.handoff_rebuilds == 0
+            && self.handoff_rebuild_micros == 0
+            && self.output_bytes == 0
+    }
+}
+
+pub(crate) fn duration_micros(duration: std::time::Duration) -> u64 {
+    duration.as_micros().min(u128::from(u64::MAX)) as u64
+}
 
 /// Tool execution context
 pub struct ToolContext<'a> {
@@ -71,6 +107,8 @@ pub struct ToolContext<'a> {
 
     /// Optional DOM tree (extracted on demand)
     pub dom_tree: Option<DomTree>,
+
+    metrics: OperationMetrics,
 }
 
 impl<'a> ToolContext<'a> {
@@ -79,6 +117,7 @@ impl<'a> ToolContext<'a> {
         Self {
             session,
             dom_tree: None,
+            metrics: OperationMetrics::default(),
         }
     }
 
@@ -87,6 +126,7 @@ impl<'a> ToolContext<'a> {
         Self {
             session,
             dom_tree: Some(dom_tree),
+            metrics: OperationMetrics::default(),
         }
     }
 
@@ -98,7 +138,13 @@ impl<'a> ToolContext<'a> {
     /// Get or extract the DOM tree
     pub fn get_dom(&mut self) -> Result<&DomTree> {
         if self.dom_tree.is_none() {
-            self.dom_tree = Some(self.session.extract_dom()?);
+            let started = Instant::now();
+            let dom = self.session.extract_dom()?;
+            self.metrics.browser_evaluations += 1;
+            self.metrics.dom_extractions += 1;
+            self.metrics.dom_extraction_micros += duration_micros(started.elapsed());
+            self.metrics.dom_nodes_last = dom.count_nodes();
+            self.dom_tree = Some(dom);
         }
         Ok(self.dom_tree.as_ref().unwrap())
     }
@@ -107,6 +153,49 @@ impl<'a> ToolContext<'a> {
     pub fn refresh_dom(&mut self) -> Result<&DomTree> {
         self.invalidate_dom();
         self.get_dom()
+    }
+
+    pub(crate) fn record_browser_evaluation(&mut self) {
+        self.record_browser_evaluations(1);
+    }
+
+    pub(crate) fn record_browser_evaluations(&mut self, count: u64) {
+        self.metrics.browser_evaluations += count;
+    }
+
+    pub(crate) fn record_poll_iteration(&mut self) {
+        self.record_poll_iterations(1);
+    }
+
+    pub(crate) fn record_poll_iterations(&mut self, count: u64) {
+        self.metrics.poll_iterations += count;
+    }
+
+    pub(crate) fn record_snapshot_render_micros(&mut self, micros: u64) {
+        self.metrics.snapshot_render_micros += micros;
+    }
+
+    pub(crate) fn record_handoff_rebuild_micros(&mut self, micros: u64) {
+        self.metrics.handoff_rebuilds += 1;
+        self.metrics.handoff_rebuild_micros += micros;
+    }
+
+    pub(crate) fn finish(&self, mut result: ToolResult) -> ToolResult {
+        let mut metrics = self.metrics.clone();
+        metrics.output_bytes = result
+            .data
+            .as_ref()
+            .and_then(|data| serde_json::to_vec(data).ok())
+            .map_or(0, |bytes| bytes.len());
+
+        if !metrics.is_empty() {
+            result.metadata.insert(
+                OPERATION_METRICS_METADATA_KEY.to_string(),
+                serde_json::to_value(metrics).unwrap_or_default(),
+            );
+        }
+
+        result
     }
 }
 
@@ -337,11 +426,7 @@ pub(crate) fn resolve_target_with_cursor(
 }
 
 pub(crate) fn actionable_cursor_for_selector(dom: &DomTree, selector: &str) -> Option<Cursor> {
-    dom.selectors
-        .iter()
-        .enumerate()
-        .find_map(|(index, candidate)| (candidate == selector).then(|| dom.cursor_for_index(index)))
-        .flatten()
+    dom.cursor_for_selector(selector)
 }
 
 /// Result of tool execution
@@ -411,6 +496,82 @@ impl ToolResult {
     }
 }
 
+fn structured_failure(code: &str, error: String) -> ToolResult {
+    ToolResult::failure_with(
+        error.clone(),
+        serde_json::json!({
+            "code": code,
+            "error": error,
+        }),
+    )
+}
+
+pub(crate) fn tool_result_from_browser_error(
+    error: BrowserError,
+) -> std::result::Result<ToolResult, BrowserError> {
+    match error {
+        BrowserError::LaunchFailed(message) => Err(BrowserError::LaunchFailed(message)),
+        BrowserError::ConnectionFailed(message) => Err(BrowserError::ConnectionFailed(message)),
+        BrowserError::ChromeError(message) => Err(BrowserError::ChromeError(message)),
+        BrowserError::InvalidArgument(reason) => Ok(structured_failure("invalid_argument", reason)),
+        BrowserError::Timeout(reason) => Ok(structured_failure("timeout", reason)),
+        BrowserError::SelectorInvalid(reason) => Ok(structured_failure(
+            "invalid_selector",
+            format!("Invalid selector: {}", reason),
+        )),
+        BrowserError::ElementNotFound(reason) => Ok(structured_failure(
+            "element_not_found",
+            format!("Element not found: {}", reason),
+        )),
+        BrowserError::DomParseFailed(reason) => Ok(structured_failure(
+            "dom_parse_failed",
+            format!("Failed to parse DOM: {}", reason),
+        )),
+        BrowserError::ToolExecutionFailed { tool, reason } => Ok(ToolResult::failure_with(
+            reason.clone(),
+            serde_json::json!({
+                "code": "tool_execution_failed",
+                "error": reason,
+                "tool": tool,
+            }),
+        )),
+        BrowserError::NavigationFailed(reason) => {
+            Ok(structured_failure("navigation_failed", reason))
+        }
+        BrowserError::EvaluationFailed(reason) => {
+            Ok(structured_failure("evaluation_failed", reason))
+        }
+        BrowserError::ScreenshotFailed(reason) => {
+            Ok(structured_failure("screenshot_failed", reason))
+        }
+        BrowserError::DownloadFailed(reason) => Ok(structured_failure("download_failed", reason)),
+        BrowserError::TabOperationFailed(reason) => {
+            Ok(structured_failure("tab_operation_failed", reason))
+        }
+        BrowserError::JsonError(error) => Ok(structured_failure(
+            "json_error",
+            format!("JSON error: {}", error),
+        )),
+        BrowserError::IoError(error) => Ok(structured_failure(
+            "io_error",
+            format!("IO error: {}", error),
+        )),
+    }
+}
+
+pub(crate) fn normalize_tool_outcome(
+    outcome: Result<ToolResult>,
+    context: &ToolContext<'_>,
+) -> Result<ToolResult> {
+    match outcome {
+        Ok(result) => Ok(context.finish(result)),
+        Err(error) => match tool_result_from_browser_error(error) {
+            Ok(result) => Ok(context.finish(result)),
+            Err(error) => Err(error),
+        },
+    }
+}
+
 pub(crate) fn build_document_envelope(
     context: &mut ToolContext,
     target: Option<&ResolvedTarget>,
@@ -419,23 +580,45 @@ pub(crate) fn build_document_envelope(
     let target = target.map(|resolved| resolved.to_target_envelope());
 
     if options.include_snapshot || options.include_nodes {
-        let dom = context.get_dom()?;
+        let (document, snapshot, nodes, interactive_count) = {
+            let dom = context.get_dom()?;
+            let snapshot = if options.include_snapshot {
+                let started = Instant::now();
+                let rendered = render_aria_tree(&dom.root, RenderMode::Ai, None);
+                Some((rendered, duration_micros(started.elapsed())))
+            } else {
+                None
+            };
+
+            (
+                dom.document.clone(),
+                snapshot,
+                options
+                    .include_nodes
+                    .then(|| dom.snapshot_nodes())
+                    .unwrap_or_default(),
+                options.include_nodes.then(|| dom.count_interactive()),
+            )
+        };
+
+        if let Some((_, micros)) = snapshot.as_ref() {
+            context.record_snapshot_render_micros(*micros);
+        }
+
         return Ok(DocumentEnvelope {
-            document: dom.document.clone(),
+            document,
             target,
-            snapshot: options
-                .include_snapshot
-                .then(|| render_aria_tree(&dom.root, RenderMode::Ai, None)),
-            nodes: options
-                .include_nodes
-                .then(|| dom.snapshot_nodes())
-                .unwrap_or_default(),
-            interactive_count: options.include_nodes.then(|| dom.count_interactive()),
+            snapshot: snapshot.map(|(snapshot, _)| snapshot),
+            nodes,
+            interactive_count,
         });
     }
 
     Ok(DocumentEnvelope {
-        document: context.session.document_metadata()?,
+        document: {
+            context.record_browser_evaluation();
+            context.session.document_metadata()?
+        },
         target,
         snapshot: None,
         nodes: Vec::new(),
@@ -601,10 +784,12 @@ impl ToolRegistry {
         params: Value,
         context: &mut ToolContext,
     ) -> Result<ToolResult> {
-        match self.get(name) {
+        let outcome = match self.get(name) {
             Some(tool) => tool.execute(params, context),
             None => Ok(ToolResult::failure(format!("Tool '{}' not found", name))),
-        }
+        };
+
+        normalize_tool_outcome(outcome, context)
     }
 
     /// Get the number of registered tools
@@ -622,6 +807,8 @@ impl Default for ToolRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::browser::BrowserSession;
+    use crate::browser::backend::FakeSessionBackend;
     use crate::dom::{AriaChild, AriaNode};
 
     #[test]
@@ -645,6 +832,59 @@ mod tests {
         let result = ToolResult::success(None).with_metadata("duration_ms", serde_json::json!(100));
 
         assert!(result.metadata.contains_key("duration_ms"));
+    }
+
+    #[test]
+    fn test_tool_context_finish_attaches_operation_metrics() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        let mut context = ToolContext::new(&session);
+        context.record_browser_evaluation();
+        context.record_poll_iteration();
+
+        let result = context.finish(ToolResult::success(Some(serde_json::json!({
+            "ok": true
+        }))));
+
+        let metrics = result.metadata[OPERATION_METRICS_METADATA_KEY]
+            .as_object()
+            .expect("metrics metadata should be present");
+        assert_eq!(
+            metrics["browser_evaluations"].as_u64(),
+            Some(1),
+            "browser evaluation count should be recorded"
+        );
+        assert_eq!(
+            metrics["poll_iterations"].as_u64(),
+            Some(1),
+            "poll iterations should be recorded"
+        );
+        assert!(
+            metrics["output_bytes"].as_u64().unwrap_or_default() > 0,
+            "serialized output size should be recorded"
+        );
+    }
+
+    #[test]
+    fn test_build_document_envelope_records_snapshot_operation_metrics() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        let dom = sample_dom();
+        let mut context = ToolContext::with_dom(&session, dom);
+
+        let envelope = build_document_envelope(&mut context, None, DocumentEnvelopeOptions::full())
+            .expect("full envelope should build");
+        let result = context.finish(ToolResult::success_with(envelope));
+
+        let metrics = result.metadata[OPERATION_METRICS_METADATA_KEY]
+            .as_object()
+            .expect("metrics metadata should be present");
+        assert!(
+            metrics.contains_key("snapshot_render_micros"),
+            "snapshot render timing should be recorded"
+        );
+        assert!(
+            metrics["output_bytes"].as_u64().unwrap_or_default() > 0,
+            "envelope output size should be recorded"
+        );
     }
 
     #[test]
@@ -725,7 +965,7 @@ mod tests {
         let mut dom = DomTree::new(root);
         dom.document.document_id = "doc-1".to_string();
         dom.document.revision = "main:1".to_string();
-        dom.selectors = vec![String::new(), "#submit".to_string()];
+        dom.replace_selectors(vec![String::new(), "#submit".to_string()]);
         dom
     }
 
