@@ -67,7 +67,7 @@ impl Tool for InputTool {
     }
 
     fn description(&self) -> &str {
-        "Type into an input. Usually after snapshot; next press_key, click, or wait."
+        "Type into an input after snapshot. Then press_key, click, or wait as the page reacts."
     }
 
     fn execute_typed(&self, params: InputParams, context: &mut ToolContext) -> Result<ToolResult> {

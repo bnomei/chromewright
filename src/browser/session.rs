@@ -61,6 +61,12 @@ pub struct ClosedTabSummary {
     pub active_tab: Option<TabInfo>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ManagedTabsCloseSummary {
+    pub closed_tabs: usize,
+    pub skipped_tabs: usize,
+}
+
 impl BrowserSession {
     /// Launch a new browser instance with the given options
     pub fn launch(options: LaunchOptions) -> Result<Self> {
@@ -229,6 +235,13 @@ impl BrowserSession {
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn is_tab_managed(&self, tab_id: &str) -> Result<bool> {
         Ok(self.managed_tab_ids()?.contains(tab_id))
+    }
+
+    pub(crate) fn session_origin_label(&self) -> &'static str {
+        match self.origin {
+            SessionOrigin::Launched => "launched",
+            SessionOrigin::Connected => "connected",
+        }
     }
 
     pub(crate) fn remember_managed_tab(&self, tab_id: impl Into<String>) -> Result<()> {

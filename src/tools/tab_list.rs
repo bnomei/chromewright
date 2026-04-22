@@ -43,7 +43,7 @@ impl Tool for TabListTool {
     }
 
     fn description(&self) -> &str {
-        "List tabs so you can choose a switch_tab target."
+        "List tabs with tab_id values so you can pick a stable switch_tab target."
     }
 
     fn execute_typed(

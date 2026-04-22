@@ -12,6 +12,8 @@
 # Local tool state
 /.frigg/
 
-docs/
+docs/*
+!docs/tool-description-index.md
+!docs/tool-handoff-contract.md
 specs/
 loops/

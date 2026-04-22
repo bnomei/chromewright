@@ -51,7 +51,7 @@ impl Tool for NewTabTool {
     }
 
     fn description(&self) -> &str {
-        "Open a URL in a new tab. Next: tab_list, switch_tab, or snapshot."
+        "Open a URL in a new active tab. Then snapshot, or use tab_list/switch_tab if tabs changed."
     }
 
     fn execute_typed(&self, params: NewTabParams, context: &mut ToolContext) -> Result<ToolResult> {

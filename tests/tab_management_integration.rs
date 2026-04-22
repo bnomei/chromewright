@@ -350,7 +350,12 @@ fn test_close_tab() {
     let mut context = ToolContext::new(&session);
 
     let result = close_tab_tool
-        .execute_typed(CloseTabParams {}, &mut context)
+        .execute_typed(
+            CloseTabParams {
+                confirm_destructive: false,
+            },
+            &mut context,
+        )
         .expect("Failed to execute close_tab tool");
 
     assert!(result.success, "Close tab should succeed");
@@ -499,7 +504,12 @@ fn test_tab_workflow() {
     let mut context = ToolContext::new(&session);
 
     let result = close_tab_tool
-        .execute_typed(CloseTabParams {}, &mut context)
+        .execute_typed(
+            CloseTabParams {
+                confirm_destructive: false,
+            },
+            &mut context,
+        )
         .expect("Failed to close tab");
 
     assert!(result.success);

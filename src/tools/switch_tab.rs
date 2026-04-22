@@ -55,7 +55,7 @@ impl Tool for SwitchTabTool {
     }
 
     fn description(&self) -> &str {
-        "Activate a tab by index or tab_id. Usually after tab_list; next snapshot."
+        "Activate a tab by tab_id or index. Usually after tab_list; run snapshot before DOM actions."
     }
 
     fn execute_typed(

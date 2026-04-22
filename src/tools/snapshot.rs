@@ -27,7 +27,7 @@ impl Tool for SnapshotTool {
     }
 
     fn description(&self) -> &str {
-        "Capture page state and node cursors. Next: inspect_node, click, input, select, hover, wait."
+        "Capture page state and cursors. Next: inspect_node, click, input, select, hover, wait."
     }
 
     fn execute_typed(

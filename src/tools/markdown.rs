@@ -74,7 +74,7 @@ impl Tool for GetMarkdownTool {
     }
 
     fn description(&self) -> &str {
-        "Read page content as markdown. Extraction only; use snapshot for actions."
+        "Read page content as markdown. For actions or precise nodes, use snapshot."
     }
 
     fn execute_typed(

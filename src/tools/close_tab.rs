@@ -6,7 +6,11 @@ use serde_json::json;
 
 /// Parameters for the close_tab tool (no parameters needed)
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct CloseTabParams {}
+pub struct CloseTabParams {
+    /// Allow closing an unmanaged active tab in connected sessions
+    #[serde(default)]
+    pub confirm_destructive: bool,
+}
 
 /// Tool for closing the current active tab
 #[derive(Default)]
@@ -41,21 +45,35 @@ impl Tool for CloseTabTool {
     }
 
     fn description(&self) -> &str {
-        "Close the active tab. Next: tab_list or switch_tab if work continues."
+        "Close the active tab; connected sessions require confirm_destructive for unmanaged tabs."
     }
 
     fn execute_typed(
         &self,
-        _params: CloseTabParams,
+        params: CloseTabParams,
         context: &mut ToolContext,
     ) -> Result<ToolResult> {
-        let tab_count = context.session.tab_overview()?.len();
+        let tabs = context.session.tab_overview()?;
+        let tab_count = tabs.len();
         if tab_count == 0 {
             return Ok(context.finish(close_tab_failure(
                 "no_tabs",
                 "No tabs available".to_string(),
                 "new_tab",
                 tab_count,
+            )));
+        }
+
+        if context.session.is_connected_session()
+            && !params.confirm_destructive
+            && let Some((index, active)) = tabs.iter().enumerate().find(|(_, tab)| tab.active)
+            && !context.session.is_tab_managed(&active.id)?
+        {
+            return Ok(context.finish(close_tab_confirmation_required(
+                index,
+                active,
+                tab_count,
+                context.session.session_origin_label(),
             )));
         }
 
@@ -130,11 +148,46 @@ fn close_tab_failure(
     )
 }
 
+fn close_tab_confirmation_required(
+    index: usize,
+    active: &crate::browser::TabInfo,
+    tab_count: usize,
+    session_origin: &str,
+) -> ToolResult {
+    ToolResult::failure_with(
+        format!(
+            "Active tab {} is not managed by this connected session; set confirm_destructive=true to close it",
+            active.id
+        ),
+        json!({
+            "code": "destructive_confirmation_required",
+            "error": format!(
+                "Active tab {} is not managed by this connected session; set confirm_destructive=true to close it",
+                active.id
+            ),
+            "session_origin": session_origin,
+            "tab_count": tab_count,
+            "active_tab": {
+                "tab_id": active.id,
+                "index": index,
+                "active": active.active,
+                "title": active.title,
+                "url": active.url,
+            },
+            "active_tab_managed": false,
+            "recovery": {
+                "suggested_tool": "tab_list",
+            }
+        }),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::browser::backend::FakeSessionBackend;
     use crate::browser::BrowserSession;
+    use crate::browser::SessionOrigin;
+    use crate::browser::backend::FakeSessionBackend;
 
     #[test]
     fn test_close_tab_message_includes_index_title_and_url() {
@@ -154,7 +207,12 @@ mod tests {
         let tool = CloseTabTool::default();
         let mut context = ToolContext::new(&session);
         let result = tool
-            .execute_typed(CloseTabParams {}, &mut context)
+            .execute_typed(
+                CloseTabParams {
+                    confirm_destructive: false,
+                },
+                &mut context,
+            )
             .expect("close_tab should succeed");
 
         assert!(result.success);
@@ -186,7 +244,12 @@ mod tests {
         let tool = CloseTabTool::default();
         let mut context = ToolContext::new(&session);
         let result = tool
-            .execute_typed(CloseTabParams {}, &mut context)
+            .execute_typed(
+                CloseTabParams {
+                    confirm_destructive: false,
+                },
+                &mut context,
+            )
             .expect("close_tab should return a structured failure");
 
         assert!(!result.success);
@@ -205,7 +268,12 @@ mod tests {
         let tool = CloseTabTool::default();
         let mut context = ToolContext::new(&session);
         let result = tool
-            .execute_typed(CloseTabParams {}, &mut context)
+            .execute_typed(
+                CloseTabParams {
+                    confirm_destructive: false,
+                },
+                &mut context,
+            )
             .expect("close_tab should return a structured failure");
 
         assert!(!result.success);
@@ -218,5 +286,95 @@ mod tests {
             data["recovery"]["suggested_tool"].as_str(),
             Some("tab_list")
         );
+    }
+
+    #[test]
+    fn test_close_tab_tool_requires_confirmation_for_unmanaged_active_tab_in_connected_session() {
+        let session = BrowserSession::with_test_backend_origin(
+            FakeSessionBackend::new(),
+            SessionOrigin::Connected,
+        );
+
+        let tool = CloseTabTool::default();
+        let mut context = ToolContext::new(&session);
+        let result = tool
+            .execute_typed(
+                CloseTabParams {
+                    confirm_destructive: false,
+                },
+                &mut context,
+            )
+            .expect("close_tab should return a structured failure");
+
+        assert!(!result.success);
+        assert_eq!(
+            result.error.as_deref(),
+            Some(
+                "Active tab tab-1 is not managed by this connected session; set confirm_destructive=true to close it"
+            )
+        );
+        let data = result
+            .data
+            .expect("close_tab failure should include details");
+        assert_eq!(
+            data["code"].as_str(),
+            Some("destructive_confirmation_required")
+        );
+        assert_eq!(data["session_origin"].as_str(), Some("connected"));
+        assert_eq!(data["active_tab"]["tab_id"].as_str(), Some("tab-1"));
+        assert_eq!(data["active_tab_managed"].as_bool(), Some(false));
+    }
+
+    #[test]
+    fn test_close_tab_tool_connected_session_closes_managed_active_tab_without_confirmation() {
+        let session = BrowserSession::with_test_backend_origin(
+            FakeSessionBackend::new(),
+            SessionOrigin::Connected,
+        );
+        session
+            .open_tab_entry("https://managed.example")
+            .expect("managed tab should open");
+
+        let tool = CloseTabTool::default();
+        let mut context = ToolContext::new(&session);
+        let result = tool
+            .execute_typed(
+                CloseTabParams {
+                    confirm_destructive: false,
+                },
+                &mut context,
+            )
+            .expect("managed active tab should close");
+
+        assert!(result.success);
+        let data = result.data.expect("close_tab should include data");
+        assert_eq!(data["tab_id"].as_str(), Some("tab-2"));
+        assert_eq!(data["closed_tab"]["tab_id"].as_str(), Some("tab-2"));
+        assert_eq!(data["active_tab"]["tab_id"].as_str(), Some("tab-1"));
+    }
+
+    #[test]
+    fn test_close_tab_tool_connected_session_can_close_unmanaged_active_tab_with_confirmation() {
+        let session = BrowserSession::with_test_backend_origin(
+            FakeSessionBackend::new(),
+            SessionOrigin::Connected,
+        );
+
+        let tool = CloseTabTool::default();
+        let mut context = ToolContext::new(&session);
+        let result = tool
+            .execute_typed(
+                CloseTabParams {
+                    confirm_destructive: true,
+                },
+                &mut context,
+            )
+            .expect("confirmed destructive close_tab should succeed");
+
+        assert!(result.success);
+        let data = result.data.expect("close_tab should include data");
+        assert_eq!(data["tab_id"].as_str(), Some("tab-1"));
+        assert!(data["active_tab"].is_null());
+        assert!(session.tab_overview().expect("tabs should load").is_empty());
     }
 }

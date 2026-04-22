@@ -229,7 +229,12 @@ fn test_close_tool() {
 
     // Execute the tool to close the browser
     let result = tool
-        .execute_typed(CloseParams {}, &mut context)
+        .execute_typed(
+            CloseParams {
+                confirm_destructive: false,
+            },
+            &mut context,
+        )
         .expect("Failed to execute close tool");
 
     // Verify the result

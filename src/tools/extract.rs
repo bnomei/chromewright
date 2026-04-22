@@ -38,7 +38,7 @@ impl Tool for ExtractContentTool {
     }
 
     fn description(&self) -> &str {
-        "Read text or HTML from the page or a selector. Use when markdown is too lossy."
+        "Read page text or HTML when markdown is too lossy for a selector or the whole page."
     }
 
     fn execute_typed(

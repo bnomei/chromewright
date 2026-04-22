@@ -205,11 +205,33 @@ fn smoke_tab_workflow() {
         tab_data["count"].as_u64().unwrap_or_default() >= 2,
         "expected at least two tabs"
     );
+    let first_tab_id = tab_data["tab_list"][0]["tab_id"]
+        .as_str()
+        .expect("tab_list should expose stable tab ids")
+        .to_string();
 
     let switched = session
-        .execute_tool("switch_tab", json!({ "index": 0 }))
+        .execute_tool("switch_tab", json!({ "tab_id": first_tab_id }))
         .expect("switch_tab should execute");
     assert!(switched.success);
+    let switched_data = switched.data.expect("switch_tab should include data");
+    assert_eq!(switched_data["tab_id"].as_str(), Some("tab-1"));
+    assert_eq!(switched_data["active_tab"]["tab_id"].as_str(), Some("tab-1"));
 
     common::wait_for_url_contains(session, "First%20Tab").expect("first tab should become active");
+
+    let close_tab = session
+        .execute_tool("close_tab", json!({}))
+        .expect("close_tab should execute in launched mode");
+    assert!(close_tab.success);
+    let close_tab_data = close_tab.data.expect("close_tab should include data");
+    assert_eq!(close_tab_data["tab_id"].as_str(), Some("tab-1"));
+
+    let close = session
+        .execute_tool("close", json!({}))
+        .expect("close should execute in launched mode");
+    assert!(close.success);
+    let close_data = close.data.expect("close should include data");
+    assert_eq!(close_data["scope"].as_str(), Some("all_tabs"));
+    assert_eq!(close_data["session_origin"].as_str(), Some("launched"));
 }

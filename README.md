@@ -15,7 +15,7 @@ Use Chromewright when you need browser-aware automation with a stable high-level
 
 - attaching to a running Chrome or Chromium session or launching a disposable browser from Rust
 - exposing a real browser to MCP clients over streamable HTTP or stdio
-- reading pages through `snapshot`, `inspect_node`, `markdown`, `extract`, and `read_links`
+- reading pages through `snapshot`, `inspect_node`, `get_markdown`, `extract`, and `read_links`
 - driving bounded interactions through `navigate`, `click`, `input`, `select`, `hover`, `press_key`, `scroll`, `wait`, and the tab tools
 - targeting follow-up actions with revision-scoped `cursor` or `node_ref` handles instead of relying only on fragile selectors
 - embedding the same tool surface directly inside a Rust process with `ToolRegistry`
@@ -152,6 +152,7 @@ The exact file name and field names vary by client. The important part is that t
 
 - attach mode connects to an existing Chrome or Chromium session and can see the tabs, cookies, and authenticated state already present in that profile
 - launch mode starts a dedicated browser session and tracks the tabs created under that session
+- in attach mode, `close` defaults to session-managed cleanup and `close_tab` requires `confirm_destructive = true` before closing an unmanaged active tab
 - the normal high-level tool surface reads and interacts through CDP only; it does not write to local files during ordinary MCP use
 - filesystem-bound screenshots are excluded from the default surface and remain explicit operator actions
 
@@ -161,15 +162,35 @@ The exact file name and field names vary by client. The important part is that t
 
 Once Chromewright is running, the normal workflow is:
 
-1. Use `tab_list` or `new_tab` to establish an active tab.
+1. Use `new_tab` or `tab_list` to establish an active tab. On a fresh session with no active tab, do not call `snapshot` first.
 2. Use `snapshot` to get document metadata plus actionable nodes.
-3. Use `inspect_node` for targeted bounded reads, or `markdown`, `extract`, and `read_links` for content-focused reads.
-4. Use `click`, `input`, `select`, `hover`, `press_key`, `scroll`, `wait`, or the tab tools with `cursor` preferred for follow-up targeting.
-5. Refresh `snapshot` after DOM-changing actions when a stale `cursor` or `node_ref` fails cleanly.
+3. Use `inspect_node` for targeted bounded reads, `get_markdown` for article-like reading, `extract` for targeted text or HTML, and `read_links` for link inventory or planning.
+4. Use `click`, `input`, `select`, `hover`, `press_key`, `scroll`, `wait`, or the tab tools with `cursor` preferred for follow-up targeting inside a page and stable `tab_id` preferred for multi-tab flows.
+5. Refresh `snapshot` after revision-changing actions. `cursor` and `node_ref` are revision-scoped, so rereads are the normal recovery path.
 
 ### Direct Rust integration
 
 Chromewright exposes the same high-level tool contract to Rust callers through `BrowserSession`, `ToolContext`, and `ToolRegistry`, so MCP usage and in-process usage share the same mental model and result envelope.
+
+## Workflow Conventions
+
+- Fresh sessions: use `new_tab` or `tab_list` before `snapshot` if you do not already have an active tab.
+- Revision-scoped targets: `cursor` and `node_ref` belong to a specific document revision. After navigation or DOM-changing actions, rerun `snapshot` or fall back to selector-based recovery before precise follow-up work.
+- `target_status = same`: the tool still resolved the same target, so direct follow-up is usually safe.
+- `target_status = rebound`: the tool recovered after a revision change; reread with `snapshot` before more precise chained work.
+- `target_status = detached`: the old target no longer exists, often after navigation; reacquire state from the new page before continuing.
+- Attach-mode safety: use a disposable browser profile for debugging and treat destructive tab tools as explicit actions, especially on connected sessions.
+
+Chromewright also carries a few small but important contract details:
+
+- `input` accepts `value` as a backward-compatible alias, while `text` remains the canonical field.
+- `extract` uses `code = element_not_found` for selector misses and reserves `code = invalid_extract_payload` for malformed extraction results.
+- `read_links` returns both the raw `href` attribute and an absolute `resolved_url`.
+
+Companion references:
+
+- [Tool Handoff Contract](docs/tool-handoff-contract.md)
+- [Tool Description Index](docs/tool-description-index.md)
 
 ## Default Tool Surface
 
@@ -178,7 +199,7 @@ The default `ToolRegistry` and MCP server expose the same 20 high-level tools:
 - navigation: `navigate`, `go_back`, `go_forward`, `wait`
 - interaction: `click`, `input`, `select`, `hover`, `press_key`, `scroll`
 - tabs and lifecycle: `new_tab`, `tab_list`, `switch_tab`, `close_tab`, `close`
-- reading and inspection: `snapshot`, `inspect_node`, `markdown`, `extract`, `read_links`
+- reading and inspection: `snapshot`, `inspect_node`, `get_markdown`, `extract`, `read_links`
 
 The default surface intentionally excludes the operator tools `evaluate` and `screenshot`. For direct Rust integrations, opt into those explicitly:
 
@@ -189,7 +210,9 @@ let mut registry = ToolRegistry::with_defaults();
 registry.register_operator_tools();
 ```
 
-High-level action tools return compact follow-up metadata by default. Use `snapshot` when you need the full YAML snapshot plus actionable-node list. For targeted reads, use `snapshot` to choose a node and reuse its `cursor`, then call `inspect_node`. During the current migration, targetable tools still accept `selector`, `index`, and `node_ref`, but `cursor` is the preferred follow-up handle.
+High-level action tools return compact follow-up metadata by default. Use `snapshot` when you need the full YAML snapshot plus actionable-node list. For targeted reads, use `snapshot` to choose a node and reuse its `cursor`, then call `inspect_node`. After revision-changing actions, rerun `snapshot` before more precise target reuse. Targetable tools still accept `selector`, `index`, and `node_ref`, but `cursor` is the preferred follow-up handle.
+
+Read-oriented tools are intentionally distinct: `get_markdown` is the broad reading tool, `extract` is for targeted text or HTML, and `read_links` is for link inventory and planning. For multi-tab work, prefer stable `tab_id` handles from `tab_list`, `new_tab`, `switch_tab`, and `close_tab` instead of relying only on tab indices.
 
 ## Library Usage
 

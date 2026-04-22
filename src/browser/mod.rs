@@ -10,6 +10,8 @@ mod session;
 pub use config::{ConnectionOptions, LaunchOptions};
 pub(crate) use session::MarkdownCacheEntry;
 pub use session::{BrowserSession, ClosedTabSummary, TabInfo};
+#[cfg(test)]
+pub(crate) use session::SessionOrigin;
 
 use crate::error::Result;
 

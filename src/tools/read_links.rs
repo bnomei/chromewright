@@ -35,7 +35,7 @@ impl Tool for ReadLinksTool {
     }
 
     fn description(&self) -> &str {
-        "List page links. Next: click or navigate."
+        "List raw href and resolved_url links. Next: click or navigate."
     }
 
     fn execute_typed(

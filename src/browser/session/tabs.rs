@@ -1,4 +1,4 @@
-use super::{BrowserSession, ClosedTabSummary, TabInfo};
+use super::{BrowserSession, ClosedTabSummary, ManagedTabsCloseSummary, TabInfo};
 use crate::browser::backend::TabDescriptor;
 use crate::error::{BrowserError, Result};
 
@@ -52,5 +52,48 @@ impl BrowserSession {
             url: active.url,
             active_tab,
         })
+    }
+
+    pub(crate) fn close_managed_tabs(&self) -> Result<ManagedTabsCloseSummary> {
+        let tabs = self.tab_overview()?;
+        let mut managed_tabs = Vec::new();
+
+        for tab in &tabs {
+            if self.is_tab_managed(&tab.id)? {
+                managed_tabs.push(tab.clone());
+            }
+        }
+
+        let skipped_tabs = tabs.len().saturating_sub(managed_tabs.len());
+        let attempted = managed_tabs.len();
+        let mut closed_tabs = 0usize;
+        let mut failures = Vec::new();
+
+        for tab in managed_tabs {
+            match self.backend.close_tab(&tab.id, false) {
+                Ok(()) => {
+                    self.forget_managed_tab(&tab.id)?;
+                    closed_tabs += 1;
+                }
+                Err(err) => failures.push(format!(
+                    "failed to close '{}' ({}) [id={}]: {}",
+                    tab.title, tab.url, tab.id, err
+                )),
+            }
+        }
+
+        if failures.is_empty() {
+            Ok(ManagedTabsCloseSummary {
+                closed_tabs,
+                skipped_tabs,
+            })
+        } else {
+            Err(BrowserError::TabOperationFailed(format!(
+                "Managed session close encountered {} error(s) after attempting {} managed tab(s): {}",
+                failures.len(),
+                attempted,
+                failures.join("; ")
+            )))
+        }
     }
 }
