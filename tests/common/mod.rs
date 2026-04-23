@@ -22,9 +22,13 @@ fn launch_error_is_environmental(message: &str) -> bool {
 
 pub fn browser_test_guard() -> MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-        .lock()
-        .expect("browser test lock should not be poisoned")
+    match LOCK.get_or_init(|| Mutex::new(())).lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            eprintln!("Recovering browser test lock after a prior panic");
+            poisoned.into_inner()
+        }
+    }
 }
 
 pub fn launch_or_skip() -> Option<BrowserSession> {

@@ -170,12 +170,12 @@ impl ScreenshotRequest {
     }
 
     pub(crate) fn validate(&self) -> Result<()> {
-        if let Some(tab_id) = self.tab_id.as_deref() {
-            if tab_id.trim().is_empty() {
-                return Err(BrowserError::InvalidArgument(
-                    "screenshot tab_id cannot be empty".to_string(),
-                ));
-            }
+        if let Some(tab_id) = self.tab_id.as_deref()
+            && tab_id.trim().is_empty()
+        {
+            return Err(BrowserError::InvalidArgument(
+                "screenshot tab_id cannot be empty".to_string(),
+            ));
         }
 
         if let Some(clip) = self.clip.as_ref() {
@@ -725,11 +725,11 @@ impl ChromeSessionBackend {
             ));
         }
 
-        if let Some(previous_hint) = previous_hint.as_deref() {
-            if let Some(tab) = tabs.iter().find(|tab| tab_id(tab) == previous_hint) {
-                self.set_active_tab_hint(Some(previous_hint.to_string()))?;
-                return Ok(tab.clone());
-            }
+        if let Some(previous_hint) = previous_hint.as_deref()
+            && let Some(tab) = tabs.iter().find(|tab| tab_id(tab) == previous_hint)
+        {
+            self.set_active_tab_hint(Some(previous_hint.to_string()))?;
+            return Ok(tab.clone());
         }
 
         if let Ok(tab) = self.detect_active_tab_from_tabs(&tabs) {

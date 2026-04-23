@@ -11,10 +11,10 @@ pub use backend::{ScreenshotClip, ScreenshotFormat, ScreenshotMode, ScreenshotRe
 pub use config::{ConnectionOptions, LaunchOptions};
 #[cfg(test)]
 pub(crate) use session::SessionOrigin;
-pub use session::{BrowserSession, ClosedTabSummary, ScreenshotArtifact, TabInfo};
 pub(crate) use session::cache::{
     MarkdownCacheEntry, MarkdownCacheMetadata, SnapshotCacheEntry, SnapshotCacheScope,
 };
+pub use session::{BrowserSession, ClosedTabSummary, ScreenshotArtifact, TabInfo};
 
 use crate::error::Result;
 

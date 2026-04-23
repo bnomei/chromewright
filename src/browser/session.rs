@@ -20,9 +20,9 @@ mod history;
 mod tabs;
 
 pub use cache::ScreenshotArtifact;
-pub(crate) use cache::{MarkdownCacheEntry, SnapshotCacheEntry};
 #[cfg(test)]
 pub(crate) use cache::SnapshotCacheScope;
+pub(crate) use cache::{MarkdownCacheEntry, SnapshotCacheEntry};
 
 /// Browser session that manages a Chrome/Chromium instance
 pub struct BrowserSession {

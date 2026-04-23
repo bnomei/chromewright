@@ -328,10 +328,10 @@ impl AriaNode {
         }
 
         for child in &self.children {
-            if let AriaChild::Node(node) = child {
-                if let Some(found) = node.find_by_index(index) {
-                    return Some(found);
-                }
+            if let AriaChild::Node(node) = child
+                && let Some(found) = node.find_by_index(index)
+            {
+                return Some(found);
             }
         }
 
@@ -345,10 +345,10 @@ impl AriaNode {
         }
 
         for child in &mut self.children {
-            if let AriaChild::Node(node) = child {
-                if let Some(found) = node.find_by_index_mut(index) {
-                    return Some(found);
-                }
+            if let AriaChild::Node(node) = child
+                && let Some(found) = node.find_by_index_mut(index)
+            {
+                return Some(found);
             }
         }
 

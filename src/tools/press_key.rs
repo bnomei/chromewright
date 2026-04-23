@@ -258,10 +258,10 @@ fn active_cursor(dom: &DomTree) -> Option<Cursor> {
 
 fn deepest_active_actionable_index(node: &AriaNode) -> Option<usize> {
     for child in &node.children {
-        if let AriaChild::Node(child_node) = child {
-            if let Some(index) = deepest_active_actionable_index(child_node) {
-                return Some(index);
-            }
+        if let AriaChild::Node(child_node) = child
+            && let Some(index) = deepest_active_actionable_index(child_node)
+        {
+            return Some(index);
         }
     }
 

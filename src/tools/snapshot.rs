@@ -252,10 +252,11 @@ fn create_key(aria_node: &AriaNode, render_cursor_pointer: bool, render_active: 
 }
 
 fn get_single_inlined_text_child(aria_node: &AriaNode) -> Option<String> {
-    if aria_node.children.len() == 1 && aria_node.props.is_empty() {
-        if let AriaChild::Text(text) = &aria_node.children[0] {
-            return Some(text.clone());
-        }
+    if aria_node.children.len() == 1
+        && aria_node.props.is_empty()
+        && let AriaChild::Text(text) = &aria_node.children[0]
+    {
+        return Some(text.clone());
     }
     None
 }

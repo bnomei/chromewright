@@ -77,13 +77,20 @@ fn smoke_snapshot_and_inspect() {
         .execute_tool(
             "inspect_node",
             json!({
-                "cursor": cursor,
+                "target": {
+                    "kind": "cursor",
+                    "cursor": cursor,
+                },
                 "detail": "compact",
             }),
         )
         .expect("inspect_node should execute");
 
-    assert!(inspect.success);
+    assert!(
+        inspect.success,
+        "inspect_node failed: error={:?}, data={:?}",
+        inspect.error, inspect.data
+    );
     let data = inspect.data.expect("inspect_node should include data");
     assert_eq!(data["action"].as_str(), Some("inspect_node"));
     assert_eq!(data["identity"]["tag"].as_str(), Some("button"));
@@ -116,24 +123,32 @@ fn smoke_click_and_wait() {
         .execute_tool(
             "click",
             json!({
-                "selector": "#save",
+                "target": "#save",
             }),
         )
         .expect("click should execute");
-    assert!(click.success);
+    assert!(
+        click.success,
+        "click failed: error={:?}, data={:?}",
+        click.error, click.data
+    );
 
     let wait = session
         .execute_tool(
             "wait",
             json!({
-                "selector": "#status",
+                "target": "#status",
                 "condition": "text_contains",
                 "text": "clicked",
                 "timeout_ms": 5_000,
             }),
         )
         .expect("wait should execute");
-    assert!(wait.success);
+    assert!(
+        wait.success,
+        "wait failed: error={:?}, data={:?}",
+        wait.error, wait.data
+    );
 
     let status = common::evaluate(session, "document.getElementById('status').textContent")
         .expect("status text should be readable");

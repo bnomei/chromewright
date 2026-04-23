@@ -591,21 +591,20 @@ pub(crate) fn resolve_target_with_cursor(
             if cursor_input.node_ref.document_id != dom.document.document_id
                 || cursor_input.node_ref.revision != dom.document.revision
             {
-                if !cursor_input.selector.is_empty() {
-                    if let Some(cursor) =
+                if !cursor_input.selector.is_empty()
+                    && let Some(cursor) =
                         actionable_cursor_for_selector(dom, &cursor_input.selector)
-                    {
-                        return Ok(TargetResolution::Resolved(ResolvedTarget {
-                            method: encode_selector_rebound_method(
-                                "cursor",
-                                TargetRecoveredFrom::Cursor,
-                            ),
-                            selector: cursor.selector.clone(),
-                            index: Some(cursor.index),
-                            node_ref: Some(cursor.node_ref.clone()),
-                            cursor: Some(cursor),
-                        }));
-                    }
+                {
+                    return Ok(TargetResolution::Resolved(ResolvedTarget {
+                        method: encode_selector_rebound_method(
+                            "cursor",
+                            TargetRecoveredFrom::Cursor,
+                        ),
+                        selector: cursor.selector.clone(),
+                        index: Some(cursor.index),
+                        node_ref: Some(cursor.node_ref.clone()),
+                        cursor: Some(cursor),
+                    }));
                 }
 
                 return Ok(TargetResolution::Failure(stale_node_ref_failure(
@@ -1274,18 +1273,17 @@ fn snapshot_nodes_from_scoped_root(
 }
 
 fn collect_snapshot_nodes(dom: &DomTree, node: &AriaNode, nodes: &mut Vec<SnapshotNode>) {
-    if node.has_public_handle() {
-        if let Some(index) = node.index {
-            if let Some(cursor) = dom.cursor_for_index(index) {
-                nodes.push(SnapshotNode {
-                    node_ref: cursor.node_ref.clone(),
-                    index: cursor.index,
-                    role: cursor.role.clone(),
-                    name: cursor.name.clone(),
-                    cursor,
-                });
-            }
-        }
+    if node.has_public_handle()
+        && let Some(index) = node.index
+        && let Some(cursor) = dom.cursor_for_index(index)
+    {
+        nodes.push(SnapshotNode {
+            node_ref: cursor.node_ref.clone(),
+            index: cursor.index,
+            role: cursor.role.clone(),
+            name: cursor.name.clone(),
+            cursor,
+        });
     }
 
     for child in &node.children {
@@ -1300,18 +1298,17 @@ fn collect_scoped_snapshot_nodes(
     node: &ScopedSnapshotNode<'_>,
     nodes: &mut Vec<SnapshotNode>,
 ) {
-    if node.public_handle {
-        if let Some(index) = node.node.index {
-            if let Some(cursor) = dom.cursor_for_index(index) {
-                nodes.push(SnapshotNode {
-                    node_ref: cursor.node_ref.clone(),
-                    index: cursor.index,
-                    role: cursor.role.clone(),
-                    name: cursor.name.clone(),
-                    cursor,
-                });
-            }
-        }
+    if node.public_handle
+        && let Some(index) = node.node.index
+        && let Some(cursor) = dom.cursor_for_index(index)
+    {
+        nodes.push(SnapshotNode {
+            node_ref: cursor.node_ref.clone(),
+            index: cursor.index,
+            role: cursor.role.clone(),
+            name: cursor.name.clone(),
+            cursor,
+        });
     }
 
     for child in &node.children {
@@ -1463,10 +1460,11 @@ fn create_scoped_snapshot_key(
 }
 
 fn scoped_single_inlined_text_child<'a>(node: &'a ScopedSnapshotNode<'a>) -> Option<&'a str> {
-    if node.children.len() == 1 && node.node.props.is_empty() {
-        if let ScopedSnapshotChild::Text(text) = &node.children[0] {
-            return Some(text);
-        }
+    if node.children.len() == 1
+        && node.node.props.is_empty()
+        && let ScopedSnapshotChild::Text(text) = &node.children[0]
+    {
+        return Some(text);
     }
     None
 }
