@@ -1,15 +1,15 @@
 mod common;
 
 use chromewright::tools::{
-    close_tab::CloseTabTool, new_tab::NewTabTool, switch_tab::SwitchTabTool, tab_list::TabListTool,
     CloseTabParams, NewTabParams, SwitchTabParams, TabListParams, Tool, ToolContext,
+    close_tab::CloseTabTool, new_tab::NewTabTool, switch_tab::SwitchTabTool, tab_list::TabListTool,
 };
 use log::info;
 
 #[test]
 #[ignore]
 fn test_new_tab() {
-    use chromewright::tools::{new_tab::NewTabTool, NewTabParams, Tool, ToolContext};
+    use chromewright::tools::{NewTabParams, Tool, ToolContext, new_tab::NewTabTool};
 
     let Some(browser) = common::browser_or_skip() else {
         return;
@@ -29,8 +29,8 @@ fn test_new_tab() {
     info!("Initial tab count: {}", initial_count);
 
     // Create tool and context
-    let tool = NewTabTool::default();
-    let mut context = ToolContext::new(&session);
+    let tool = NewTabTool;
+    let mut context = ToolContext::new(session);
 
     // Execute the tool to create a new tab
     let result = tool
@@ -51,10 +51,6 @@ fn test_new_tab() {
     assert!(
         data["url"].as_str().is_some(),
         "Result should contain url field"
-    );
-    assert!(
-        data["tab_id"].as_str().is_some(),
-        "Result should contain tab_id field"
     );
     assert!(
         data["tab"]["tab_id"].as_str().is_some(),
@@ -104,8 +100,8 @@ fn test_tab_list() {
     .expect("Failed to navigate");
 
     // Create tool and context
-    let tool = TabListTool::default();
-    let mut context = ToolContext::new(&session);
+    let tool = TabListTool;
+    let mut context = ToolContext::new(session);
 
     // Execute the tool
     let result = tool
@@ -117,20 +113,17 @@ fn test_tab_list() {
     assert!(result.data.is_some());
 
     let data = result.data.unwrap();
-    let tab_list = data["tab_list"].as_array().expect("No tab_list field");
+    let tabs = data["tabs"].as_array().expect("No tabs field");
     let count = data["count"].as_u64().expect("No count field");
 
-    info!(
-        "Tab list: {}",
-        serde_json::to_string_pretty(&tab_list).unwrap()
-    );
+    info!("Tab list: {}", serde_json::to_string_pretty(&tabs).unwrap());
 
     // Should have at least 1 tab
     assert!(count >= 1, "Expected at least 1 tab");
-    assert_eq!(tab_list.len() as u64, count);
+    assert_eq!(tabs.len() as u64, count);
 
     // Check first tab structure
-    let first_tab = &tab_list[0];
+    let first_tab = &tabs[0];
     assert!(
         first_tab["tab_id"].is_string(),
         "Tab should have stable tab id"
@@ -166,8 +159,8 @@ fn test_new_tab_and_switch() {
     .expect("Failed to navigate");
 
     // Create a new tab
-    let new_tab_tool = NewTabTool::default();
-    let mut context = ToolContext::new(&session);
+    let new_tab_tool = NewTabTool;
+    let mut context = ToolContext::new(session);
 
     let result = new_tab_tool
         .execute_typed(
@@ -184,8 +177,8 @@ fn test_new_tab_and_switch() {
     common::wait_for_tab_count_at_least(session, 2).expect("New tab should be listed");
 
     // List tabs to verify count increased by 1
-    let tab_list_tool = TabListTool::default();
-    let mut context = ToolContext::new(&session);
+    let tab_list_tool = TabListTool;
+    let mut context = ToolContext::new(session);
 
     let result = tab_list_tool
         .execute_typed(TabListParams {}, &mut context)
@@ -199,9 +192,9 @@ fn test_new_tab_and_switch() {
     assert!(count >= 2, "Should have at least 2 tabs, got {}", count);
 
     // Switch to first tab via stable tab_id
-    let switch_tab_tool = SwitchTabTool::default();
-    let mut context = ToolContext::new(&session);
-    let first_tab_id = data["tab_list"][0]["tab_id"]
+    let switch_tab_tool = SwitchTabTool;
+    let mut context = ToolContext::new(session);
+    let first_tab_id = data["tabs"][0]["tab_id"]
         .as_str()
         .expect("tab_list should expose the stable tab id")
         .to_string();
@@ -219,9 +212,12 @@ fn test_new_tab_and_switch() {
     assert!(result.success, "Switch tab should succeed");
 
     let data = result.data.unwrap();
-    assert_eq!(data["index"].as_u64(), Some(0));
-    assert_eq!(data["tab_id"].as_str(), Some(first_tab_id.as_str()));
-    assert_eq!(data["active_tab"]["tab_id"].as_str(), Some(first_tab_id.as_str()));
+    assert_eq!(data["tab"]["index"].as_u64(), Some(0));
+    assert_eq!(data["tab"]["tab_id"].as_str(), Some(first_tab_id.as_str()));
+    assert_eq!(
+        data["active_tab"]["tab_id"].as_str(),
+        Some(first_tab_id.as_str())
+    );
     info!(
         "Switched to tab: {}",
         serde_json::to_string_pretty(&data).unwrap()
@@ -229,16 +225,16 @@ fn test_new_tab_and_switch() {
 
     common::wait_for_url_contains(session, "First Tab").expect("First tab should become active");
 
-    let mut context = ToolContext::new(&session);
+    let mut context = ToolContext::new(session);
     let result = tab_list_tool
         .execute_typed(TabListParams {}, &mut context)
         .expect("Failed to execute tab_list tool after switching");
 
     let data = result.data.unwrap();
-    let tab_list = data["tab_list"]
+    let tabs = data["tabs"]
         .as_array()
-        .expect("tab_list should be present after switching");
-    let active_tabs: Vec<_> = tab_list
+        .expect("tabs should be present after switching");
+    let active_tabs: Vec<_> = tabs
         .iter()
         .filter(|tab| tab["active"].as_bool() == Some(true))
         .collect();
@@ -262,8 +258,8 @@ fn test_switch_tab_invalid_index() {
     .expect("Failed to navigate");
 
     // Try to switch to invalid index
-    let switch_tab_tool = SwitchTabTool::default();
-    let mut context = ToolContext::new(&session);
+    let switch_tab_tool = SwitchTabTool;
+    let mut context = ToolContext::new(session);
 
     let result = switch_tab_tool
         .execute_typed(
@@ -285,10 +281,10 @@ fn test_switch_tab_invalid_index() {
         .data
         .expect("invalid index failure should include structured details");
     assert_eq!(data["code"].as_str(), Some("invalid_tab_index"));
-    assert_eq!(data["requested_index"].as_u64(), Some(999));
-    assert_eq!(data["tab_count"].as_u64(), Some(1));
-    assert_eq!(data["valid_min"].as_u64(), Some(0));
-    assert_eq!(data["valid_max"].as_u64(), Some(0));
+    assert_eq!(data["details"]["requested_index"].as_u64(), Some(999));
+    assert_eq!(data["details"]["tab_count"].as_u64(), Some(1));
+    assert_eq!(data["details"]["valid_min"].as_u64(), Some(0));
+    assert_eq!(data["details"]["valid_max"].as_u64(), Some(0));
     assert_eq!(
         data["recovery"]["suggested_tool"].as_str(),
         Some("tab_list")
@@ -314,8 +310,8 @@ fn test_close_tab() {
     )
     .expect("Failed to navigate");
 
-    let new_tab_tool = NewTabTool::default();
-    let mut context = ToolContext::new(&session);
+    let new_tab_tool = NewTabTool;
+    let mut context = ToolContext::new(session);
 
     new_tab_tool
         .execute_typed(
@@ -330,8 +326,8 @@ fn test_close_tab() {
     common::wait_for_tab_count_at_least(session, 2).expect("Second tab should be listed");
 
     // Verify we have at least 2 tabs
-    let tab_list_tool = TabListTool::default();
-    let mut context = ToolContext::new(&session);
+    let tab_list_tool = TabListTool;
+    let mut context = ToolContext::new(session);
 
     let result = tab_list_tool
         .execute_typed(TabListParams {}, &mut context)
@@ -346,8 +342,8 @@ fn test_close_tab() {
     );
 
     // Close the active tab (second tab)
-    let close_tab_tool = CloseTabTool::default();
-    let mut context = ToolContext::new(&session);
+    let close_tab_tool = CloseTabTool;
+    let mut context = ToolContext::new(session);
 
     let result = close_tab_tool
         .execute_typed(
@@ -360,10 +356,6 @@ fn test_close_tab() {
 
     assert!(result.success, "Close tab should succeed");
     let closed_data = result.data.unwrap();
-    assert!(
-        closed_data["tab_id"].is_string(),
-        "close_tab should expose the closed tab id"
-    );
     assert!(
         closed_data["closed_tab"]["tab_id"].is_string(),
         "close_tab should expose structured closed_tab metadata"
@@ -383,17 +375,17 @@ fn test_close_tab() {
         .expect("Tab count should decrease after close");
 
     // Verify we now have one less tab
-    let mut context = ToolContext::new(&session);
+    let mut context = ToolContext::new(session);
     let result = tab_list_tool
         .execute_typed(TabListParams {}, &mut context)
         .expect("Failed to execute tab_list tool");
 
     let data = result.data.unwrap();
     let count_after = data["count"].as_u64().unwrap();
-    let tab_list = data["tab_list"]
+    let tabs = data["tabs"]
         .as_array()
-        .expect("tab_list should be present after closing");
-    let active_tabs: Vec<_> = tab_list
+        .expect("tabs should be present after closing");
+    let active_tabs: Vec<_> = tabs
         .iter()
         .filter(|tab| tab["active"].as_bool() == Some(true))
         .collect();
@@ -427,8 +419,8 @@ fn test_tab_workflow() {
     .expect("Failed to navigate");
 
     // Create second tab
-    let new_tab_tool = NewTabTool::default();
-    let mut context = ToolContext::new(&session);
+    let new_tab_tool = NewTabTool;
+    let mut context = ToolContext::new(session);
 
     new_tab_tool
         .execute_typed(
@@ -443,7 +435,7 @@ fn test_tab_workflow() {
     common::wait_for_tab_count_at_least(session, 2).expect("Second tab should be listed");
 
     // Create third tab
-    let mut context = ToolContext::new(&session);
+    let mut context = ToolContext::new(session);
     new_tab_tool
         .execute_typed(
             NewTabParams {
@@ -457,8 +449,8 @@ fn test_tab_workflow() {
     common::wait_for_tab_count_at_least(session, 3).expect("Third tab should be listed");
 
     // List all tabs
-    let tab_list_tool = TabListTool::default();
-    let mut context = ToolContext::new(&session);
+    let tab_list_tool = TabListTool;
+    let mut context = ToolContext::new(session);
 
     let result = tab_list_tool
         .execute_typed(TabListParams {}, &mut context)
@@ -469,14 +461,14 @@ fn test_tab_workflow() {
     info!("Total tabs: {}", count);
     assert!(count >= 3, "Should have at least 3 tabs, got {}", count);
     info!("All tabs: {}", tab_data["summary"].as_str().unwrap());
-    let second_tab_id = tab_data["tab_list"][1]["tab_id"]
+    let second_tab_id = tab_data["tabs"][1]["tab_id"]
         .as_str()
         .expect("tab_list should expose tab ids")
         .to_string();
 
     // Switch to second tab via stable tab_id
-    let switch_tab_tool = SwitchTabTool::default();
-    let mut context = ToolContext::new(&session);
+    let switch_tab_tool = SwitchTabTool;
+    let mut context = ToolContext::new(session);
 
     let result = switch_tab_tool
         .execute_typed(
@@ -490,8 +482,11 @@ fn test_tab_workflow() {
 
     assert!(result.success);
     let switch_data = result.data.unwrap();
-    assert_eq!(switch_data["index"].as_u64(), Some(1));
-    assert_eq!(switch_data["tab_id"].as_str(), Some(second_tab_id.as_str()));
+    assert_eq!(switch_data["tab"]["index"].as_u64(), Some(1));
+    assert_eq!(
+        switch_data["tab"]["tab_id"].as_str(),
+        Some(second_tab_id.as_str())
+    );
     assert_eq!(
         switch_data["active_tab"]["tab_id"].as_str(),
         Some(second_tab_id.as_str())
@@ -500,8 +495,8 @@ fn test_tab_workflow() {
     common::wait_for_url_contains(session, "Tab 2").expect("Second tab should become active");
 
     // Close the current tab (tab 2, index 1)
-    let close_tab_tool = CloseTabTool::default();
-    let mut context = ToolContext::new(&session);
+    let close_tab_tool = CloseTabTool;
+    let mut context = ToolContext::new(session);
 
     let result = close_tab_tool
         .execute_typed(
@@ -514,7 +509,6 @@ fn test_tab_workflow() {
 
     assert!(result.success);
     let closed_data = result.data.unwrap();
-    assert!(closed_data["tab_id"].is_string());
     assert!(closed_data["closed_tab"]["tab_id"].is_string());
     assert!(closed_data["active_tab"]["tab_id"].is_string());
     info!("Closed: {}", closed_data["message"].as_str().unwrap());
@@ -523,7 +517,7 @@ fn test_tab_workflow() {
         .expect("Closing a tab should reduce the tab count");
 
     // List tabs again to verify we have 2 tabs left
-    let mut context = ToolContext::new(&session);
+    let mut context = ToolContext::new(session);
     let result = tab_list_tool
         .execute_typed(TabListParams {}, &mut context)
         .expect("Failed to list tabs");

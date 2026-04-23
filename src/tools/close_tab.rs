@@ -1,8 +1,8 @@
 use crate::error::{BrowserError, Result};
-use crate::tools::{Tool, ToolContext, ToolResult};
+use crate::tools::core::structured_tool_failure;
+use crate::tools::{TabSummary, Tool, ToolContext, ToolResult};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 
 /// Parameters for the close_tab tool (no parameters needed)
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -18,22 +18,10 @@ pub struct CloseTabTool;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CloseTabOutput {
-    pub index: usize,
-    pub tab_id: String,
-    pub title: String,
-    pub url: String,
-    pub closed_tab: TabState,
-    pub active_tab: Option<TabState>,
+    pub action: String,
+    pub closed_tab: TabSummary,
+    pub active_tab: Option<TabSummary>,
     pub message: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct TabState {
-    pub tab_id: String,
-    pub index: usize,
-    pub active: bool,
-    pub title: String,
-    pub url: String,
 }
 
 impl Tool for CloseTabTool {
@@ -98,27 +86,18 @@ impl Tool for CloseTabTool {
             .into_iter()
             .enumerate()
             .find(|(_, tab)| tab.active)
-            .map(|(index, tab)| TabState {
-                tab_id: tab.id,
-                index,
-                active: tab.active,
-                title: tab.title,
-                url: tab.url,
-            });
-        let closed_tab = TabState {
-            tab_id: closed.id.clone(),
+            .map(|(index, tab)| TabSummary::from_browser_tab(index, &tab));
+        let closed_tab = TabSummary {
+            tab_id: closed.id,
             index: closed.index,
             active: false,
-            title: closed.title.clone(),
-            url: closed.url.clone(),
+            title: closed.title,
+            url: closed.url,
         };
 
         Ok(context.finish(ToolResult::success_with(CloseTabOutput {
-            index: closed.index,
-            tab_id: closed.id,
+            action: "close_tab".to_string(),
             message,
-            title: closed.title,
-            url: closed.url,
             closed_tab,
             active_tab,
         })))
@@ -135,16 +114,17 @@ fn close_tab_failure(
     suggested_tool: &str,
     tab_count: usize,
 ) -> ToolResult {
-    ToolResult::failure_with(
-        error.clone(),
-        json!({
-            "code": code,
-            "error": error,
+    structured_tool_failure(
+        code,
+        error,
+        None,
+        None,
+        Some(serde_json::json!({
+            "suggested_tool": suggested_tool,
+        })),
+        Some(serde_json::json!({
             "tab_count": tab_count,
-            "recovery": {
-                "suggested_tool": suggested_tool,
-            }
-        }),
+        })),
     )
 }
 
@@ -154,17 +134,20 @@ fn close_tab_confirmation_required(
     tab_count: usize,
     session_origin: &str,
 ) -> ToolResult {
-    ToolResult::failure_with(
-        format!(
-            "Active tab {} is not managed by this connected session; set confirm_destructive=true to close it",
-            active.id
-        ),
-        json!({
-            "code": "destructive_confirmation_required",
-            "error": format!(
-                "Active tab {} is not managed by this connected session; set confirm_destructive=true to close it",
-                active.id
-            ),
+    let error = format!(
+        "Active tab {} is not managed by this connected session; set confirm_destructive=true to close it",
+        active.id
+    );
+
+    structured_tool_failure(
+        "destructive_confirmation_required",
+        error,
+        None,
+        None,
+        Some(serde_json::json!({
+            "suggested_tool": "tab_list",
+        })),
+        Some(serde_json::json!({
             "session_origin": session_origin,
             "tab_count": tab_count,
             "active_tab": {
@@ -175,10 +158,7 @@ fn close_tab_confirmation_required(
                 "url": active.url,
             },
             "active_tab_managed": false,
-            "recovery": {
-                "suggested_tool": "tab_list",
-            }
-        }),
+        })),
     )
 }
 
@@ -204,7 +184,7 @@ mod tests {
             .open_tab_entry("https://second.example")
             .expect("second tab should open");
 
-        let tool = CloseTabTool::default();
+        let tool = CloseTabTool;
         let mut context = ToolContext::new(&session);
         let result = tool
             .execute_typed(
@@ -217,11 +197,12 @@ mod tests {
 
         assert!(result.success);
         let data = result.data.expect("close_tab should include data");
-        assert_eq!(data["index"].as_u64(), Some(1));
-        assert_eq!(data["tab_id"].as_str(), Some("tab-2"));
-        assert_eq!(data["url"].as_str(), Some("https://second.example"));
         assert_eq!(data["closed_tab"]["tab_id"].as_str(), Some("tab-2"));
         assert_eq!(data["closed_tab"]["index"].as_u64(), Some(1));
+        assert_eq!(
+            data["closed_tab"]["url"].as_str(),
+            Some("https://second.example")
+        );
         assert_eq!(data["active_tab"]["tab_id"].as_str(), Some("tab-1"));
         assert_eq!(data["active_tab"]["index"].as_u64(), Some(0));
         assert_eq!(data["active_tab"]["active"].as_bool(), Some(true));
@@ -241,7 +222,7 @@ mod tests {
         let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
         session.close().expect("session close should succeed");
 
-        let tool = CloseTabTool::default();
+        let tool = CloseTabTool;
         let mut context = ToolContext::new(&session);
         let result = tool
             .execute_typed(
@@ -265,7 +246,7 @@ mod tests {
     fn test_close_tab_tool_returns_structured_failure_when_active_tab_is_unknown() {
         let session = BrowserSession::with_test_backend(FakeSessionBackend::with_no_active_tab());
 
-        let tool = CloseTabTool::default();
+        let tool = CloseTabTool;
         let mut context = ToolContext::new(&session);
         let result = tool
             .execute_typed(
@@ -295,7 +276,7 @@ mod tests {
             SessionOrigin::Connected,
         );
 
-        let tool = CloseTabTool::default();
+        let tool = CloseTabTool;
         let mut context = ToolContext::new(&session);
         let result = tool
             .execute_typed(
@@ -320,9 +301,15 @@ mod tests {
             data["code"].as_str(),
             Some("destructive_confirmation_required")
         );
-        assert_eq!(data["session_origin"].as_str(), Some("connected"));
-        assert_eq!(data["active_tab"]["tab_id"].as_str(), Some("tab-1"));
-        assert_eq!(data["active_tab_managed"].as_bool(), Some(false));
+        assert_eq!(
+            data["details"]["session_origin"].as_str(),
+            Some("connected")
+        );
+        assert_eq!(
+            data["details"]["active_tab"]["tab_id"].as_str(),
+            Some("tab-1")
+        );
+        assert_eq!(data["details"]["active_tab_managed"].as_bool(), Some(false));
     }
 
     #[test]
@@ -335,7 +322,7 @@ mod tests {
             .open_tab_entry("https://managed.example")
             .expect("managed tab should open");
 
-        let tool = CloseTabTool::default();
+        let tool = CloseTabTool;
         let mut context = ToolContext::new(&session);
         let result = tool
             .execute_typed(
@@ -348,7 +335,6 @@ mod tests {
 
         assert!(result.success);
         let data = result.data.expect("close_tab should include data");
-        assert_eq!(data["tab_id"].as_str(), Some("tab-2"));
         assert_eq!(data["closed_tab"]["tab_id"].as_str(), Some("tab-2"));
         assert_eq!(data["active_tab"]["tab_id"].as_str(), Some("tab-1"));
     }
@@ -360,7 +346,7 @@ mod tests {
             SessionOrigin::Connected,
         );
 
-        let tool = CloseTabTool::default();
+        let tool = CloseTabTool;
         let mut context = ToolContext::new(&session);
         let result = tool
             .execute_typed(
@@ -373,7 +359,7 @@ mod tests {
 
         assert!(result.success);
         let data = result.data.expect("close_tab should include data");
-        assert_eq!(data["tab_id"].as_str(), Some("tab-1"));
+        assert_eq!(data["closed_tab"]["tab_id"].as_str(), Some("tab-1"));
         assert!(data["active_tab"].is_null());
         assert!(session.tab_overview().expect("tabs should load").is_empty());
     }

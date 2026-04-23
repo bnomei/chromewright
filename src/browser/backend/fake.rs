@@ -1,9 +1,22 @@
-use super::{ScriptEvaluation, SessionBackend, TabDescriptor};
+use super::{
+    ScreenshotCapture, ScreenshotRequest, ScreenshotScale, ScriptEvaluation, SessionBackend,
+    TabDescriptor,
+};
 use crate::dom::{AriaChild, AriaNode, DocumentMetadata, DomTree};
 use crate::error::{BrowserError, Result};
 use serde_json::Value;
 use std::sync::Mutex;
 use std::time::Duration;
+
+const FAKE_SCREENSHOT_VIEWPORT_WIDTH: f64 = 800.0;
+const FAKE_SCREENSHOT_VIEWPORT_HEIGHT: f64 = 600.0;
+const FAKE_SCREENSHOT_FULL_PAGE_HEIGHT: f64 = 1800.0;
+const FAKE_SCREENSHOT_DEVICE_PIXEL_RATIO: f64 = 2.0;
+const FAKE_PNG_BYTES: &[u8] = &[
+    137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0,
+    0, 0, 31, 21, 196, 137, 0, 0, 0, 13, 73, 68, 65, 84, 120, 156, 99, 248, 255, 255, 255, 127, 0,
+    9, 251, 3, 253, 160, 114, 168, 187, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+];
 
 fn session_close_result(total_tabs: usize, failures: Vec<String>) -> Result<()> {
     if failures.is_empty() {
@@ -80,11 +93,17 @@ impl FakeSessionBackend {
             .as_deref()
             .ok_or_else(|| BrowserError::TabOperationFailed("No active tab found".to_string()))?;
 
+        Self::tab_from_state(state, active_id)
+    }
+
+    fn tab_from_state<'a>(state: &'a FakeState, tab_id: &str) -> Result<&'a TabDescriptor> {
         state
             .tabs
             .iter()
-            .find(|tab| tab.id == active_id)
-            .ok_or_else(|| BrowserError::TabOperationFailed("No active tab found".to_string()))
+            .find(|tab| tab.id == tab_id)
+            .ok_or_else(|| {
+                BrowserError::TabOperationFailed(format!("No tab found for id {}", tab_id))
+            })
     }
 
     fn bump_revision(state: &mut FakeState) {
@@ -97,11 +116,15 @@ impl FakeSessionBackend {
 
     fn current_document(state: &FakeState) -> Result<DocumentMetadata> {
         let active = Self::active_tab_from_state(state)?;
+        Self::document_for_tab(state, active)
+    }
+
+    fn document_for_tab(state: &FakeState, tab: &TabDescriptor) -> Result<DocumentMetadata> {
         Ok(DocumentMetadata {
-            document_id: active.id.clone(),
+            document_id: tab.id.clone(),
             revision: format!("fake:{}", state.revision),
-            url: active.url.clone(),
-            title: active.title.clone(),
+            url: tab.url.clone(),
+            title: tab.title.clone(),
             ready_state: "complete".to_string(),
             frames: Vec::new(),
         })
@@ -119,6 +142,38 @@ impl FakeSessionBackend {
         dom.document = document.clone();
         dom.replace_selectors(vec!["#fake-target".to_string()]);
         dom
+    }
+
+    fn fake_png(width: u32, height: u32) -> Vec<u8> {
+        let mut bytes = FAKE_PNG_BYTES.to_vec();
+        bytes[16..20].copy_from_slice(&width.to_be_bytes());
+        bytes[20..24].copy_from_slice(&height.to_be_bytes());
+        bytes
+    }
+
+    fn fake_capture_geometry(request: &ScreenshotRequest) -> (f64, f64, f64) {
+        let css_width = request
+            .clip
+            .as_ref()
+            .map(|clip| clip.width)
+            .unwrap_or(FAKE_SCREENSHOT_VIEWPORT_WIDTH);
+        let css_height = request
+            .clip
+            .as_ref()
+            .map(|clip| clip.height)
+            .unwrap_or_else(|| {
+                if request.mode.capture_beyond_viewport() {
+                    FAKE_SCREENSHOT_FULL_PAGE_HEIGHT
+                } else {
+                    FAKE_SCREENSHOT_VIEWPORT_HEIGHT
+                }
+            });
+        let pixel_scale = match request.scale {
+            ScreenshotScale::Device => FAKE_SCREENSHOT_DEVICE_PIXEL_RATIO,
+            ScreenshotScale::Css => 1.0,
+        };
+
+        (css_width, css_height, pixel_scale)
     }
 
     fn embedded_config(script: &str) -> Option<Value> {
@@ -205,7 +260,11 @@ impl FakeSessionBackend {
         })
     }
 
-    fn scripted_result(&self, script: &str) -> Option<Result<ScriptEvaluation>> {
+    fn scripted_result_with_url(
+        &self,
+        script: &str,
+        document_url: Option<&str>,
+    ) -> Option<Result<ScriptEvaluation>> {
         if script.contains("document.readyState") {
             return Some(Ok(ScriptEvaluation {
                 value: Some(Value::String("complete".to_string())),
@@ -308,10 +367,10 @@ impl FakeSessionBackend {
         }
 
         if script.contains("READABILITY_SCRIPT") && script.contains("readability_failed") {
-            let url = self
-                .active_tab()
-                .map(|tab| tab.url)
-                .unwrap_or_else(|_| "about:blank".to_string());
+            let url = document_url
+                .map(str::to_string)
+                .or_else(|| self.active_tab().ok().map(|tab| tab.url))
+                .unwrap_or_else(|| "about:blank".to_string());
             return Some(Ok(ScriptEvaluation {
                 value: Some(Value::String(
                     serde_json::json!({
@@ -406,10 +465,10 @@ impl FakeSessionBackend {
         }
 
         if script.contains("inspectElement(element, frameDepth, actionableIndex)") {
-            let url = self
-                .active_tab()
-                .map(|tab| tab.url)
-                .unwrap_or_else(|_| "about:blank".to_string());
+            let url = document_url
+                .map(str::to_string)
+                .or_else(|| self.active_tab().ok().map(|tab| tab.url))
+                .unwrap_or_else(|| "about:blank".to_string());
             let incomplete_payload = Self::embedded_config(script)
                 .and_then(|config| config["style_names"].as_array().cloned())
                 .map(|style_names| {
@@ -487,6 +546,10 @@ impl FakeSessionBackend {
 
         None
     }
+
+    fn scripted_result(&self, script: &str) -> Option<Result<ScriptEvaluation>> {
+        self.scripted_result_with_url(script, None)
+    }
 }
 
 impl Default for FakeSessionBackend {
@@ -531,6 +594,12 @@ impl SessionBackend for FakeSessionBackend {
         Ok(Self::fake_dom(&Self::current_document(&state)?))
     }
 
+    fn extract_dom_for_tab(&self, tab_id: &str) -> Result<DomTree> {
+        let state = self.lock_state()?;
+        let tab = Self::tab_from_state(&state, tab_id)?;
+        Ok(Self::fake_dom(&Self::document_for_tab(&state, tab)?))
+    }
+
     fn extract_dom_with_prefix(&self, _prefix: &str) -> Result<DomTree> {
         self.extract_dom()
     }
@@ -543,13 +612,53 @@ impl SessionBackend for FakeSessionBackend {
         })
     }
 
+    fn evaluate_on_tab(
+        &self,
+        tab_id: &str,
+        script: &str,
+        _await_promise: bool,
+    ) -> Result<ScriptEvaluation> {
+        let state = self.lock_state()?;
+        let tab = Self::tab_from_state(&state, tab_id)?;
+        self.scripted_result_with_url(script, Some(tab.url.as_str()))
+            .unwrap_or_else(|| {
+                Err(BrowserError::EvaluationFailed(
+                    "Fake backend does not support this JavaScript payload yet".to_string(),
+                ))
+            })
+    }
+
     fn capture_screenshot(&self, _full_page: bool) -> Result<Vec<u8>> {
-        Ok(vec![
-            137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1,
-            8, 6, 0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 13, 73, 68, 65, 84, 120, 156, 99, 248, 255,
-            255, 255, 127, 0, 9, 251, 3, 253, 160, 114, 168, 187, 0, 0, 0, 0, 73, 69, 78, 68, 174,
-            66, 96, 130,
-        ])
+        Ok(Self::fake_png(1, 1))
+    }
+
+    fn capture_screenshot_with_request(
+        &self,
+        request: &ScreenshotRequest,
+    ) -> Result<ScreenshotCapture> {
+        request.validate()?;
+        let tab = match request.tab_id.as_deref() {
+            Some(tab_id) => {
+                let state = self.lock_state()?;
+                Self::tab_from_state(&state, tab_id)?.clone()
+            }
+            None => self.active_tab()?,
+        };
+
+        let (css_width, css_height, pixel_scale) = Self::fake_capture_geometry(request);
+        let width = (css_width * pixel_scale).round().max(1.0) as u32;
+        let height = (css_height * pixel_scale).round().max(1.0) as u32;
+        let bytes = Self::fake_png(width, height);
+        ScreenshotCapture::from_png_bytes(
+            request.mode,
+            request.scale,
+            tab,
+            request.clip.clone(),
+            css_width,
+            css_height,
+            FAKE_SCREENSHOT_DEVICE_PIXEL_RATIO,
+            bytes,
+        )
     }
 
     fn press_key(&self, _key: &str) -> Result<()> {

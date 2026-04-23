@@ -72,7 +72,7 @@ mod tests {
     #[test]
     fn test_evaluate_tool_records_browser_evaluation_metrics() {
         let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
-        let tool = EvaluateTool::default();
+        let tool = EvaluateTool;
         let mut context = ToolContext::new(&session);
 
         let result = tool

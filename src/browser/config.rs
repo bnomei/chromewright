@@ -5,6 +5,7 @@ use std::time::Duration;
 
 const DEVTOOLS_VERSION_PATH: &str = "/json/version";
 const DEVTOOLS_VERSION_TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const CHROME_BROWSER_IDLE_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 
 /// Options for launching a new browser instance
 #[derive(Debug, Clone)]

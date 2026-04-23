@@ -1,148 +1,36 @@
-//! # chromewright
+//! Internal implementation crate for the `chromewright` CLI.
 //!
-//! A Rust library for browser automation via Chrome DevTools Protocol (CDP), designed for AI agent integration.
-//!
-//! ## Features
-//!
-//! - **MCP Server**: Model Context Protocol server for AI-driven browser automation
-//! - **Browser Session Management**: Launch or connect to Chrome/Chromium instances
-//! - **Tool System**: High-level browser operations (snapshot, navigate, click, input, wait, tabs, extraction)
-//! - **DOM Extraction**: Extract page structure with revision-scoped node references for AI-friendly targeting
-//!
-//! ## MCP Server
-//!
-//! The recommended way to use this library is via the Model Context Protocol (MCP) server,
-//! which exposes browser automation tools to AI agents like Claude:
-//!
-//! ### Running the MCP Server
-//!
-//! ```bash
-//! # Default: attach to Chrome on 127.0.0.1:9222 and serve streamable HTTP on localhost:3000/mcp
-//! cargo run --features mcp-server --bin chromewright
-//!
-//! # Same default behavior with a release build
-//! cargo run --release --features mcp-server --bin chromewright
-//!
-//! # Use stdio transport instead
-//! cargo run --features mcp-server --bin chromewright -- \
-//!   --transport stdio
-//!
-//! # Launch a visible browser instead of attaching to the default Chrome session
-//! cargo run --features mcp-server --bin chromewright -- --headed
-//! ```
-//!
-//! ## Library Usage (Advanced)
-//!
-//! For direct integration in Rust applications:
-//!
-//! ### Basic Browser Automation
-//!
-//! ```rust,no_run
-//! use chromewright::{BrowserSession, LaunchOptions};
-//!
-//! # fn main() -> chromewright::Result<()> {
-//! // Launch a browser
-//! let session = BrowserSession::launch(LaunchOptions::default())?;
-//!
-//! // Navigate to a page
-//! session.navigate("https://example.com")?;
-//!
-//! // Extract DOM and inspect the current revision
-//! let dom = session.extract_dom()?;
-//! println!("Document revision: {}", dom.document.revision);
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! ### Using the Tool System
-//!
-//! ```rust,no_run
-//! use chromewright::{BrowserSession, LaunchOptions};
-//! use chromewright::tools::{ToolRegistry, ToolContext};
-//! use serde_json::json;
-//!
-//! # fn main() -> chromewright::Result<()> {
-//! let session = BrowserSession::launch(LaunchOptions::default())?;
-//! let registry = ToolRegistry::with_defaults();
-//! let mut context = ToolContext::new(&session);
-//!
-//! // Navigate using the tool system
-//! registry.execute("navigate", json!({"url": "https://example.com"}), &mut context)?;
-//!
-//! // Inspect the page and act on a revision-scoped node ref
-//! let snapshot = registry.execute("snapshot", json!({}), &mut context)?;
-//! let node_ref = snapshot.data
-//!     .as_ref()
-//!     .and_then(|data| data["nodes"].as_array())
-//!     .and_then(|nodes| nodes.first())
-//!     .and_then(|node| node.get("node_ref"))
-//!     .cloned()
-//!     .expect("snapshot should expose at least one actionable node");
-//! registry.execute("click", json!({ "node_ref": node_ref }), &mut context)?;
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! The default registry intentionally excludes advanced operator tools such as raw JavaScript
-//! evaluation and filesystem-bound screenshots. Opt into those explicitly only when needed:
-//!
-//! ```rust,no_run
-//! use chromewright::tools::ToolRegistry;
-//!
-//! let mut registry = ToolRegistry::with_defaults();
-//! registry.register_operator_tools();
-//! ```
-//!
-//! High-level action tools now return metadata-first document envelopes by default. Use the
-//! `snapshot` tool when you need the full YAML snapshot plus actionable-node list.
-//!
-//! Once operator tools are registered, `evaluate` and `screenshot` still require
-//! `confirm_unsafe = true` per call. High-level `navigate` and `new_tab` also reject unsafe
-//! schemes such as `data:` and `file:` unless the caller passes `allow_unsafe = true`.
-//!
-//! ### Document Snapshots For AI Agents
-//!
-//! The library exposes actionable elements as revision-scoped node references rather than relying
-//! on fragile CSS selectors:
-//!
-//! ```rust,no_run
-//! # use chromewright::{BrowserSession, LaunchOptions};
-//! # fn main() -> chromewright::Result<()> {
-//! # let session = BrowserSession::launch(LaunchOptions::default())?;
-//! # session.navigate("https://example.com")?;
-//! let dom = session.extract_dom()?;
-//!
-//! // Snapshot metadata is revision-scoped, and actionable nodes can be resolved to node refs.
-//! println!("Document ID: {}", dom.document.document_id);
-//! println!("Document revision: {}", dom.document.revision);
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! ## Module Overview
-//!
-//! - [`browser`]: Browser session management and configuration
-//! - [`dom`]: DOM extraction, revision-scoped node references, and tree representation
-//! - [`tools`]: Browser automation tools and registry composition helpers
-//! - [`error`]: Error types and result aliases
-//! - [`mcp`]: **Model Context Protocol server** (requires `mcp-handler` feature) - **Start here for AI integration**
+//! The supported user-facing surface is the `chromewright` binary and its MCP tool contract.
+//! This crate remains public for repository-internal tests and refactors, but the Rust embedding
+//! API is not treated as a stable product surface yet.
 
+#[doc(hidden)]
 pub mod browser;
+#[doc(hidden)]
 pub mod dom;
+#[doc(hidden)]
 pub mod error;
+#[doc(hidden)]
 pub mod tools;
 
 #[cfg(feature = "mcp-handler")]
+#[doc(hidden)]
 pub mod mcp;
 
+#[doc(hidden)]
 pub use browser::{BrowserSession, ClosedTabSummary, ConnectionOptions, LaunchOptions, TabInfo};
+#[doc(hidden)]
 pub use dom::{
     BoundingBox, DocumentMetadata, DomTree, ElementNode, FrameMetadata, NodeRef, SnapshotNode,
 };
+#[doc(hidden)]
 pub use error::{BrowserError, Result};
+#[doc(hidden)]
 pub use tools::{Tool, ToolContext, ToolRegistry, ToolResult};
 
 #[cfg(feature = "mcp-handler")]
+#[doc(hidden)]
 pub use mcp::BrowserServer;
 #[cfg(feature = "mcp-handler")]
+#[doc(hidden)]
 pub use rmcp::ServiceExt;

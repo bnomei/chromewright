@@ -1,21 +1,25 @@
 use crate::dom::{Cursor, NodeRef};
 use crate::error::{BrowserError, Result};
 use crate::tools::{
-    DocumentEnvelope, TargetEnvelope, TargetResolution, Tool, ToolContext, ToolResult,
+    TargetResolution, Tool, ToolContext, ToolResult,
     actionability::ActionabilityPredicate,
     browser_kernel::render_browser_kernel_script,
+    core::PublicTarget,
+    core::TargetedActionResult,
     services::interaction::{
-        ActionabilityWaitState, DEFAULT_ACTIONABILITY_TIMEOUT_MS, TargetStatus,
-        build_actionability_failure, build_interaction_failure, build_interaction_handoff,
-        decode_action_result, resolve_interaction_target, wait_for_actionability,
+        ActionabilityWaitState, DEFAULT_ACTIONABILITY_TIMEOUT_MS, build_actionability_failure,
+        build_interaction_failure, build_interaction_handoff, decode_action_result,
+        resolve_interaction_target, wait_for_actionability,
     },
 };
-use schemars::JsonSchema;
+use schemars::{JsonSchema, Schema, SchemaGenerator};
+use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 
 const INPUT_JS: &str = include_str!("input.js");
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize)]
 pub struct InputParams {
     /// CSS selector (use either this or index, not both)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -33,13 +37,57 @@ pub struct InputParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor: Option<Cursor>,
 
-    /// Text to type into the element. `value` is accepted as a backward-compatible input alias.
-    #[serde(alias = "value")]
+    /// Text to type into the element.
     pub text: String,
 
     /// Clear existing content first (default: false)
     #[serde(default)]
     pub clear: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct StrictInputParams {
+    /// Target to type into.
+    pub target: PublicTarget,
+    /// Text to type into the element.
+    pub text: String,
+    /// Clear existing content first (default: false)
+    #[serde(default)]
+    pub clear: bool,
+}
+
+impl From<StrictInputParams> for InputParams {
+    fn from(params: StrictInputParams) -> Self {
+        let (selector, cursor) = params.target.into_selector_or_cursor();
+        Self {
+            selector,
+            index: None,
+            node_ref: None,
+            cursor,
+            text: params.text,
+            clear: params.clear,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for InputParams {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        StrictInputParams::deserialize(deserializer).map(Into::into)
+    }
+}
+
+impl JsonSchema for InputParams {
+    fn schema_name() -> Cow<'static, str> {
+        "InputParams".into()
+    }
+
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        StrictInputParams::json_schema(generator)
+    }
 }
 
 #[derive(Default)]
@@ -48,12 +96,7 @@ pub struct InputTool;
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct InputOutput {
     #[serde(flatten)]
-    pub envelope: DocumentEnvelope,
-    pub action: String,
-    pub target_before: TargetEnvelope,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub target_after: Option<TargetEnvelope>,
-    pub target_status: TargetStatus,
+    pub result: TargetedActionResult,
     pub text: String,
     pub clear: bool,
 }
@@ -155,11 +198,13 @@ impl Tool for InputTool {
 
         let handoff = build_interaction_handoff(context, &target)?;
         Ok(context.finish(ToolResult::success_with(InputOutput {
-            envelope: handoff.envelope,
-            action: "input".to_string(),
-            target_before: handoff.target_before,
-            target_after: handoff.target_after,
-            target_status: handoff.target_status,
+            result: TargetedActionResult::new(
+                "input",
+                handoff.document,
+                handoff.target_before,
+                handoff.target_after,
+                handoff.target_status,
+            ),
             text,
             clear,
         })))
@@ -204,7 +249,10 @@ mod tests {
     #[test]
     fn test_input_params_deserializes_canonical_text_field() {
         let params: InputParams = serde_json::from_value(json!({
-            "selector": "#query",
+            "target": {
+                "kind": "selector",
+                "selector": "#query"
+            },
             "text": "search",
             "clear": true,
         }))
@@ -216,17 +264,18 @@ mod tests {
     }
 
     #[test]
-    fn test_input_params_deserializes_value_alias() {
-        let params: InputParams = serde_json::from_value(json!({
-            "selector": "#query",
+    fn test_input_params_rejects_value_alias() {
+        let error = serde_json::from_value::<InputParams>(json!({
+            "target": {
+                "kind": "selector",
+                "selector": "#query"
+            },
             "value": "search",
             "clear": false,
         }))
-        .expect("backward-compatible value alias should deserialize");
+        .expect_err("legacy value alias should be rejected");
 
-        assert_eq!(params.selector.as_deref(), Some("#query"));
-        assert_eq!(params.text, "search");
-        assert!(!params.clear);
+        assert!(error.to_string().contains("unknown field `value`"));
     }
 
     #[test]
@@ -254,19 +303,13 @@ mod tests {
             .get("properties")
             .and_then(|value| value.as_object())
             .expect("input params schema should expose properties");
-        let text_property = properties
-            .get("text")
-            .expect("schema should keep text as the canonical property");
 
+        assert!(properties.contains_key("target"));
         assert!(properties.contains_key("text"));
         assert!(!properties.contains_key("value"));
-        assert_eq!(
-            text_property
-                .get("description")
-                .and_then(|value| value.as_str()),
-            Some(
-                "Text to type into the element. `value` is accepted as a backward-compatible input alias."
-            )
-        );
+        assert!(!properties.contains_key("selector"));
+        assert!(!properties.contains_key("index"));
+        assert!(!properties.contains_key("node_ref"));
+        assert!(!properties.contains_key("cursor"));
     }
 }

@@ -5,6 +5,7 @@ use crate::tools::{
         ActionabilityPredicate, ActionabilityProbeResult, ActionabilityRequest, probe_actionability,
     },
     build_document_envelope,
+    core::DocumentActionResult,
     services::interaction::{
         ActionabilityWaitState, build_interaction_handoff, resolve_interaction_target,
         wait_for_actionability,
@@ -16,6 +17,17 @@ use std::time::{Duration, Instant};
 pub(crate) fn execute_wait(params: WaitParams, context: &mut ToolContext) -> Result<ToolResult> {
     let start = Instant::now();
     let timeout = Duration::from_millis(params.timeout_ms);
+    let has_target = params.selector.is_some()
+        || params.index.is_some()
+        || params.node_ref.is_some()
+        || params.cursor.is_some();
+
+    validate_wait_condition(
+        &params.condition,
+        has_target,
+        params.text.as_deref(),
+        params.value.as_deref(),
+    )?;
 
     match params.condition {
         WaitCondition::NavigationSettled => {
@@ -27,8 +39,7 @@ pub(crate) fn execute_wait(params: WaitParams, context: &mut ToolContext) -> Res
                 build_document_envelope(context, None, DocumentEnvelopeOptions::minimal())?;
 
             Ok(context.finish(ToolResult::success_with(WaitOutput {
-                envelope,
-                action: "wait".to_string(),
+                result: DocumentActionResult::new("wait", envelope.document),
                 condition: "navigation_settled".to_string(),
                 elapsed_ms: start.elapsed().as_millis() as u64,
                 target_before: None,
@@ -55,8 +66,7 @@ pub(crate) fn execute_wait(params: WaitParams, context: &mut ToolContext) -> Res
                     let envelope =
                         build_document_envelope(context, None, DocumentEnvelopeOptions::minimal())?;
                     return Ok(context.finish(ToolResult::success_with(WaitOutput {
-                        envelope,
-                        action: "wait".to_string(),
+                        result: DocumentActionResult::new("wait", envelope.document),
                         condition: "revision_changed".to_string(),
                         elapsed_ms: start.elapsed().as_millis() as u64,
                         target_before: None,
@@ -91,7 +101,6 @@ pub(crate) fn execute_wait(params: WaitParams, context: &mut ToolContext) -> Res
                 }
             };
 
-            validate_wait_condition(&condition, params.text.as_deref(), params.value.as_deref())?;
             let predicates = wait_condition_predicates(&condition);
 
             if wait_condition_uses_interaction_scroll(&condition) {
@@ -99,8 +108,7 @@ pub(crate) fn execute_wait(params: WaitParams, context: &mut ToolContext) -> Res
                     ActionabilityWaitState::Ready => {
                         let handoff = build_interaction_handoff(context, &target)?;
                         return Ok(context.finish(ToolResult::success_with(WaitOutput {
-                            envelope: handoff.envelope,
-                            action: "wait".to_string(),
+                            result: DocumentActionResult::new("wait", handoff.document),
                             condition: condition_name(&condition).to_string(),
                             elapsed_ms: start.elapsed().as_millis() as u64,
                             target_before: Some(handoff.target_before),
@@ -141,8 +149,7 @@ pub(crate) fn execute_wait(params: WaitParams, context: &mut ToolContext) -> Res
                 if wait_condition_matches(&condition, predicates, &probe) {
                     let handoff = build_interaction_handoff(context, &target)?;
                     return Ok(context.finish(ToolResult::success_with(WaitOutput {
-                        envelope: handoff.envelope,
-                        action: "wait".to_string(),
+                        result: DocumentActionResult::new("wait", handoff.document),
                         condition: condition_name(&condition).to_string(),
                         elapsed_ms: start.elapsed().as_millis() as u64,
                         target_before: Some(handoff.target_before),
@@ -193,10 +200,33 @@ pub(crate) fn wait_condition_predicates(
 
 pub(crate) fn validate_wait_condition(
     condition: &WaitCondition,
+    has_target: bool,
     text: Option<&str>,
     value: Option<&str>,
 ) -> Result<()> {
     match condition {
+        WaitCondition::NavigationSettled | WaitCondition::RevisionChanged if has_target => {
+            Err(BrowserError::InvalidArgument(format!(
+                "wait.target is not allowed when condition is '{}'",
+                condition_name(condition)
+            )))
+        }
+        WaitCondition::Present
+        | WaitCondition::Visible
+        | WaitCondition::Enabled
+        | WaitCondition::Editable
+        | WaitCondition::Actionable
+        | WaitCondition::Stable
+        | WaitCondition::ReceivesEvents
+        | WaitCondition::TextContains
+        | WaitCondition::ValueEquals
+            if !has_target =>
+        {
+            Err(BrowserError::InvalidArgument(format!(
+                "wait.target is required when condition is '{}'",
+                condition_name(condition)
+            )))
+        }
         WaitCondition::TextContains if text.is_none() => Err(BrowserError::InvalidArgument(
             "wait.text is required when condition is 'text_contains'".to_string(),
         )),

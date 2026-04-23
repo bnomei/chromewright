@@ -32,8 +32,8 @@ fn test_basic_markdown_extraction() {
     common::navigate_encoded_html(session, html).expect("Failed to navigate");
 
     // Create tool and context
-    let tool = GetMarkdownTool::default();
-    let mut context = ToolContext::new(&session);
+    let tool = GetMarkdownTool;
+    let mut context = ToolContext::new(session);
 
     // Execute the tool
     let result = tool
@@ -118,8 +118,8 @@ fn test_readability_filtering() {
 
     common::navigate_encoded_html(session, html).expect("Failed to navigate");
 
-    let tool = GetMarkdownTool::default();
-    let mut context = ToolContext::new(&session);
+    let tool = GetMarkdownTool;
+    let mut context = ToolContext::new(session);
 
     let result = tool
         .execute_typed(GetMarkdownParams::default(), &mut context)
@@ -184,8 +184,8 @@ fn test_markdown_pagination() {
 
     common::navigate_encoded_html(session, &html).expect("Failed to navigate");
 
-    let tool = GetMarkdownTool::default();
-    let mut context = ToolContext::new(&session);
+    let tool = GetMarkdownTool;
+    let mut context = ToolContext::new(session);
 
     // Get first page with small page size
     let result = tool
@@ -289,8 +289,8 @@ fn test_empty_page() {
 
     common::navigate_encoded_html(session, html).expect("Failed to navigate");
 
-    let tool = GetMarkdownTool::default();
-    let mut context = ToolContext::new(&session);
+    let tool = GetMarkdownTool;
+    let mut context = ToolContext::new(session);
 
     let result = tool.execute_typed(GetMarkdownParams::default(), &mut context);
 
@@ -354,8 +354,8 @@ fn test_table_conversion() {
 
     common::navigate_encoded_html(session, html).expect("Failed to navigate");
 
-    let tool = GetMarkdownTool::default();
-    let mut context = ToolContext::new(&session);
+    let tool = GetMarkdownTool;
+    let mut context = ToolContext::new(session);
 
     let result = tool
         .execute_typed(GetMarkdownParams::default(), &mut context)
@@ -407,8 +407,8 @@ fn test_double_execution_same_page() {
 
     common::navigate_encoded_html(session, html).expect("Failed to navigate");
 
-    let tool = GetMarkdownTool::default();
-    let mut context = ToolContext::new(&session);
+    let tool = GetMarkdownTool;
+    let mut context = ToolContext::new(session);
 
     // First execution
     info!("Executing get_markdown (first call)...");
@@ -488,8 +488,8 @@ fn test_page_clamping() {
 
     common::navigate_encoded_html(session, html).expect("Failed to navigate");
 
-    let tool = GetMarkdownTool::default();
-    let mut context = ToolContext::new(&session);
+    let tool = GetMarkdownTool;
+    let mut context = ToolContext::new(session);
 
     // Request page 999 (way beyond available content)
     let result = tool
@@ -541,8 +541,8 @@ fn test_markdown_extraction_waits_for_delayed_content() {
 
     common::navigate_encoded_html(session, html).expect("Failed to navigate");
 
-    let tool = GetMarkdownTool::default();
-    let mut context = ToolContext::new(&session);
+    let tool = GetMarkdownTool;
+    let mut context = ToolContext::new(session);
 
     let result = tool
         .execute_typed(GetMarkdownParams::default(), &mut context)

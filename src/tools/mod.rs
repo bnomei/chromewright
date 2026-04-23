@@ -48,10 +48,10 @@ pub use navigate::NavigateParams;
 pub use new_tab::NewTabParams;
 pub use press_key::PressKeyParams;
 pub use read_links::ReadLinksParams;
-pub use screenshot::ScreenshotParams;
+pub use screenshot::{ScreenshotMode, ScreenshotParams, ScreenshotRegion};
 pub use scroll::ScrollParams;
 pub use select::SelectParams;
-pub use snapshot::SnapshotParams;
+pub use snapshot::{SnapshotMode, SnapshotParams};
 pub use switch_tab::SwitchTabParams;
 pub use tab_list::TabListParams;
 pub use wait::WaitCondition;
@@ -60,7 +60,8 @@ pub use wait::WaitParams;
 pub(crate) mod core;
 
 pub use core::{
-    DocumentEnvelope, DynTool, TargetEnvelope, Tool, ToolContext, ToolDescriptor, ToolRegistry,
+    DocumentActionResult, DocumentEnvelope, DocumentResult, DynTool, SnapshotScope, TabSummary,
+    TargetEnvelope, TargetedActionResult, Tool, ToolContext, ToolDescriptor, ToolRegistry,
     ToolResult,
 };
 #[allow(unused_imports)]
@@ -174,8 +175,8 @@ mod tests {
 
         assert!(registry.has("snapshot"));
         assert!(registry.has("click"));
+        assert!(registry.has("screenshot"));
         assert!(!registry.has("evaluate"));
-        assert!(!registry.has("screenshot"));
     }
 
     #[test]
@@ -185,6 +186,36 @@ mod tests {
         assert!(registry.has("snapshot"));
         assert!(registry.has("evaluate"));
         assert!(registry.has("screenshot"));
+    }
+
+    #[test]
+    fn test_screenshot_schema_exposes_mode_based_managed_artifact_contract() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        let descriptor = session
+            .tool_registry()
+            .descriptors()
+            .into_iter()
+            .find(|tool| tool.name == "screenshot")
+            .expect("screenshot descriptor should exist");
+
+        let params = &descriptor.parameters_schema["properties"];
+        assert!(params.get("mode").is_some());
+        assert!(params.get("tab_id").is_some());
+        assert!(params.get("target").is_some());
+        assert!(params.get("region").is_some());
+        assert!(params.get("path").is_none());
+        assert!(params.get("full_page").is_none());
+        assert!(params.get("confirm_unsafe").is_none());
+
+        let output = &descriptor.output_schema["properties"];
+        assert!(output.get("artifact_uri").is_some());
+        assert!(output.get("artifact_path").is_some());
+        assert!(output.get("format").is_some());
+        assert!(output.get("mime_type").is_some());
+        assert!(output.get("byte_count").is_some());
+        assert!(output.get("width").is_some());
+        assert!(output.get("height").is_some());
+        assert!(output.get("clip").is_some());
     }
 
     #[test]
@@ -332,6 +363,10 @@ mod tests {
                 assert_eq!(target.method, "cursor");
                 assert_eq!(target.selector, "#submit");
                 assert_eq!(target.cursor.as_ref(), Some(&cursor));
+                let envelope = target.to_target_envelope();
+                assert_eq!(envelope.method, "cursor");
+                assert_eq!(envelope.resolution_status, "exact");
+                assert_eq!(envelope.recovered_from, None);
             }
             TargetResolution::Failure(failure) => panic!("unexpected failure: {:?}", failure),
         }
@@ -403,6 +438,119 @@ mod tests {
         )
         .expect("stale node ref should become tool failure");
 
-        assert!(matches!(result, TargetResolution::Failure(_)));
+        match result {
+            TargetResolution::Failure(failure) => {
+                let data = failure
+                    .data
+                    .expect("stale node ref failure should include structured data");
+                assert_eq!(data["code"].as_str(), Some("stale_node_ref"));
+                assert_eq!(
+                    data["details"]["resolution"]["status"].as_str(),
+                    Some("unrecoverable_stale")
+                );
+                assert_eq!(
+                    data["details"]["resolution"]["recovered_from"].as_str(),
+                    Some("node_ref")
+                );
+                assert_eq!(
+                    data["details"]["resolution"]["selector_rebound_attempted"].as_bool(),
+                    Some(false)
+                );
+                assert_eq!(
+                    data["recovery"]["suggested_tool"].as_str(),
+                    Some("snapshot")
+                );
+                assert!(data["recovery"]["suggested_selector"].is_null());
+            }
+            TargetResolution::Resolved(target) => {
+                panic!("unexpected resolved stale node ref target: {target:?}")
+            }
+        }
+    }
+
+    #[test]
+    fn test_resolve_target_rebinds_stale_cursor_with_machine_usable_metadata() {
+        let dom = sample_dom();
+        let mut stale_cursor = dom.cursor_for_index(1).expect("cursor should exist");
+        stale_cursor.node_ref.revision = "main:0".to_string();
+
+        let result = resolve_target_with_cursor(
+            "inspect_node",
+            None,
+            None,
+            None,
+            Some(stale_cursor),
+            Some(&dom),
+        )
+        .expect("stale cursor should resolve");
+
+        match result {
+            TargetResolution::Resolved(target) => {
+                let envelope = target.to_target_envelope();
+                assert_eq!(envelope.method, "cursor");
+                assert_eq!(envelope.resolution_status, "selector_rebound");
+                assert_eq!(envelope.recovered_from.as_deref(), Some("cursor"));
+                assert_eq!(envelope.selector.as_deref(), Some("#submit"));
+                assert_eq!(envelope.index, Some(1));
+                assert_eq!(
+                    envelope
+                        .cursor
+                        .as_ref()
+                        .map(|cursor| cursor.node_ref.revision.as_str()),
+                    Some("main:1")
+                );
+            }
+            TargetResolution::Failure(failure) => panic!("unexpected failure: {:?}", failure),
+        }
+    }
+
+    #[test]
+    fn test_resolve_target_reports_recovery_hints_for_unrecoverable_stale_cursor() {
+        let dom = sample_dom();
+        let mut stale_cursor = dom.cursor_for_index(1).expect("cursor should exist");
+        stale_cursor.node_ref.revision = "main:0".to_string();
+        stale_cursor.selector = "#missing".to_string();
+
+        let result = resolve_target_with_cursor(
+            "inspect_node",
+            None,
+            None,
+            None,
+            Some(stale_cursor),
+            Some(&dom),
+        )
+        .expect("stale cursor should become tool failure");
+
+        match result {
+            TargetResolution::Failure(failure) => {
+                let data = failure
+                    .data
+                    .expect("stale cursor failure should include structured data");
+                assert_eq!(data["code"].as_str(), Some("stale_node_ref"));
+                assert_eq!(
+                    data["details"]["resolution"]["status"].as_str(),
+                    Some("unrecoverable_stale")
+                );
+                assert_eq!(
+                    data["details"]["resolution"]["recovered_from"].as_str(),
+                    Some("cursor")
+                );
+                assert_eq!(
+                    data["details"]["resolution"]["selector_rebound_attempted"].as_bool(),
+                    Some(true)
+                );
+                assert_eq!(
+                    data["recovery"]["suggested_tool"].as_str(),
+                    Some("snapshot")
+                );
+                assert_eq!(
+                    data["recovery"]["suggested_selector"].as_str(),
+                    Some("#missing")
+                );
+            }
+            TargetResolution::Resolved(target) => {
+                panic!("unexpected resolved stale cursor target: {target:?}")
+            }
+        }
     }
 }

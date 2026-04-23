@@ -1,8 +1,9 @@
 use crate::browser::BrowserSession;
 use crate::dom::{Cursor, DocumentMetadata, DomTree, NodeRef};
 use crate::error::{BrowserError, Result};
+use crate::tools::core::structured_tool_failure;
 use crate::tools::{
-    DocumentEnvelope, ResolvedTarget, TargetEnvelope, TargetResolution, ToolContext, ToolResult,
+    ResolvedTarget, TargetEnvelope, TargetResolution, ToolContext, ToolResult,
     actionability::{
         ActionabilityDiagnostics, ActionabilityPredicate, ActionabilityProbeResult,
         ActionabilityRequest, probe_actionability,
@@ -14,8 +15,84 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 
-const TARGET_EXISTS_TEMPLATE_JS: &str = include_str!("../target_exists.js");
 const SCROLL_TARGET_INTO_VIEW_TEMPLATE_JS: &str = include_str!("../scroll_target_into_view.js");
+const SELECTOR_IDENTITY_TEMPLATE_JS: &str = r#"
+(() => {
+  const config = __SELECTOR_IDENTITY_CONFIG__;
+
+  __BROWSER_KERNEL__
+
+  function countSelectorMatchesAcrossScopes(selector) {
+    const visitedDocs = new Set();
+    let count = 0;
+
+    function searchRoot(root) {
+      if (!root || typeof root.querySelectorAll !== 'function') {
+        return;
+      }
+
+      let matches = [];
+      try {
+        matches = root.querySelectorAll(selector);
+      } catch (error) {
+        const normalized = normalizeSimpleIdSelector(selector);
+        if (!normalized) {
+          return;
+        }
+
+        try {
+          matches = root.querySelectorAll(normalized);
+        } catch (fallbackError) {
+          return;
+        }
+      }
+
+      count += matches.length;
+      if (count > 1) {
+        return;
+      }
+
+      const elements = root.querySelectorAll ? root.querySelectorAll('*') : [];
+      for (const element of elements) {
+        if (element.shadowRoot) {
+          searchRoot(element.shadowRoot);
+          if (count > 1) {
+            return;
+          }
+        }
+
+        if (element.tagName === 'IFRAME') {
+          try {
+            const frameDoc = element.contentDocument;
+            if (!frameDoc || visitedDocs.has(frameDoc)) {
+              continue;
+            }
+
+            visitedDocs.add(frameDoc);
+            searchRoot(frameDoc);
+            if (count > 1) {
+              return;
+            }
+          } catch (error) {
+            // Cross-origin frame; selector identity stops at the iframe boundary.
+          }
+        }
+      }
+    }
+
+    visitedDocs.add(document);
+    searchRoot(document);
+    return count;
+  }
+
+  const matchCount = config.selector ? countSelectorMatchesAcrossScopes(config.selector) : 0;
+
+  return JSON.stringify({
+    present: matchCount > 0,
+    unique: matchCount === 1
+  });
+})()
+"#;
 pub(crate) const DEFAULT_ACTIONABILITY_TIMEOUT_MS: u64 = 5_000;
 const ACTIONABILITY_POLL_INTERVAL_MS: u64 = 50;
 
@@ -34,10 +111,16 @@ pub(crate) enum ActionabilityWaitState {
 }
 
 pub(crate) struct InteractionHandoff {
-    pub envelope: DocumentEnvelope,
+    pub document: DocumentMetadata,
     pub target_before: TargetEnvelope,
     pub target_after: Option<TargetEnvelope>,
     pub target_status: TargetStatus,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct SelectorIdentityProbeResult {
+    present: bool,
+    unique: bool,
 }
 
 pub(crate) fn resolve_interaction_target(
@@ -117,17 +200,10 @@ pub(crate) fn build_interaction_handoff(
         &current_document,
         actionable_matches,
     )?;
-    let legacy_target = target_after.clone();
     context.record_handoff_rebuild_micros(duration_micros(started.elapsed()));
 
     Ok(InteractionHandoff {
-        envelope: DocumentEnvelope {
-            document: current_document,
-            target: legacy_target,
-            snapshot: None,
-            nodes: Vec::new(),
-            interactive_count: None,
-        },
+        document: current_document,
         target_before: target_before_envelope,
         target_after,
         target_status,
@@ -171,19 +247,18 @@ pub(crate) fn build_interaction_failure(
         "inspect_node"
     };
 
-    Ok(ToolResult::failure_with(
-        error.clone(),
-        serde_json::json!({
-            "code": code,
-            "error": error,
-            "document": current_document,
-            "target_before": target.to_target_envelope(),
+    Ok(structured_tool_failure(
+        code,
+        error,
+        Some(current_document),
+        Some(target.to_target_envelope()),
+        Some(serde_json::json!({
+            "suggested_tool": suggested_tool,
+        })),
+        Some(serde_json::json!({
             "failed_predicates": failed_predicates,
             "diagnostics": diagnostics,
-            "recovery": {
-                "suggested_tool": suggested_tool,
-            }
-        }),
+        })),
     ))
 }
 
@@ -263,9 +338,8 @@ fn failed_predicates(
 ) -> Vec<String> {
     let mut failures = predicates
         .iter()
-        .filter_map(|predicate| {
-            (probe.predicate(*predicate) != Some(true)).then(|| predicate.key().to_string())
-        })
+        .filter(|predicate| probe.predicate(**predicate) != Some(true))
+        .map(|predicate| predicate.key().to_string())
         .collect::<Vec<_>>();
 
     if !probe.present && !failures.iter().any(|predicate| predicate == "present") {
@@ -332,43 +406,35 @@ fn determine_target_after(
     current_document: &DocumentMetadata,
     actionable_matches: Vec<Cursor>,
 ) -> Result<(Option<TargetEnvelope>, TargetStatus)> {
-    let current_target = match actionable_matches.as_slice() {
-        [cursor] => Some(target_envelope_from_cursor(cursor.clone())),
-        _ => None,
-    };
-
-    if let Some(before_cursor) = target_before.cursor.as_ref() {
-        if before_cursor.node_ref.document_id == current_document.document_id
-            && before_cursor.node_ref.revision == current_document.revision
-        {
-            if let Some(after_target) = current_target.as_ref() {
-                if after_target.node_ref == Some(before_cursor.node_ref.clone()) {
-                    return Ok((Some(after_target.clone()), TargetStatus::Same));
-                }
-            }
-        }
-
-        if let Some(after_target) = current_target {
-            return Ok((Some(after_target), TargetStatus::Rebound));
-        }
-    } else if let Some(after_target) = current_target {
-        return Ok((Some(after_target), TargetStatus::Unknown));
-    }
-
     if actionable_matches.len() > 1 {
         return Ok((None, TargetStatus::Unknown));
     }
 
-    if selector_exists_across_scopes(context, &target_before.selector)? {
+    if let Some(cursor) = actionable_matches.into_iter().next() {
+        let after_target = target_envelope_from_cursor(cursor);
+        let status = classify_target_status(target_before, current_document, &after_target);
+        return Ok((Some(after_target), status));
+    }
+
+    let identity = probe_selector_identity(context, &target_before.selector)?;
+    if !identity.present {
+        return Ok((None, TargetStatus::Detached));
+    }
+
+    if !identity.unique {
         return Ok((None, TargetStatus::Unknown));
     }
 
-    Ok((None, TargetStatus::Detached))
+    let after_target = selector_target_envelope(&target_before.selector);
+    let status = classify_target_status(target_before, current_document, &after_target);
+    Ok((Some(after_target), status))
 }
 
 fn target_envelope_from_cursor(cursor: Cursor) -> TargetEnvelope {
     TargetEnvelope {
         method: "cursor".to_string(),
+        resolution_status: "exact".to_string(),
+        recovered_from: None,
         selector: Some(cursor.selector.clone()),
         index: Some(cursor.index),
         node_ref: Some(cursor.node_ref.clone()),
@@ -376,13 +442,58 @@ fn target_envelope_from_cursor(cursor: Cursor) -> TargetEnvelope {
     }
 }
 
-fn selector_exists_across_scopes(context: &mut ToolContext, selector: &str) -> Result<bool> {
+fn selector_target_envelope(selector: &str) -> TargetEnvelope {
+    TargetEnvelope {
+        method: "css".to_string(),
+        resolution_status: "exact".to_string(),
+        recovered_from: None,
+        cursor: None,
+        node_ref: None,
+        selector: Some(selector.to_string()),
+        index: None,
+    }
+}
+
+fn classify_target_status(
+    target_before: &ResolvedTarget,
+    current_document: &DocumentMetadata,
+    after_target: &TargetEnvelope,
+) -> TargetStatus {
+    let before_node_ref = target_before
+        .cursor
+        .as_ref()
+        .map(|cursor| &cursor.node_ref)
+        .or(target_before.node_ref.as_ref());
+
+    let Some(before_node_ref) = before_node_ref else {
+        return TargetStatus::Unknown;
+    };
+
+    if before_node_ref.document_id != current_document.document_id {
+        return TargetStatus::Unknown;
+    }
+
+    if before_node_ref.revision == current_document.revision {
+        return match after_target.node_ref.as_ref() {
+            Some(after_node_ref) if after_node_ref == before_node_ref => TargetStatus::Same,
+            Some(_) => TargetStatus::Unknown,
+            None => TargetStatus::Same,
+        };
+    }
+
+    TargetStatus::Rebound
+}
+
+fn probe_selector_identity(
+    context: &mut ToolContext,
+    selector: &str,
+) -> Result<SelectorIdentityProbeResult> {
     let config = serde_json::json!({ "selector": selector });
-    let exists_js = build_target_exists_js(&config);
+    let probe_js = build_selector_identity_js(&config);
     context.record_browser_evaluation();
     let result = context
         .session
-        .evaluate(&exists_js, false)
+        .evaluate(&probe_js, false)
         .map_err(|e| match e {
             BrowserError::EvaluationFailed(reason) => BrowserError::ToolExecutionFailed {
                 tool: "interaction".to_string(),
@@ -393,20 +504,32 @@ fn selector_exists_across_scopes(context: &mut ToolContext, selector: &str) -> R
     let payload = decode_action_result(result.value, serde_json::json!({})).map_err(|error| {
         BrowserError::ToolExecutionFailed {
             tool: "interaction".to_string(),
-            reason: format!("Failed to parse target_exists result: {}", error),
+            reason: format!("Failed to parse selector identity result: {}", error),
         }
     })?;
 
-    payload
+    let present = payload
         .get("present")
         .and_then(|value| value.as_bool())
         .ok_or_else(|| BrowserError::ToolExecutionFailed {
             tool: "interaction".to_string(),
             reason: format!(
-                "target_exists returned an invalid payload: expected boolean field 'present', got {}",
+                "selector identity probe returned an invalid payload: expected boolean field 'present', got {}",
                 value_kind(payload.get("present").unwrap_or(&serde_json::Value::Null))
             ),
-        })
+        })?;
+    let unique = payload
+        .get("unique")
+        .and_then(|value| value.as_bool())
+        .ok_or_else(|| BrowserError::ToolExecutionFailed {
+            tool: "interaction".to_string(),
+            reason: format!(
+                "selector identity probe returned an invalid payload: expected boolean field 'unique', got {}",
+                value_kind(payload.get("unique").unwrap_or(&serde_json::Value::Null))
+            ),
+        })?;
+
+    Ok(SelectorIdentityProbeResult { present, unique })
 }
 
 fn build_scroll_target_into_view_js(config: &serde_json::Value) -> String {
@@ -417,10 +540,10 @@ fn build_scroll_target_into_view_js(config: &serde_json::Value) -> String {
     )
 }
 
-fn build_target_exists_js(config: &serde_json::Value) -> String {
+fn build_selector_identity_js(config: &serde_json::Value) -> String {
     render_browser_kernel_script(
-        TARGET_EXISTS_TEMPLATE_JS,
-        "__TARGET_EXISTS_CONFIG__",
+        SELECTOR_IDENTITY_TEMPLATE_JS,
+        "__SELECTOR_IDENTITY_CONFIG__",
         config,
     )
 }
@@ -441,12 +564,16 @@ mod tests {
     use super::*;
     use crate::browser::BrowserSession;
     use crate::browser::backend::{ScriptEvaluation, SessionBackend, TabDescriptor};
+    use crate::tools::core::{TargetRecoveredFrom, encode_selector_rebound_method};
     use crate::{dom::DocumentMetadata, dom::DomTree};
+    use serde_json::Value;
     use std::time::Duration;
 
-    struct InvalidTargetExistsPayloadBackend;
+    struct StaticInteractionBackend {
+        value: Value,
+    }
 
-    impl SessionBackend for InvalidTargetExistsPayloadBackend {
+    impl SessionBackend for StaticInteractionBackend {
         fn navigate(&self, _url: &str) -> Result<()> {
             unreachable!("navigate is not used in this test")
         }
@@ -460,7 +587,11 @@ mod tests {
         }
 
         fn document_metadata(&self) -> Result<DocumentMetadata> {
-            unreachable!("document_metadata is not used in this test")
+            Ok(DocumentMetadata {
+                document_id: "doc-1".to_string(),
+                revision: "rev-2".to_string(),
+                ..DocumentMetadata::default()
+            })
         }
 
         fn extract_dom(&self) -> Result<DomTree> {
@@ -473,9 +604,7 @@ mod tests {
 
         fn evaluate(&self, _script: &str, _await_promise: bool) -> Result<ScriptEvaluation> {
             Ok(ScriptEvaluation {
-                value: Some(serde_json::json!({
-                    "present": "yes",
-                })),
+                value: Some(self.value.clone()),
                 description: None,
                 type_name: Some("Object".to_string()),
             })
@@ -490,15 +619,27 @@ mod tests {
         }
 
         fn list_tabs(&self) -> Result<Vec<TabDescriptor>> {
-            unreachable!("list_tabs is not used in this test")
+            Ok(vec![TabDescriptor {
+                id: "tab-1".to_string(),
+                title: "Test Tab".to_string(),
+                url: "about:blank".to_string(),
+            }])
         }
 
         fn active_tab(&self) -> Result<TabDescriptor> {
-            unreachable!("active_tab is not used in this test")
+            Ok(TabDescriptor {
+                id: "tab-1".to_string(),
+                title: "Test Tab".to_string(),
+                url: "about:blank".to_string(),
+            })
         }
 
         fn open_tab(&self, _url: &str) -> Result<TabDescriptor> {
-            unreachable!("open_tab is not used in this test")
+            Ok(TabDescriptor {
+                id: "tab-1".to_string(),
+                title: "Test Tab".to_string(),
+                url: "about:blank".to_string(),
+            })
         }
 
         fn activate_tab(&self, _tab_id: &str) -> Result<()> {
@@ -515,21 +656,235 @@ mod tests {
     }
 
     #[test]
-    fn test_selector_exists_across_scopes_rejects_invalid_payload() {
-        let session = BrowserSession::with_test_backend(InvalidTargetExistsPayloadBackend);
+    fn test_probe_selector_identity_rejects_invalid_present_payload() {
+        let session = BrowserSession::with_test_backend(StaticInteractionBackend {
+            value: serde_json::json!({
+                "present": "yes",
+                "unique": true,
+            }),
+        });
         let mut context = ToolContext::new(&session);
 
-        let error = selector_exists_across_scopes(&mut context, "#fake-target")
+        let error = probe_selector_identity(&mut context, "#fake-target")
             .expect_err("invalid target_exists payload should fail");
 
         match error {
             BrowserError::ToolExecutionFailed { tool, reason } => {
                 assert_eq!(tool, "interaction");
-                assert!(reason.contains("target_exists returned an invalid payload"));
+                assert!(reason.contains("selector identity probe returned an invalid payload"));
                 assert!(reason.contains("expected boolean field 'present'"));
                 assert!(reason.contains("got string"));
             }
             other => panic!("unexpected target_exists error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_probe_selector_identity_rejects_invalid_unique_payload() {
+        let session = BrowserSession::with_test_backend(StaticInteractionBackend {
+            value: serde_json::json!({
+                "present": true,
+                "unique": "yes",
+            }),
+        });
+        let mut context = ToolContext::new(&session);
+
+        let error = probe_selector_identity(&mut context, "#fake-target")
+            .expect_err("invalid unique payload should fail");
+
+        match error {
+            BrowserError::ToolExecutionFailed { tool, reason } => {
+                assert_eq!(tool, "interaction");
+                assert!(reason.contains("selector identity probe returned an invalid payload"));
+                assert!(reason.contains("expected boolean field 'unique'"));
+                assert!(reason.contains("got string"));
+            }
+            other => panic!("unexpected target_exists error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_determine_target_after_reuses_unique_selector_for_non_actionable_rebound() {
+        let session = BrowserSession::with_test_backend(StaticInteractionBackend {
+            value: serde_json::json!({
+                "present": true,
+                "unique": true,
+            }),
+        });
+        let mut context = ToolContext::new(&session);
+        let target_before = resolved_target(
+            "#save",
+            Some(NodeRef {
+                document_id: "doc-1".to_string(),
+                revision: "rev-1".to_string(),
+                index: 3,
+            }),
+        );
+        let current_document = DocumentMetadata {
+            document_id: "doc-1".to_string(),
+            revision: "rev-2".to_string(),
+            ..DocumentMetadata::default()
+        };
+
+        let (target_after, status) =
+            determine_target_after(&mut context, &target_before, &current_document, Vec::new())
+                .expect("selector identity probe should succeed");
+
+        assert_eq!(status, TargetStatus::Rebound);
+        let target_after = target_after.expect("unique selector should yield target_after");
+        assert_eq!(target_after.method, "css");
+        assert_eq!(target_after.selector.as_deref(), Some("#save"));
+        assert_eq!(target_after.resolution_status, "exact");
+        assert_eq!(target_after.recovered_from, None);
+        assert!(target_after.cursor.is_none());
+        assert!(target_after.node_ref.is_none());
+        assert!(target_after.index.is_none());
+    }
+
+    #[test]
+    fn test_determine_target_after_marks_ambiguous_non_actionable_selector_unknown() {
+        let session = BrowserSession::with_test_backend(StaticInteractionBackend {
+            value: serde_json::json!({
+                "present": true,
+                "unique": false,
+            }),
+        });
+        let mut context = ToolContext::new(&session);
+        let target_before = resolved_target(
+            "#save",
+            Some(NodeRef {
+                document_id: "doc-1".to_string(),
+                revision: "rev-1".to_string(),
+                index: 3,
+            }),
+        );
+        let current_document = DocumentMetadata {
+            document_id: "doc-1".to_string(),
+            revision: "rev-2".to_string(),
+            ..DocumentMetadata::default()
+        };
+
+        let (target_after, status) =
+            determine_target_after(&mut context, &target_before, &current_document, Vec::new())
+                .expect("selector identity probe should succeed");
+
+        assert_eq!(status, TargetStatus::Unknown);
+        assert!(target_after.is_none());
+    }
+
+    #[test]
+    fn test_determine_target_after_marks_same_revision_cursor_mismatch_unknown() {
+        let session =
+            BrowserSession::with_test_backend(StaticInteractionBackend { value: Value::Null });
+        let mut context = ToolContext::new(&session);
+        let target_before = resolved_target(
+            "#save",
+            Some(NodeRef {
+                document_id: "doc-1".to_string(),
+                revision: "rev-1".to_string(),
+                index: 1,
+            }),
+        );
+        let current_document = DocumentMetadata {
+            document_id: "doc-1".to_string(),
+            revision: "rev-1".to_string(),
+            ..DocumentMetadata::default()
+        };
+        let actionable_matches = vec![Cursor {
+            node_ref: NodeRef {
+                document_id: "doc-1".to_string(),
+                revision: "rev-1".to_string(),
+                index: 4,
+            },
+            selector: "#save".to_string(),
+            index: 4,
+            role: "button".to_string(),
+            name: "Save".to_string(),
+        }];
+
+        let (target_after, status) = determine_target_after(
+            &mut context,
+            &target_before,
+            &current_document,
+            actionable_matches,
+        )
+        .expect("actionable match should classify");
+
+        assert_eq!(status, TargetStatus::Unknown);
+        assert_eq!(
+            target_after
+                .and_then(|target| target.node_ref)
+                .map(|node| node.index),
+            Some(4)
+        );
+    }
+
+    #[test]
+    fn test_build_interaction_failure_keeps_rebound_target_before_metadata() {
+        let session =
+            BrowserSession::with_test_backend(StaticInteractionBackend { value: Value::Null });
+        let target = resolved_target_with_method(
+            encode_selector_rebound_method("cursor", TargetRecoveredFrom::Cursor),
+            "#save",
+            Some(NodeRef {
+                document_id: "doc-1".to_string(),
+                revision: "rev-1".to_string(),
+                index: 3,
+            }),
+        );
+
+        let failure = build_interaction_failure(
+            "click",
+            &session,
+            &target,
+            "target_not_visible".to_string(),
+            "Target is not visible".to_string(),
+            vec!["visible".to_string()],
+            None,
+        )
+        .expect("interaction failure should build");
+
+        assert!(!failure.success);
+        let data = failure.data.expect("failure data should be present");
+        assert_eq!(
+            data["target"]["resolution_status"].as_str(),
+            Some("selector_rebound")
+        );
+        assert_eq!(data["target"]["recovered_from"].as_str(), Some("cursor"));
+        assert_eq!(data["target"]["selector"].as_str(), Some("#save"));
+        assert_eq!(
+            data["details"]["failed_predicates"][0].as_str(),
+            Some("visible")
+        );
+        assert_eq!(
+            data["recovery"]["suggested_tool"].as_str(),
+            Some("inspect_node")
+        );
+    }
+
+    fn resolved_target(selector: &str, node_ref: Option<NodeRef>) -> ResolvedTarget {
+        resolved_target_with_method("css".to_string(), selector, node_ref)
+    }
+
+    fn resolved_target_with_method(
+        method: String,
+        selector: &str,
+        node_ref: Option<NodeRef>,
+    ) -> ResolvedTarget {
+        let cursor = node_ref.clone().map(|node_ref| Cursor {
+            index: node_ref.index,
+            node_ref,
+            selector: selector.to_string(),
+            role: "button".to_string(),
+            name: "Save".to_string(),
+        });
+
+        ResolvedTarget {
+            method,
+            selector: selector.to_string(),
+            index: None,
+            node_ref,
+            cursor,
         }
     }
 }

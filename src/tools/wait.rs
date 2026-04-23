@@ -1,11 +1,13 @@
 use crate::dom::{Cursor, NodeRef};
 use crate::error::Result;
 use crate::tools::{
-    TargetEnvelope, Tool, ToolContext, ToolResult, services::interaction::TargetStatus,
-    services::wait::execute_wait,
+    TargetEnvelope, Tool, ToolContext, ToolResult, core::DocumentActionResult, core::PublicTarget,
+    services::interaction::TargetStatus, services::wait::execute_wait,
 };
-use schemars::JsonSchema;
+use schemars::{JsonSchema, Schema, SchemaGenerator};
+use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 
 #[cfg(test)]
 pub(crate) use crate::tools::services::wait::{
@@ -29,11 +31,7 @@ pub enum WaitCondition {
     RevisionChanged,
 }
 
-fn default_condition() -> WaitCondition {
-    WaitCondition::Present
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize)]
 pub struct WaitParams {
     /// CSS selector to wait for
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -52,7 +50,6 @@ pub struct WaitParams {
     pub cursor: Option<Cursor>,
 
     /// Wait predicate to apply
-    #[serde(default = "default_condition")]
     pub condition: WaitCondition,
 
     /// Expected text fragment for `text_contains`
@@ -72,6 +69,229 @@ pub struct WaitParams {
     pub timeout_ms: u64,
 }
 
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum NavigationSettledRequestCondition {
+    NavigationSettled,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum RevisionChangedRequestCondition {
+    RevisionChanged,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum NodeStateWaitCondition {
+    Present,
+    Visible,
+    Enabled,
+    Editable,
+    Actionable,
+    Stable,
+    ReceivesEvents,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum TextContainsRequestCondition {
+    TextContains,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum ValueEqualsRequestCondition {
+    ValueEquals,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct StrictNavigationSettledWaitParams {
+    /// Omit `condition` or set it to `navigation_settled` to wait for the document to settle.
+    #[serde(default)]
+    #[serde(rename = "condition")]
+    pub _condition: Option<NavigationSettledRequestCondition>,
+    /// Timeout in milliseconds (default: 30000)
+    #[serde(default = "default_timeout")]
+    pub timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct StrictRevisionChangedWaitParams {
+    #[serde(rename = "condition")]
+    pub _condition: RevisionChangedRequestCondition,
+    /// Omit to use the current document revision as the baseline.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub since_revision: Option<String>,
+    /// Timeout in milliseconds (default: 30000)
+    #[serde(default = "default_timeout")]
+    pub timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct StrictNodeStateWaitParams {
+    pub condition: NodeStateWaitCondition,
+    /// Node target to wait on.
+    pub target: PublicTarget,
+    /// Timeout in milliseconds (default: 30000)
+    #[serde(default = "default_timeout")]
+    pub timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct StrictTextContainsWaitParams {
+    #[serde(rename = "condition")]
+    pub _condition: TextContainsRequestCondition,
+    /// Node target to wait on.
+    pub target: PublicTarget,
+    /// Required text fragment for `text_contains`.
+    pub text: String,
+    /// Timeout in milliseconds (default: 30000)
+    #[serde(default = "default_timeout")]
+    pub timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct StrictValueEqualsWaitParams {
+    #[serde(rename = "condition")]
+    pub _condition: ValueEqualsRequestCondition,
+    /// Node target to wait on.
+    pub target: PublicTarget,
+    /// Required value for `value_equals`.
+    pub value: String,
+    /// Timeout in milliseconds (default: 30000)
+    #[serde(default = "default_timeout")]
+    pub timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum StrictWaitParams {
+    NavigationSettled(StrictNavigationSettledWaitParams),
+    RevisionChanged(StrictRevisionChangedWaitParams),
+    NodeState(StrictNodeStateWaitParams),
+    TextContains(StrictTextContainsWaitParams),
+    ValueEquals(StrictValueEqualsWaitParams),
+}
+
+impl From<StrictWaitParams> for WaitParams {
+    fn from(params: StrictWaitParams) -> Self {
+        match params {
+            StrictWaitParams::NavigationSettled(params) => Self {
+                selector: None,
+                index: None,
+                node_ref: None,
+                cursor: None,
+                condition: WaitCondition::NavigationSettled,
+                text: None,
+                value: None,
+                since_revision: None,
+                timeout_ms: params.timeout_ms,
+            },
+            StrictWaitParams::RevisionChanged(params) => Self {
+                selector: None,
+                index: None,
+                node_ref: None,
+                cursor: None,
+                condition: WaitCondition::RevisionChanged,
+                text: None,
+                value: None,
+                since_revision: params.since_revision,
+                timeout_ms: params.timeout_ms,
+            },
+            StrictWaitParams::NodeState(params) => {
+                let (selector, cursor) = params.target.into_selector_or_cursor();
+                Self {
+                    selector,
+                    index: None,
+                    node_ref: None,
+                    cursor,
+                    condition: match params.condition {
+                        NodeStateWaitCondition::Present => WaitCondition::Present,
+                        NodeStateWaitCondition::Visible => WaitCondition::Visible,
+                        NodeStateWaitCondition::Enabled => WaitCondition::Enabled,
+                        NodeStateWaitCondition::Editable => WaitCondition::Editable,
+                        NodeStateWaitCondition::Actionable => WaitCondition::Actionable,
+                        NodeStateWaitCondition::Stable => WaitCondition::Stable,
+                        NodeStateWaitCondition::ReceivesEvents => WaitCondition::ReceivesEvents,
+                    },
+                    text: None,
+                    value: None,
+                    since_revision: None,
+                    timeout_ms: params.timeout_ms,
+                }
+            }
+            StrictWaitParams::TextContains(params) => {
+                let (selector, cursor) = params.target.into_selector_or_cursor();
+                Self {
+                    selector,
+                    index: None,
+                    node_ref: None,
+                    cursor,
+                    condition: WaitCondition::TextContains,
+                    text: Some(params.text),
+                    value: None,
+                    since_revision: None,
+                    timeout_ms: params.timeout_ms,
+                }
+            }
+            StrictWaitParams::ValueEquals(params) => {
+                let (selector, cursor) = params.target.into_selector_or_cursor();
+                Self {
+                    selector,
+                    index: None,
+                    node_ref: None,
+                    cursor,
+                    condition: WaitCondition::ValueEquals,
+                    text: None,
+                    value: Some(params.value),
+                    since_revision: None,
+                    timeout_ms: params.timeout_ms,
+                }
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for WaitParams {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        StrictWaitParams::deserialize(deserializer).map(Into::into)
+    }
+}
+
+impl JsonSchema for WaitParams {
+    fn schema_name() -> Cow<'static, str> {
+        "WaitParams".into()
+    }
+
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        let variants = [
+            generator.subschema_for::<StrictNavigationSettledWaitParams>(),
+            generator.subschema_for::<StrictRevisionChangedWaitParams>(),
+            generator.subschema_for::<StrictNodeStateWaitParams>(),
+            generator.subschema_for::<StrictTextContainsWaitParams>(),
+            generator.subschema_for::<StrictValueEqualsWaitParams>(),
+        ]
+        .into_iter()
+        .map(|schema| serde_json::to_value(schema).expect("wait schema variant should serialize"))
+        .collect::<Vec<_>>();
+
+        serde_json::from_value(serde_json::json!({
+            "type": "object",
+            "oneOf": variants,
+        }))
+        .expect("wait params schema should deserialize")
+    }
+}
+
 fn default_timeout() -> u64 {
     30000
 }
@@ -82,8 +302,7 @@ pub struct WaitTool;
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WaitOutput {
     #[serde(flatten)]
-    pub envelope: crate::tools::DocumentEnvelope,
-    pub action: String,
+    pub result: DocumentActionResult,
     pub condition: String,
     pub elapsed_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -119,6 +338,7 @@ mod tests {
     use crate::browser::BrowserSession;
     use crate::browser::backend::FakeSessionBackend;
     use crate::tools::actionability::ActionabilityPredicate;
+    use schemars::schema_for;
     use serde_json::json;
 
     #[test]
@@ -126,7 +346,7 @@ mod tests {
         let params: WaitParams =
             serde_json::from_value(json!({})).expect("params should deserialize");
 
-        assert_eq!(params.condition, WaitCondition::Present);
+        assert_eq!(params.condition, WaitCondition::NavigationSettled);
         assert_eq!(params.timeout_ms, 30_000);
         assert!(params.selector.is_none());
         assert!(params.cursor.is_none());
@@ -135,8 +355,74 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_wait_condition_requires_text_and_value() {
-        let text_error = validate_wait_condition(&WaitCondition::TextContains, None, None)
+    fn test_wait_params_require_target_for_node_scoped_conditions() {
+        let error = serde_json::from_value::<WaitParams>(json!({
+            "condition": "present"
+        }))
+        .expect_err("node-scoped wait should require a target");
+        assert!(error.to_string().contains("did not match any variant"));
+
+        let error = serde_json::from_value::<WaitParams>(json!({
+            "condition": "text_contains",
+            "target": {
+                "kind": "selector",
+                "selector": "#status"
+            }
+        }))
+        .expect_err("text_contains should require text");
+        assert!(error.to_string().contains("did not match any variant"));
+
+        let error = serde_json::from_value::<WaitParams>(json!({
+            "condition": "value_equals",
+            "target": {
+                "kind": "selector",
+                "selector": "#status"
+            }
+        }))
+        .expect_err("value_equals should require value");
+        assert!(error.to_string().contains("did not match any variant"));
+    }
+
+    #[test]
+    fn test_wait_params_reject_document_scoped_targets_and_legacy_fields() {
+        let error = serde_json::from_value::<WaitParams>(json!({
+            "condition": "revision_changed",
+            "target": {
+                "kind": "selector",
+                "selector": "#status"
+            }
+        }))
+        .expect_err("revision_changed should reject targets");
+        assert!(error.to_string().contains("did not match any variant"));
+
+        let error = serde_json::from_value::<WaitParams>(json!({
+            "condition": "visible",
+            "selector": "#status"
+        }))
+        .expect_err("legacy selector field should be rejected");
+        assert!(error.to_string().contains("did not match any variant"));
+    }
+
+    #[test]
+    fn test_validate_wait_condition_requires_target_text_and_value() {
+        let target_error = validate_wait_condition(&WaitCondition::Present, false, None, None)
+            .expect_err("present without target should fail");
+        assert!(matches!(
+            target_error,
+            crate::error::BrowserError::InvalidArgument(_)
+        ));
+        assert!(target_error.to_string().contains("wait.target"));
+
+        let document_target_error =
+            validate_wait_condition(&WaitCondition::NavigationSettled, true, None, None)
+                .expect_err("document-scoped waits should reject targets");
+        assert!(matches!(
+            document_target_error,
+            crate::error::BrowserError::InvalidArgument(_)
+        ));
+        assert!(document_target_error.to_string().contains("wait.target"));
+
+        let text_error = validate_wait_condition(&WaitCondition::TextContains, true, None, None)
             .expect_err("text_contains without text should fail");
         assert!(matches!(
             text_error,
@@ -144,7 +430,7 @@ mod tests {
         ));
         assert!(text_error.to_string().contains("wait.text"));
 
-        let value_error = validate_wait_condition(&WaitCondition::ValueEquals, None, None)
+        let value_error = validate_wait_condition(&WaitCondition::ValueEquals, true, None, None)
             .expect_err("value_equals without value should fail");
         assert!(matches!(
             value_error,
@@ -152,12 +438,57 @@ mod tests {
         ));
         assert!(value_error.to_string().contains("wait.value"));
 
-        validate_wait_condition(&WaitCondition::Present, None, None)
+        validate_wait_condition(&WaitCondition::Present, true, None, None)
             .expect("present should not require extra arguments");
-        validate_wait_condition(&WaitCondition::TextContains, Some("hello"), None)
+        validate_wait_condition(&WaitCondition::TextContains, true, Some("hello"), None)
             .expect("text_contains should accept text");
-        validate_wait_condition(&WaitCondition::ValueEquals, None, Some("abc"))
+        validate_wait_condition(&WaitCondition::ValueEquals, true, None, Some("abc"))
             .expect("value_equals should accept value");
+    }
+
+    #[test]
+    fn test_wait_params_schema_encodes_union_without_legacy_target_fields() {
+        let schema = schema_for!(WaitParams);
+        let schema_json = serde_json::to_value(&schema).expect("schema should serialize");
+        assert_eq!(
+            schema_json.get("type").and_then(|value| value.as_str()),
+            Some("object")
+        );
+        let variants = schema_json
+            .get("oneOf")
+            .and_then(|value| value.as_array())
+            .expect("wait schema should expose oneOf variants");
+
+        for variant in variants {
+            let resolved_variant =
+                if let Some(reference) = variant.get("$ref").and_then(|value| value.as_str()) {
+                    let definition_name = reference
+                        .strip_prefix("#/$defs/")
+                        .or_else(|| reference.strip_prefix("#/definitions/"))
+                        .expect("wait schema refs should target local definitions");
+                    schema_json
+                        .get("$defs")
+                        .or_else(|| schema_json.get("definitions"))
+                        .and_then(|defs| defs.get(definition_name))
+                        .expect("wait schema ref should resolve")
+                } else {
+                    variant
+                };
+
+            let properties = resolved_variant
+                .get("properties")
+                .and_then(|value| value.as_object())
+                .expect("wait schema variants should expose properties");
+            assert!(!properties.contains_key("selector"));
+            assert!(!properties.contains_key("index"));
+            assert!(!properties.contains_key("node_ref"));
+            assert!(!properties.contains_key("cursor"));
+        }
+
+        let serialized = serde_json::to_string(&schema_json).expect("schema should stringify");
+        assert!(serialized.contains("\"target\""));
+        assert!(serialized.contains("\"navigation_settled\""));
+        assert!(serialized.contains("\"revision_changed\""));
     }
 
     #[test]
@@ -336,7 +667,7 @@ mod tests {
     #[test]
     fn test_wait_tool_navigation_settled_executes_against_fake_backend() {
         let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
-        let tool = WaitTool::default();
+        let tool = WaitTool;
         let mut context = ToolContext::new(&session);
 
         let result = tool

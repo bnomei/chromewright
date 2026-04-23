@@ -1,20 +1,24 @@
 use crate::dom::{Cursor, NodeRef};
 use crate::error::{BrowserError, Result};
 use crate::tools::{
-    DocumentEnvelope, TargetEnvelope, TargetResolution, Tool, ToolContext, ToolResult,
+    TargetResolution, Tool, ToolContext, ToolResult,
     actionability::ActionabilityPredicate,
     browser_kernel::render_browser_kernel_script,
+    core::PublicTarget,
+    core::TargetedActionResult,
     services::interaction::{
-        ActionabilityWaitState, DEFAULT_ACTIONABILITY_TIMEOUT_MS, TargetStatus,
-        build_actionability_failure, build_interaction_failure, build_interaction_handoff,
-        decode_action_result, resolve_interaction_target, wait_for_actionability,
+        ActionabilityWaitState, DEFAULT_ACTIONABILITY_TIMEOUT_MS, build_actionability_failure,
+        build_interaction_failure, build_interaction_handoff, decode_action_result,
+        resolve_interaction_target, wait_for_actionability,
     },
 };
-use schemars::JsonSchema;
+use schemars::{JsonSchema, Schema, SchemaGenerator};
+use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 
 /// Parameters for the select tool
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SelectParams {
     /// CSS selector (use either this or index, not both)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -36,6 +40,47 @@ pub struct SelectParams {
     pub value: String,
 }
 
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct StrictSelectParams {
+    /// Target dropdown to operate on.
+    pub target: PublicTarget,
+    /// Value to select in the dropdown.
+    pub value: String,
+}
+
+impl From<StrictSelectParams> for SelectParams {
+    fn from(params: StrictSelectParams) -> Self {
+        let (selector, cursor) = params.target.into_selector_or_cursor();
+        Self {
+            selector,
+            index: None,
+            node_ref: None,
+            cursor,
+            value: params.value,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for SelectParams {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        StrictSelectParams::deserialize(deserializer).map(Into::into)
+    }
+}
+
+impl JsonSchema for SelectParams {
+    fn schema_name() -> Cow<'static, str> {
+        "SelectParams".into()
+    }
+
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        StrictSelectParams::json_schema(generator)
+    }
+}
+
 /// Tool for selecting dropdown options
 #[derive(Default)]
 pub struct SelectTool;
@@ -45,14 +90,8 @@ const SELECT_JS: &str = include_str!("select.js");
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SelectOutput {
     #[serde(flatten)]
-    pub envelope: DocumentEnvelope,
-    pub action: String,
-    pub target_before: TargetEnvelope,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub target_after: Option<TargetEnvelope>,
-    pub target_status: TargetStatus,
+    pub result: TargetedActionResult,
     pub value: String,
-    #[serde(rename = "selectedText")]
     pub selected_text: Option<String>,
 }
 
@@ -127,11 +166,13 @@ impl Tool for SelectTool {
             SelectParseResult::Success(selected_text) => {
                 let handoff = build_interaction_handoff(context, &target)?;
                 Ok(context.finish(ToolResult::success_with(SelectOutput {
-                    envelope: handoff.envelope,
-                    action: "select".to_string(),
-                    target_before: handoff.target_before,
-                    target_after: handoff.target_after,
-                    target_status: handoff.target_status,
+                    result: TargetedActionResult::new(
+                        "select",
+                        handoff.document,
+                        handoff.target_before,
+                        handoff.target_after,
+                        handoff.target_status,
+                    ),
                     value,
                     selected_text,
                 })))
@@ -159,8 +200,19 @@ enum SelectParseResult {
     Failure { code: String, error: String },
 }
 
+#[derive(Debug, Deserialize)]
+struct RawSelectResult {
+    success: bool,
+    #[serde(default)]
+    code: Option<String>,
+    #[serde(default)]
+    error: Option<String>,
+    #[serde(default)]
+    selected_text: Option<String>,
+}
+
 fn parse_select_result(value: Option<serde_json::Value>) -> Result<SelectParseResult> {
-    let result_json = decode_action_result(
+    let mut result_json = decode_action_result(
         value,
         serde_json::json!({
             "success": false,
@@ -168,24 +220,30 @@ fn parse_select_result(value: Option<serde_json::Value>) -> Result<SelectParseRe
             "error": "Element is no longer present"
         }),
     )?;
+    promote_legacy_select_fields(&mut result_json);
+    let result: RawSelectResult = serde_json::from_value(result_json)?;
 
-    if result_json["success"].as_bool() == Some(true) {
-        Ok(SelectParseResult::Success(
-            result_json["selectedText"]
-                .as_str()
-                .map(ToString::to_string),
-        ))
+    if result.success {
+        Ok(SelectParseResult::Success(result.selected_text))
     } else {
         Ok(SelectParseResult::Failure {
-            code: result_json["code"]
-                .as_str()
-                .unwrap_or("invalid_target")
-                .to_string(),
-            error: result_json["error"]
-                .as_str()
-                .unwrap_or("Select failed")
-                .to_string(),
+            code: result.code.unwrap_or_else(|| "invalid_target".to_string()),
+            error: result.error.unwrap_or_else(|| "Select failed".to_string()),
         })
+    }
+}
+
+fn promote_legacy_select_fields(result_json: &mut serde_json::Value) {
+    let Some(object) = result_json.as_object_mut() else {
+        return;
+    };
+
+    if object.contains_key("selected_text") {
+        return;
+    }
+
+    if let Some(selected_text) = object.remove("selectedText") {
+        object.insert("selected_text".to_string(), selected_text);
     }
 }
 
@@ -201,11 +259,16 @@ fn select_actionability_predicates() -> &'static [ActionabilityPredicate] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use schemars::schema_for;
+    use serde_json::json;
 
     #[test]
-    fn test_select_params_css() {
+    fn test_select_params_deserializes_strict_target() {
         let json = serde_json::json!({
-            "selector": "#country-select",
+            "target": {
+                "kind": "selector",
+                "selector": "#country-select"
+            },
             "value": "us"
         });
 
@@ -216,22 +279,31 @@ mod tests {
     }
 
     #[test]
-    fn test_select_params_index() {
-        let json = serde_json::json!({
-            "index": 5,
-            "value": "option2"
-        });
+    fn test_select_params_rejects_legacy_public_target_fields() {
+        let error = serde_json::from_value::<SelectParams>(json!({
+            "selector": "#country-select",
+            "value": "us"
+        }))
+        .expect_err("legacy selector field should be rejected");
+        assert!(error.to_string().contains("unknown field `selector`"));
 
-        let params: SelectParams = serde_json::from_value(json).unwrap();
-        assert_eq!(params.selector, None);
-        assert_eq!(params.index, Some(5));
-        assert_eq!(params.value, "option2");
+        let schema = schema_for!(SelectParams);
+        let schema_json = serde_json::to_value(&schema).expect("schema should serialize");
+        let properties = schema_json
+            .get("properties")
+            .and_then(|value| value.as_object())
+            .expect("select params schema should expose properties");
+        assert!(properties.contains_key("target"));
+        assert!(!properties.contains_key("selector"));
+        assert!(!properties.contains_key("index"));
+        assert!(!properties.contains_key("node_ref"));
+        assert!(!properties.contains_key("cursor"));
     }
 
     #[test]
     fn test_parse_select_result_success() {
         let result = parse_select_result(Some(serde_json::Value::String(
-            r#"{"success":true,"selectedText":"United Kingdom"}"#.to_string(),
+            r#"{"success":true,"selected_text":"United Kingdom"}"#.to_string(),
         )))
         .expect("select result should parse");
 

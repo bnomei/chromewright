@@ -177,15 +177,98 @@ JSON.stringify((function() {
         return rect.width > 0 && rect.height > 0;
     }
 
+    const PERSISTENT_EDGE_THRESHOLD = 96;
+    const MAX_PERSISTENT_CHROME_HEIGHT_RATIO = 0.45;
+
+    function nextContainingElement(element) {
+        if (!element) {
+            return null;
+        }
+
+        if (element.parentElement) {
+            return element.parentElement;
+        }
+
+        const root = typeof element.getRootNode === 'function' ? element.getRootNode() : null;
+        return root && root.host && root.host.nodeType === 1 ? root.host : null;
+    }
+
+    function detectPersistentChrome(element, view) {
+        let current = element;
+
+        while (current && current.nodeType === 1) {
+            const style = view.getComputedStyle(current);
+            const position = style ? style.position : '';
+            if (position === 'fixed' || position === 'sticky') {
+                const rect = current.getBoundingClientRect();
+                const visible = rect.width > 0 && rect.height > 0;
+                const inViewport =
+                    rect.bottom > 0 &&
+                    rect.right > 0 &&
+                    rect.top < view.innerHeight &&
+                    rect.left < view.innerWidth;
+                const heightRatio = view.innerHeight > 0 ? rect.height / view.innerHeight : 1;
+                const topPinned =
+                    rect.top <= PERSISTENT_EDGE_THRESHOLD &&
+                    rect.bottom > 0;
+                const bottomPinned =
+                    rect.bottom >= view.innerHeight - PERSISTENT_EDGE_THRESHOLD &&
+                    rect.top < view.innerHeight;
+
+                if (visible && inViewport && heightRatio <= MAX_PERSISTENT_CHROME_HEIGHT_RATIO) {
+                    if (topPinned) {
+                        return {
+                            persistentChrome: true,
+                            persistentPosition: position,
+                            persistentEdge: 'top'
+                        };
+                    }
+
+                    if (bottomPinned) {
+                        return {
+                            persistentChrome: true,
+                            persistentPosition: position,
+                            persistentEdge: 'bottom'
+                        };
+                    }
+                }
+            }
+
+            current = nextContainingElement(current);
+        }
+
+        return {
+            persistentChrome: false,
+            persistentPosition: undefined,
+            persistentEdge: undefined
+        };
+    }
+
     // Helper: compute element box information
     function computeBox(element) {
+        const view = getDocumentView(element.ownerDocument);
         const style = getDocumentView(element.ownerDocument).getComputedStyle(element);
         const rect = element.getBoundingClientRect();
         const visible = rect.width > 0 && rect.height > 0;
+        const inViewport =
+            rect.bottom > 0 &&
+            rect.right > 0 &&
+            rect.top < view.innerHeight &&
+            rect.left < view.innerWidth;
         const inline = style.display === 'inline';
         const cursor = style.cursor;
-        
-        return { visible, inline, cursor, rect };
+        const persistent = detectPersistentChrome(element, view);
+
+        return {
+            visible,
+            inViewport,
+            inline,
+            cursor,
+            rect,
+            persistentChrome: persistent.persistentChrome,
+            persistentPosition: persistent.persistentPosition,
+            persistentEdge: persistent.persistentEdge
+        };
     }
 
     // Helper: check if element receives pointer events
@@ -432,8 +515,14 @@ JSON.stringify((function() {
             const ariaNode = {
                 role: 'iframe',
                 name: '',
+                tag: 'iframe',
+                id: element.id || null,
+                classes: typeof element.className === 'string'
+                    ? element.className.trim().split(/\s+/).filter(Boolean)
+                    : [],
                 children: [],
                 props: {},
+                public_handle: false,
                 element: element,
                 box: computeBox(element),
                 receivesPointerEvents: true,
@@ -463,8 +552,14 @@ JSON.stringify((function() {
         const result = {
             role: role,
             name: name,
+            tag: element.tagName.toLowerCase(),
+            id: element.id || null,
+            classes: typeof element.className === 'string'
+                ? element.className.trim().split(/\s+/).filter(Boolean)
+                : [],
             children: [],
             props: {},
+            public_handle: false,
             element: element,
             box: box,
             receivesPointerEvents: receivesPointerEvents(element),
@@ -803,6 +898,11 @@ JSON.stringify((function() {
             children: [],
             props: ariaNode.props
         };
+
+        if (ariaNode.tag) result.tag = ariaNode.tag;
+        if (ariaNode.id) result.id = ariaNode.id;
+        if (ariaNode.classes && ariaNode.classes.length > 0) result.classes = ariaNode.classes;
+        if (ariaNode.public_handle) result.public_handle = true;
         
         // Include index if present
         if (ariaNode.index !== undefined) result.index = ariaNode.index;
@@ -817,8 +917,16 @@ JSON.stringify((function() {
         // Serialize box info
         result.box_info = {
             visible: ariaNode.box.visible,
+            in_viewport: ariaNode.box.inViewport,
             cursor: ariaNode.box.cursor
         };
+        if (ariaNode.box.persistentChrome) result.box_info.persistent_chrome = true;
+        if (ariaNode.box.persistentPosition) {
+            result.box_info.persistent_position = ariaNode.box.persistentPosition;
+        }
+        if (ariaNode.box.persistentEdge) {
+            result.box_info.persistent_edge = ariaNode.box.persistentEdge;
+        }
         
         // Serialize children
         for (const child of ariaNode.children) {
@@ -837,6 +945,7 @@ JSON.stringify((function() {
         if (ariaNode.index !== undefined && ariaNode.element) {
             // Store CSS selector for element at its index position
             const selector = buildSelector(ariaNode.element);
+            ariaNode.public_handle = Boolean(selector);
             // Ensure selectors array is large enough
             while (selectors.length <= ariaNode.index) {
                 selectors.push('');
@@ -965,7 +1074,13 @@ JSON.stringify((function() {
                 frames: []
             },
             error: error.toString(),
-            root: { role: 'fragment', name: '', children: [], props: {}, box_info: { visible: false } },
+            root: {
+                role: 'fragment',
+                name: '',
+                children: [],
+                props: {},
+                box_info: { visible: false, in_viewport: false }
+            },
             selectors: [],
             iframe_indices: []
         };

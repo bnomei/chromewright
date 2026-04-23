@@ -2,6 +2,7 @@ use crate::error::Result;
 use crate::tools::utils::validate_navigation_url;
 use crate::tools::{
     DocumentEnvelopeOptions, Tool, ToolContext, ToolResult, build_document_envelope,
+    core::DocumentActionResult,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -32,8 +33,7 @@ pub struct NavigateTool;
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct NavigateOutput {
     #[serde(flatten)]
-    pub envelope: crate::tools::DocumentEnvelope,
-    pub action: String,
+    pub result: DocumentActionResult,
     pub url: String,
 }
 
@@ -68,8 +68,7 @@ impl Tool for NavigateTool {
         context.invalidate_dom();
         let envelope = build_document_envelope(context, None, DocumentEnvelopeOptions::minimal())?;
         Ok(context.finish(ToolResult::success_with(NavigateOutput {
-            envelope,
-            action: "navigate".to_string(),
+            result: DocumentActionResult::new("navigate", envelope.document),
             url: normalized_url,
         })))
     }
@@ -84,7 +83,7 @@ mod tests {
     #[test]
     fn test_navigate_tool_executes_against_fake_backend() {
         let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
-        let tool = NavigateTool::default();
+        let tool = NavigateTool;
         let mut context = ToolContext::new(&session);
 
         let result = tool

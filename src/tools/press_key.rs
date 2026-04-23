@@ -1,6 +1,6 @@
 use crate::dom::{AriaChild, AriaNode, Cursor, DomTree};
 use crate::error::{BrowserError, Result};
-use crate::tools::{DocumentEnvelope, Tool, ToolContext, ToolResult};
+use crate::tools::{Tool, ToolContext, ToolResult, core::DocumentActionResult};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -188,7 +188,7 @@ struct FocusSummary {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PressKeyOutput {
     #[serde(flatten)]
-    pub envelope: DocumentEnvelope,
+    pub result: DocumentActionResult,
     pub key: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub focus_after: Option<FocusAfter>,
@@ -235,22 +235,16 @@ impl Tool for PressKeyTool {
                     });
         }
 
-        let envelope = DocumentEnvelope {
-            document: match document {
-                Some(document) => document,
-                None => {
-                    context.record_browser_evaluation();
-                    context.session.document_metadata()?
-                }
-            },
-            target: None,
-            snapshot: None,
-            nodes: Vec::new(),
-            interactive_count: None,
+        let document = match document {
+            Some(document) => document,
+            None => {
+                context.record_browser_evaluation();
+                context.session.document_metadata()?
+            }
         };
 
         Ok(context.finish(ToolResult::success_with(PressKeyOutput {
-            envelope,
+            result: DocumentActionResult::new("press_key", document),
             key: params.key,
             focus_after,
         })))
@@ -402,13 +396,7 @@ mod tests {
     #[test]
     fn test_press_key_output_serializes_discriminated_focus_after_shape() {
         let output = PressKeyOutput {
-            envelope: DocumentEnvelope {
-                document: crate::dom::DocumentMetadata::default(),
-                target: None,
-                snapshot: None,
-                nodes: Vec::new(),
-                interactive_count: None,
-            },
+            result: DocumentActionResult::new("press_key", crate::dom::DocumentMetadata::default()),
             key: "Tab".to_string(),
             focus_after: Some(FocusAfter::Summary {
                 tag: "input".to_string(),

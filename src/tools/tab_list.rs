@@ -1,22 +1,7 @@
 use crate::error::Result;
-use crate::tools::{Tool, ToolContext, ToolResult};
+use crate::tools::{TabSummary, Tool, ToolContext, ToolResult};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-
-/// Information about a browser tab
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct TabInfo {
-    /// Stable tab identifier
-    pub tab_id: String,
-    /// Tab index
-    pub index: usize,
-    /// Whether this is the active tab
-    pub active: bool,
-    /// Tab title
-    pub title: String,
-    /// Tab URL
-    pub url: String,
-}
 
 /// Parameters for the tab_list tool (no parameters needed)
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -28,8 +13,8 @@ pub struct TabListTool;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct TabListOutput {
-    pub tab_list: Vec<TabInfo>,
-    pub active_tab: Option<TabInfo>,
+    pub tabs: Vec<TabSummary>,
+    pub active_tab: Option<TabSummary>,
     pub count: usize,
     pub summary: String,
 }
@@ -51,39 +36,33 @@ impl Tool for TabListTool {
         _params: TabListParams,
         context: &mut ToolContext,
     ) -> Result<ToolResult> {
-        let tab_list: Vec<TabInfo> = context
+        let tabs: Vec<TabSummary> = context
             .session
             .tab_overview()?
             .into_iter()
             .enumerate()
-            .map(|(index, tab)| TabInfo {
-                tab_id: tab.id,
-                index,
-                active: tab.active,
-                title: tab.title,
-                url: tab.url,
-            })
+            .map(|(index, tab)| TabSummary::from_browser_tab(index, &tab))
             .collect();
 
-        let active_index = tab_list.iter().position(|t| t.active);
-        let active_tab = active_index.map(|index| tab_list[index].clone());
-        let summary = summarize_tab_list(&tab_list, active_index);
+        let active_index = tabs.iter().position(|t| t.active);
+        let active_tab = active_index.map(|index| tabs[index].clone());
+        let summary = summarize_tab_list(&tabs, active_index);
 
         Ok(context.finish(ToolResult::success_with(TabListOutput {
-            count: tab_list.len(),
+            count: tabs.len(),
             summary,
             active_tab,
-            tab_list,
+            tabs,
         })))
     }
 }
 
-fn summarize_tab_list(tab_list: &[TabInfo], active_index: Option<usize>) -> String {
-    if tab_list.is_empty() {
+fn summarize_tab_list(tabs: &[TabSummary], active_index: Option<usize>) -> String {
+    if tabs.is_empty() {
         return "No tabs available".to_string();
     }
 
-    let all_tabs_str = tab_list
+    let all_tabs_str = tabs
         .iter()
         .map(|tab| format!("[{}] Title: {} (URL: {})", tab.index, tab.title, tab.url))
         .collect::<Vec<_>>()
@@ -91,7 +70,7 @@ fn summarize_tab_list(tab_list: &[TabInfo], active_index: Option<usize>) -> Stri
 
     match active_index {
         Some(active_index) => {
-            let active_info = &tab_list[active_index];
+            let active_info = &tabs[active_index];
             format!(
                 "Current Tab: [{}] {}\nAll Tabs:\n{}",
                 active_index, active_info.title, all_tabs_str
@@ -107,10 +86,10 @@ fn summarize_tab_list(tab_list: &[TabInfo], active_index: Option<usize>) -> Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::browser::BrowserSession;
     use crate::browser::backend::{
         FakeSessionBackend, ScriptEvaluation, SessionBackend, TabDescriptor,
     };
-    use crate::browser::BrowserSession;
     use crate::dom::{DocumentMetadata, DomTree};
     use crate::error::BrowserError;
     use crate::tools::{Tool, ToolContext};
@@ -120,14 +99,14 @@ mod tests {
     fn test_summarize_tab_list_includes_active_tab_and_all_tabs() {
         let summary = summarize_tab_list(
             &[
-                TabInfo {
+                TabSummary {
                     tab_id: "tab-1".to_string(),
                     index: 0,
                     active: false,
                     title: "First".to_string(),
                     url: "https://first.example".to_string(),
                 },
-                TabInfo {
+                TabSummary {
                     tab_id: "tab-2".to_string(),
                     index: 1,
                     active: true,
@@ -151,7 +130,7 @@ mod tests {
     #[test]
     fn test_summarize_tab_list_reports_unknown_active_tab() {
         let summary = summarize_tab_list(
-            &[TabInfo {
+            &[TabSummary {
                 tab_id: "tab-1".to_string(),
                 index: 0,
                 active: false,
@@ -168,7 +147,7 @@ mod tests {
     #[test]
     fn test_tab_list_tool_does_not_invent_active_tab_when_backend_cannot_determine_one() {
         let session = BrowserSession::with_test_backend(FakeSessionBackend::with_no_active_tab());
-        let tool = TabListTool::default();
+        let tool = TabListTool;
         let mut context = ToolContext::new(&session);
 
         let result = tool
@@ -177,13 +156,15 @@ mod tests {
 
         assert!(result.success);
         let data = result.data.expect("tab_list should include data");
-        assert_eq!(data["tab_list"][0]["tab_id"].as_str(), Some("tab-1"));
-        assert_eq!(data["tab_list"][0]["active"].as_bool(), Some(false));
+        assert_eq!(data["tabs"][0]["tab_id"].as_str(), Some("tab-1"));
+        assert_eq!(data["tabs"][0]["active"].as_bool(), Some(false));
         assert!(data["active_tab"].is_null());
-        assert!(data["summary"]
-            .as_str()
-            .expect("summary should be present")
-            .contains("Current Tab: unavailable"));
+        assert!(
+            data["summary"]
+                .as_str()
+                .expect("summary should be present")
+                .contains("Current Tab: unavailable")
+        );
     }
 
     #[test]
@@ -193,7 +174,7 @@ mod tests {
             .open_tab_entry("https://second.example")
             .expect("second tab should open");
 
-        let tool = TabListTool::default();
+        let tool = TabListTool;
         let mut context = ToolContext::new(&session);
         let result = tool
             .execute_typed(TabListParams {}, &mut context)
@@ -201,8 +182,8 @@ mod tests {
 
         assert!(result.success);
         let data = result.data.expect("tab_list should include data");
-        assert_eq!(data["tab_list"][1]["tab_id"].as_str(), Some("tab-2"));
-        assert_eq!(data["tab_list"][1]["active"].as_bool(), Some(true));
+        assert_eq!(data["tabs"][1]["tab_id"].as_str(), Some("tab-2"));
+        assert_eq!(data["tabs"][1]["active"].as_bool(), Some(true));
         assert_eq!(data["active_tab"]["tab_id"].as_str(), Some("tab-2"));
         assert_eq!(data["active_tab"]["index"].as_u64(), Some(1));
         assert_eq!(
@@ -291,7 +272,7 @@ mod tests {
     #[test]
     fn test_tab_list_tool_propagates_unexpected_active_tab_failures() {
         let session = BrowserSession::with_test_backend(ActiveTabFailureBackend);
-        let tool = TabListTool::default();
+        let tool = TabListTool;
         let mut context = ToolContext::new(&session);
         let err = tool
             .execute_typed(TabListParams {}, &mut context)

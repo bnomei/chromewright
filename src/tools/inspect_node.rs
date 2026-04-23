@@ -1,15 +1,18 @@
-use crate::dom::{Cursor, DocumentMetadata, NodeRef};
+use crate::dom::{Cursor, NodeRef};
 use crate::error::{BrowserError, Result};
 use crate::tools::{
-    TargetEnvelope, Tool, ToolContext, ToolResult, services::inspection::execute_inspect_node,
+    DocumentActionResult, TargetEnvelope, Tool, ToolContext, ToolResult, core::PublicTarget,
+    services::inspection::execute_inspect_node,
 };
-use schemars::JsonSchema;
+use schemars::{JsonSchema, Schema, SchemaGenerator};
+use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 const INSPECT_NODE_JS: &str = include_str!("inspect_node.js");
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum InspectDetail {
     Compact,
@@ -20,7 +23,7 @@ fn default_detail() -> InspectDetail {
     InspectDetail::Compact
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize)]
 pub struct InspectNodeParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub selector: Option<String>,
@@ -41,16 +44,58 @@ pub struct InspectNodeParams {
     pub style_names: Vec<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct StrictInspectNodeParams {
+    /// Target to inspect.
+    pub target: PublicTarget,
+    #[serde(default = "default_detail")]
+    pub detail: InspectDetail,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub style_names: Vec<String>,
+}
+
+impl From<StrictInspectNodeParams> for InspectNodeParams {
+    fn from(params: StrictInspectNodeParams) -> Self {
+        let (selector, cursor) = params.target.into_selector_or_cursor();
+        Self {
+            selector,
+            index: None,
+            node_ref: None,
+            cursor,
+            detail: params.detail,
+            style_names: params.style_names,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for InspectNodeParams {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        StrictInspectNodeParams::deserialize(deserializer).map(Into::into)
+    }
+}
+
+impl JsonSchema for InspectNodeParams {
+    fn schema_name() -> Cow<'static, str> {
+        "InspectNodeParams".into()
+    }
+
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        StrictInspectNodeParams::json_schema(generator)
+    }
+}
+
 #[derive(Default)]
 pub struct InspectNodeTool;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct InspectNodeOutput {
-    pub action: String,
-    pub document: DocumentMetadata,
+    #[serde(flatten)]
+    pub result: DocumentActionResult,
     pub target: TargetEnvelope,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cursor: Option<Cursor>,
     pub identity: InspectIdentity,
     pub accessibility: InspectAccessibility,
     pub form_state: InspectFormState,
@@ -176,6 +221,8 @@ pub(crate) struct InspectNodeProbePayload {
     #[serde(default)]
     pub actionable_index: Option<usize>,
     #[serde(default)]
+    pub resolved_selector: Option<String>,
+    #[serde(default)]
     pub identity: Option<InspectIdentity>,
     #[serde(default)]
     pub accessibility: Option<InspectAccessibility>,
@@ -202,7 +249,7 @@ impl Tool for InspectNodeTool {
     }
 
     fn description(&self) -> &str {
-        "Inspect one node after snapshot. Prefer cursor; selector reads may be non-actionable."
+        "Inspect one node via target.selector/cursor. Stale cursors may rebound; snapshot rereads."
     }
 
     fn execute_typed(
@@ -241,6 +288,8 @@ mod tests {
     use crate::browser::BrowserSession;
     use crate::browser::backend::FakeSessionBackend;
     use crate::tools::{OPERATION_METRICS_METADATA_KEY, Tool, ToolContext};
+    use schemars::schema_for;
+    use serde_json::json;
 
     #[test]
     fn test_decode_probe_payload_accepts_json_string() {
@@ -299,12 +348,61 @@ mod tests {
         );
         assert!(inspect_js.contains("querySelectorAcrossScopes("));
         assert!(inspect_js.contains("searchActionableIndex(config.target_index)"));
+        assert!(inspect_js.contains("resolved_selector: buildSelector(element),"));
+    }
+
+    #[test]
+    fn test_inspect_node_params_deserialize_strict_target_and_hide_legacy_fields() {
+        let params: InspectNodeParams = serde_json::from_value(json!({
+            "target": {
+                "kind": "selector",
+                "selector": "#save"
+            },
+            "detail": "full",
+            "style_names": ["display"]
+        }))
+        .expect("strict inspect params should deserialize");
+
+        assert_eq!(params.selector.as_deref(), Some("#save"));
+        assert_eq!(params.index, None);
+        assert_eq!(params.node_ref, None);
+        assert_eq!(params.cursor, None);
+        assert_eq!(params.detail, InspectDetail::Full);
+        assert_eq!(params.style_names, vec!["display".to_string()]);
+
+        let error = serde_json::from_value::<InspectNodeParams>(json!({
+            "cursor": {
+                "node_ref": {
+                    "document_id": "doc-1",
+                    "revision": "main:1",
+                    "index": 1
+                },
+                "selector": "#save",
+                "index": 1,
+                "role": "button",
+                "name": "Save"
+            }
+        }))
+        .expect_err("legacy cursor field should be rejected");
+        assert!(error.to_string().contains("unknown field `cursor`"));
+
+        let schema = schema_for!(InspectNodeParams);
+        let schema_json = serde_json::to_value(&schema).expect("schema should serialize");
+        let properties = schema_json
+            .get("properties")
+            .and_then(|value| value.as_object())
+            .expect("inspect_node params schema should expose properties");
+        assert!(properties.contains_key("target"));
+        assert!(!properties.contains_key("selector"));
+        assert!(!properties.contains_key("index"));
+        assert!(!properties.contains_key("node_ref"));
+        assert!(!properties.contains_key("cursor"));
     }
 
     #[test]
     fn test_inspect_node_tool_executes_against_fake_backend_and_attaches_metrics() {
         let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
-        let tool = InspectNodeTool::default();
+        let tool = InspectNodeTool;
         let mut context = ToolContext::new(&session);
 
         let result = tool
@@ -324,13 +422,14 @@ mod tests {
         assert!(result.success);
         let data = result.data.expect("inspect_node should include data");
         assert_eq!(data["identity"]["tag"].as_str(), Some("button"));
+        assert!(data.get("cursor").is_none());
         assert!(result.metadata.contains_key(OPERATION_METRICS_METADATA_KEY));
     }
 
     #[test]
     fn test_inspect_node_tool_returns_structured_failure_for_incomplete_probe_payload() {
         let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
-        let tool = InspectNodeTool::default();
+        let tool = InspectNodeTool;
         let mut context = ToolContext::new(&session);
 
         let result = tool

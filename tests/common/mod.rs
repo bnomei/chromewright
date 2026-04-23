@@ -2,11 +2,13 @@
 
 use chromewright::{BrowserError, BrowserSession, LaunchOptions, Result};
 use serde_json::Value;
+use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
+const PNG_SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
 
 fn launch_error_is_environmental(message: &str) -> bool {
     [
@@ -82,8 +84,12 @@ pub fn navigate_html(session: &BrowserSession, html: impl AsRef<str>) -> Result<
 }
 
 pub fn navigate_encoded_html(session: &BrowserSession, html: impl AsRef<str>) -> Result<()> {
-    let data_url = format!("data:text/html,{}", urlencoding::encode(html.as_ref()));
+    let data_url = encoded_html_url(html);
     navigate_and_wait(session, &data_url)
+}
+
+pub fn encoded_html_url(html: impl AsRef<str>) -> String {
+    format!("data:text/html,{}", urlencoding::encode(html.as_ref()))
 }
 
 pub fn wait_for_document_ready(session: &BrowserSession) -> Result<()> {
@@ -194,4 +200,51 @@ fn json_value_is_truthy(value: Option<&Value>) -> bool {
         Some(Value::Array(value)) => !value.is_empty(),
         Some(Value::Object(value)) => !value.is_empty(),
     }
+}
+
+pub fn assert_png_screenshot_artifact(data: &Value) -> PathBuf {
+    assert_eq!(data["format"].as_str(), Some("png"));
+    assert_eq!(data["mime_type"].as_str(), Some("image/png"));
+    assert!(
+        data["artifact_uri"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("file://"),
+        "artifact_uri should point at a managed file"
+    );
+
+    let artifact_path = PathBuf::from(
+        data["artifact_path"]
+            .as_str()
+            .expect("artifact_path should be returned"),
+    );
+    assert!(
+        artifact_path.is_file(),
+        "artifact_path should exist on disk: {}",
+        artifact_path.display()
+    );
+
+    let bytes = std::fs::read(&artifact_path).expect("screenshot artifact should be readable");
+    assert!(
+        bytes.starts_with(PNG_SIGNATURE),
+        "screenshot artifact should be a PNG"
+    );
+    assert_eq!(data["byte_count"].as_u64(), Some(bytes.len() as u64));
+
+    let (width, height) = png_dimensions(&bytes);
+    assert_eq!(data["width"].as_u64(), Some(width as u64));
+    assert_eq!(data["height"].as_u64(), Some(height as u64));
+
+    artifact_path
+}
+
+fn png_dimensions(bytes: &[u8]) -> (u32, u32) {
+    assert!(
+        bytes.len() >= 24 && &bytes[..PNG_SIGNATURE.len()] == PNG_SIGNATURE,
+        "PNG header should be present"
+    );
+
+    let width = u32::from_be_bytes(bytes[16..20].try_into().expect("width bytes should exist"));
+    let height = u32::from_be_bytes(bytes[20..24].try_into().expect("height bytes should exist"));
+    (width, height)
 }

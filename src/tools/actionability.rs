@@ -350,7 +350,11 @@ mod tests {
         }
 
         fn list_tabs(&self) -> Result<Vec<TabDescriptor>> {
-            unreachable!("list_tabs is not used in this test")
+            Ok(vec![TabDescriptor {
+                id: "tab-1".to_string(),
+                title: "Test Tab".to_string(),
+                url: "about:blank".to_string(),
+            }])
         }
 
         fn active_tab(&self) -> Result<TabDescriptor> {

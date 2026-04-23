@@ -6,12 +6,22 @@ use crate::tools::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// Mode for the snapshot tool surface.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SnapshotMode {
+    #[default]
+    Viewport,
+    Delta,
+    Full,
+}
+
 /// Parameters for the snapshot tool
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 pub struct SnapshotParams {
-    /// Whether to include full snapshot or incremental
+    /// Snapshot surface mode. `viewport` is the default agent-facing reread.
     #[serde(default)]
-    pub incremental: bool,
+    pub mode: SnapshotMode,
 }
 
 /// Tool for getting an ARIA snapshot of the page in YAML format
@@ -27,7 +37,7 @@ impl Tool for SnapshotTool {
     }
 
     fn description(&self) -> &str {
-        "Capture page state and cursors. Next: inspect_node, click, input, select, hover, wait."
+        "Capture viewport, delta, or full state. Indices mirror nodes. Next: inspect_node, click, wait."
     }
 
     fn execute_typed(
@@ -35,10 +45,11 @@ impl Tool for SnapshotTool {
         params: SnapshotParams,
         context: &mut ToolContext,
     ) -> Result<ToolResult> {
-        let mut envelope = build_document_envelope(context, None, DocumentEnvelopeOptions::full())?;
-        if params.incremental {
-            envelope.snapshot = envelope.snapshot.take();
-        }
+        let envelope = build_document_envelope(
+            context,
+            None,
+            DocumentEnvelopeOptions::snapshot(params.mode),
+        )?;
 
         Ok(context.finish(ToolResult::success_with(envelope)))
     }
@@ -155,8 +166,9 @@ fn visit(
 
         // Render children
         let child_indent = format!("{}  ", indent);
-        let in_cursor_pointer =
-            aria_node.index.is_some() && render_cursor_pointer && aria_node.has_pointer_cursor();
+        let in_cursor_pointer = aria_node.has_public_handle()
+            && render_cursor_pointer
+            && aria_node.has_pointer_cursor();
 
         for child in &aria_node.children {
             match child {
@@ -228,7 +240,7 @@ fn create_key(aria_node: &AriaNode, render_cursor_pointer: bool, render_active: 
     }
 
     // Add index attribute
-    if let Some(index) = aria_node.index {
+    if let Some(index) = aria_node.index.filter(|_| aria_node.has_public_handle()) {
         key.push_str(&format!(" [index={}]", index));
 
         if render_cursor_pointer && aria_node.has_pointer_cursor() {
@@ -258,6 +270,7 @@ mod tests {
         root.children.push(AriaChild::Node(Box::new(
             AriaNode::new("button", "Click me")
                 .with_index(0)
+                .with_public_handle(true)
                 .with_box(true, Some("pointer".to_string())),
         )));
 
@@ -305,6 +318,7 @@ mod tests {
         root.children.push(AriaChild::Node(Box::new(
             AriaNode::new("link", "Go to page")
                 .with_index(0)
+                .with_public_handle(true)
                 .with_prop("url", "https://example.com"),
         )));
 
@@ -322,6 +336,7 @@ mod tests {
         root.children.push(AriaChild::Node(Box::new(
             AriaNode::new("checkbox", "Accept terms")
                 .with_index(0)
+                .with_public_handle(true)
                 .with_checked(true)
                 .with_disabled(false),
         )));
@@ -351,5 +366,24 @@ mod tests {
         let root = AriaNode::fragment();
         let yaml = render_aria_tree(&root, RenderMode::Ai, None);
         assert_eq!(yaml.trim(), "");
+    }
+
+    #[test]
+    fn test_render_omits_inline_index_for_non_public_handle() {
+        let mut root = AriaNode::fragment();
+        root.children.push(AriaChild::Node(Box::new(
+            AriaNode::new("button", "Detached")
+                .with_index(2)
+                .with_box(true, Some("pointer".to_string())),
+        )));
+
+        let yaml = render_aria_tree(&root, RenderMode::Ai, None);
+        assert!(!yaml.contains("[index=2]"));
+        assert!(!yaml.contains("[cursor=pointer]"));
+    }
+
+    #[test]
+    fn test_snapshot_mode_defaults_to_viewport() {
+        assert_eq!(SnapshotParams::default().mode, SnapshotMode::Viewport);
     }
 }

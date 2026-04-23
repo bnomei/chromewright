@@ -1,13 +1,17 @@
+use crate::browser::backend::{
+    ChromeSessionBackend, ScreenshotCapture, ScreenshotRequest, ScriptEvaluation, SessionBackend,
+};
 #[cfg(test)]
 use crate::browser::backend::{
-    build_launch_options, choose_debug_port, FakeSessionBackend, DEBUG_PORT_END, DEBUG_PORT_START,
+    DEBUG_PORT_END, DEBUG_PORT_START, FakeSessionBackend, build_launch_options, choose_debug_port,
 };
-use crate::browser::backend::{ChromeSessionBackend, ScriptEvaluation, SessionBackend};
+#[cfg(test)]
+use crate::browser::config::CHROME_BROWSER_IDLE_TIMEOUT;
 use crate::browser::{ConnectionOptions, LaunchOptions};
 use crate::dom::{DocumentMetadata, DomTree};
 use crate::error::{BrowserError, Result};
 use crate::tools::{ToolContext, ToolRegistry};
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -15,7 +19,8 @@ mod cache;
 mod history;
 mod tabs;
 
-pub(crate) use cache::MarkdownCacheEntry;
+pub use cache::ScreenshotArtifact;
+pub(crate) use cache::{MarkdownCacheEntry, SnapshotCacheEntry, SnapshotCacheScope};
 
 /// Browser session that manages a Chrome/Chromium instance
 pub struct BrowserSession {
@@ -35,6 +40,12 @@ pub struct BrowserSession {
 
     /// Cache the most recent markdown extraction by document revision.
     markdown_cache: Mutex<Option<Arc<MarkdownCacheEntry>>>,
+
+    /// Cache the most recent snapshot base for delta-style follow-up reads.
+    snapshot_cache: Mutex<Option<Arc<SnapshotCacheEntry>>>,
+
+    /// Managed screenshot artifacts retained for the current session.
+    screenshot_artifacts: Mutex<VecDeque<Arc<ScreenshotArtifact>>>,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -92,7 +103,8 @@ impl BrowserSession {
 
     /// Navigate to a URL using the active tab
     pub fn navigate(&self, url: &str) -> Result<()> {
-        self.backend.navigate(url)
+        self.backend.navigate(url)?;
+        self.invalidate_snapshot_cache()
     }
 
     /// Read document metadata from the active tab without rebuilding the full DOM snapshot.
@@ -118,6 +130,11 @@ impl BrowserSession {
     /// Extract the DOM tree from the active tab
     pub fn extract_dom(&self) -> Result<DomTree> {
         self.backend.extract_dom()
+    }
+
+    /// Extract the DOM tree from a specific tab without activating it.
+    pub(crate) fn extract_dom_for_tab(&self, tab_id: &str) -> Result<DomTree> {
+        self.backend.extract_dom_for_tab(tab_id)
     }
 
     /// Extract the DOM tree with a custom ref prefix (for iframe handling)
@@ -176,8 +193,38 @@ impl BrowserSession {
         self.backend.evaluate(script, await_promise)
     }
 
+    pub(crate) fn evaluate_on_tab(
+        &self,
+        tab_id: &str,
+        script: &str,
+        await_promise: bool,
+    ) -> Result<ScriptEvaluation> {
+        self.backend.evaluate_on_tab(tab_id, script, await_promise)
+    }
+
+    #[cfg(test)]
     pub(crate) fn capture_screenshot(&self, full_page: bool) -> Result<Vec<u8>> {
-        self.backend.capture_screenshot(full_page)
+        let artifact =
+            self.capture_screenshot_artifact(ScreenshotRequest::from_legacy_full_page(full_page))?;
+        Ok(artifact.bytes().as_ref().to_vec())
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn capture_screenshot_artifact(
+        &self,
+        request: ScreenshotRequest,
+    ) -> Result<Arc<ScreenshotArtifact>> {
+        let capture = self.backend.capture_screenshot_with_request(&request)?;
+        self.store_screenshot_artifact(capture)
+    }
+
+    pub(crate) fn capture_screenshot_artifact_with_capture(
+        &self,
+        request: ScreenshotRequest,
+    ) -> Result<(Arc<ScreenshotArtifact>, ScreenshotCapture)> {
+        let capture = self.backend.capture_screenshot_with_request(&request)?;
+        let artifact = self.store_screenshot_artifact(capture.clone())?;
+        Ok((artifact, capture))
     }
 
     pub(crate) fn press_key(&self, key: &str) -> Result<()> {
@@ -197,6 +244,8 @@ impl BrowserSession {
     /// Close all open tabs in the current session backend.
     pub fn close(&self) -> Result<()> {
         self.backend.close()?;
+        self.clear_screenshot_artifacts()?;
+        self.invalidate_snapshot_cache()?;
         self.clear_managed_tabs()
     }
 
@@ -219,6 +268,8 @@ impl BrowserSession {
             managed_tab_ids: Mutex::new(managed_tab_ids),
             tool_registry: ToolRegistry::with_defaults(),
             markdown_cache: Mutex::new(None),
+            snapshot_cache: Mutex::new(None),
+            screenshot_artifacts: Mutex::new(VecDeque::new()),
         })
     }
 
@@ -290,14 +341,27 @@ impl BrowserSession {
         ids.sort();
         ids
     }
+
+    #[cfg(test)]
+    pub(crate) fn screenshot_artifacts_for_test(&self) -> Vec<Arc<ScreenshotArtifact>> {
+        self.screenshot_artifacts
+            .lock()
+            .expect("screenshot artifact state should be readable")
+            .iter()
+            .cloned()
+            .collect()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::browser::launch_error_is_environmental;
+    use crate::browser::{ScreenshotMode, ScreenshotRequest};
+    use crate::dom::SnapshotNode;
     use serde_json::json;
     use std::ffi::OsStr;
+    use std::sync::Arc;
 
     fn launch_or_skip(result: Result<BrowserSession>) -> Option<BrowserSession> {
         match result {
@@ -308,6 +372,28 @@ mod tests {
             }
             Err(err) => panic!("Unexpected launch failure: {}", err),
         }
+    }
+
+    fn seed_snapshot_cache(session: &BrowserSession) {
+        let document = session
+            .document_metadata()
+            .expect("document metadata should be available");
+
+        session
+            .store_snapshot_cache(Arc::new(SnapshotCacheEntry {
+                document,
+                snapshot: Arc::<str>::from("button \"Fake target\""),
+                nodes: Vec::<SnapshotNode>::new(),
+                scope: SnapshotCacheScope {
+                    mode: "viewport".to_string(),
+                    fallback_mode: None,
+                    viewport_biased: true,
+                    returned_node_count: 0,
+                    unavailable_frame_count: 0,
+                    global_interactive_count: Some(1),
+                },
+            }))
+            .expect("snapshot cache should store");
     }
 
     #[test]
@@ -364,16 +450,20 @@ mod tests {
         );
         assert_eq!(
             launch_opts.idle_browser_timeout,
-            Duration::from_secs(60 * 60)
+            CHROME_BROWSER_IDLE_TIMEOUT
         );
-        assert!(launch_opts
-            .ignore_default_args
-            .iter()
-            .any(|arg| *arg == OsStr::new("--enable-automation")));
-        assert!(launch_opts
-            .args
-            .iter()
-            .any(|arg| { *arg == OsStr::new("--disable-blink-features=AutomationControlled") }));
+        assert!(
+            launch_opts
+                .ignore_default_args
+                .iter()
+                .any(|arg| *arg == OsStr::new("--enable-automation"))
+        );
+        assert!(
+            launch_opts
+                .args
+                .iter()
+                .any(|arg| { *arg == OsStr::new("--disable-blink-features=AutomationControlled") })
+        );
     }
 
     #[test]
@@ -382,6 +472,44 @@ mod tests {
         let port = launch_opts.port.expect("port should be assigned");
 
         assert!((DEBUG_PORT_START..=DEBUG_PORT_END).contains(&port));
+    }
+
+    #[test]
+    #[ignore]
+    fn test_attach_session_survives_idle_timeout_window() {
+        let port = choose_debug_port();
+        let Some(_launched) = launch_or_skip(BrowserSession::launch(
+            LaunchOptions::new().headless(true).debug_port(port),
+        )) else {
+            return;
+        };
+
+        let attached =
+            BrowserSession::connect(ConnectionOptions::new(format!("http://127.0.0.1:{port}")))
+                .expect("attach session should connect to launched browser");
+
+        attached
+            .navigate("data:text/html,<html><body><button id='save'>Save</button></body></html>")
+            .expect("attached session should navigate");
+        attached
+            .wait_for_document_ready_with_timeout(Duration::from_secs(5))
+            .expect("attached session should reach readyState complete");
+
+        std::thread::sleep(Duration::from_secs(31));
+
+        let snapshot = attached
+            .execute_tool("snapshot", json!({}))
+            .expect("snapshot should execute after the old 30-second timeout window");
+
+        assert!(snapshot.success);
+        let data = snapshot.data.expect("snapshot should include data");
+        assert!(
+            data["snapshot"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("button")
+        );
+        assert!(data["document"]["revision"].as_str().is_some());
     }
 
     #[test]
@@ -406,6 +534,29 @@ mod tests {
             Some("https://example.com")
         );
         assert_eq!(data["document"]["ready_state"].as_str(), Some("complete"));
+    }
+
+    #[test]
+    fn test_navigate_invalidates_snapshot_cache() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        seed_snapshot_cache(&session);
+        assert!(
+            session
+                .snapshot_cache_for_test()
+                .expect("snapshot cache should be readable")
+                .is_some()
+        );
+
+        session
+            .navigate("https://example.com")
+            .expect("navigation should succeed");
+
+        assert!(
+            session
+                .snapshot_cache_for_test()
+                .expect("snapshot cache should be readable")
+                .is_none()
+        );
     }
 
     #[test]
@@ -488,11 +639,13 @@ mod tests {
         let data = result
             .data
             .expect("invalid parameter failure should include details");
-        assert_eq!(data["code"].as_str(), Some("invalid_argument"));
-        assert!(data["error"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("Invalid parameters"));
+        assert_eq!(data["code"].as_str(), Some("invalid_target_request"));
+        assert!(
+            data["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("Provide exactly one of index or tab_id")
+        );
     }
 
     #[test]
@@ -512,10 +665,12 @@ mod tests {
         let data = result.data.expect("close failure should include details");
         assert_eq!(data["code"].as_str(), Some("tool_execution_failed"));
         assert_eq!(data["tool"].as_str(), Some("close"));
-        assert!(data["error"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("stuck.example"));
+        assert!(
+            data["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("stuck.example")
+        );
     }
 
     #[test]
@@ -528,16 +683,20 @@ mod tests {
         let initial_id = session.list_tabs().expect("initial tabs should list")[0]
             .id
             .clone();
-        assert!(session
-            .is_tab_managed(&initial_id)
-            .expect("managed state should read"));
+        assert!(
+            session
+                .is_tab_managed(&initial_id)
+                .expect("managed state should read")
+        );
 
         let opened = session
             .open_tab_entry("https://managed.example")
             .expect("managed tab should open");
-        assert!(session
-            .is_tab_managed(&opened.id)
-            .expect("opened tab should be tracked"));
+        assert!(
+            session
+                .is_tab_managed(&opened.id)
+                .expect("opened tab should be tracked")
+        );
         assert_eq!(
             session.managed_tab_ids_for_test(),
             vec![initial_id, opened.id.clone()]
@@ -560,16 +719,20 @@ mod tests {
         let existing_id = session.list_tabs().expect("initial tabs should list")[0]
             .id
             .clone();
-        assert!(!session
-            .is_tab_managed(&existing_id)
-            .expect("existing connected tab should be readable"));
+        assert!(
+            !session
+                .is_tab_managed(&existing_id)
+                .expect("existing connected tab should be readable")
+        );
 
         let opened = session
             .open_tab_entry("https://managed.example")
             .expect("managed tab should open");
-        assert!(session
-            .is_tab_managed(&opened.id)
-            .expect("opened tab should be tracked"));
+        assert!(
+            session
+                .is_tab_managed(&opened.id)
+                .expect("opened tab should be tracked")
+        );
         assert_eq!(session.managed_tab_ids_for_test(), vec![opened.id.clone()]);
 
         let closed = session
@@ -582,13 +745,54 @@ mod tests {
             .expect("remaining about:blank tab should become active");
         assert_eq!(active_tab.id, existing_id);
         assert!(active_tab.active);
-        assert!(!session
-            .is_tab_managed(&opened.id)
-            .expect("closed tab should be forgotten"));
+        assert!(
+            !session
+                .is_tab_managed(&opened.id)
+                .expect("closed tab should be forgotten")
+        );
         assert!(session.managed_tab_ids_for_test().is_empty());
-        assert!(!session
-            .is_tab_managed(&existing_id)
-            .expect("pre-existing tab should stay unmanaged"));
+        assert!(
+            !session
+                .is_tab_managed(&existing_id)
+                .expect("pre-existing tab should stay unmanaged")
+        );
+    }
+
+    #[test]
+    fn test_legacy_capture_screenshot_stores_managed_artifact() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+
+        let bytes = session
+            .capture_screenshot(true)
+            .expect("legacy screenshot capture should succeed");
+
+        assert!(
+            bytes.starts_with(&[137, 80, 78, 71]),
+            "legacy path should still return png bytes"
+        );
+
+        let artifacts = session.screenshot_artifacts_for_test();
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(artifacts[0].mode, ScreenshotMode::FullPage);
+        assert_eq!(artifacts[0].byte_count, bytes.len());
+    }
+
+    #[test]
+    fn test_close_clears_managed_screenshot_artifacts() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        let artifact = session
+            .capture_screenshot_artifact(ScreenshotRequest::default())
+            .expect("managed screenshot should succeed");
+        let path = artifact.path.clone();
+        assert!(path.exists(), "managed screenshot should exist on disk");
+
+        session.close().expect("session close should succeed");
+
+        assert!(session.screenshot_artifacts_for_test().is_empty());
+        assert!(
+            !path.exists(),
+            "managed screenshot artifacts should be removed on close"
+        );
     }
 
     #[test]

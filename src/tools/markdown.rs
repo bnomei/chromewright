@@ -1,5 +1,7 @@
 use crate::error::{BrowserError, Result};
-use crate::tools::{Tool, ToolContext, ToolResult, services::markdown::execute_get_markdown};
+use crate::tools::{
+    DocumentResult, Tool, ToolContext, ToolResult, services::markdown::execute_get_markdown,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -51,8 +53,9 @@ impl GetMarkdownParams {
 pub struct GetMarkdownTool;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
 pub struct GetMarkdownOutput {
+    #[serde(flatten)]
+    pub result: DocumentResult,
     pub markdown: String,
     pub title: String,
     pub url: String,

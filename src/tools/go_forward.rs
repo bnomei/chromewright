@@ -1,6 +1,7 @@
 use crate::error::{BrowserError, Result};
 use crate::tools::{
     DocumentEnvelopeOptions, Tool, ToolContext, ToolResult, build_document_envelope,
+    core::DocumentActionResult,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -13,16 +14,9 @@ pub struct GoForwardParams {}
 #[derive(Default)]
 pub struct GoForwardTool;
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct GoForwardOutput {
-    #[serde(flatten)]
-    pub envelope: crate::tools::DocumentEnvelope,
-    pub action: String,
-}
-
 impl Tool for GoForwardTool {
     type Params = GoForwardParams;
-    type Output = GoForwardOutput;
+    type Output = DocumentActionResult;
 
     fn name(&self) -> &str {
         "go_forward"
@@ -48,9 +42,11 @@ impl Tool for GoForwardTool {
 
         context.invalidate_dom();
         let envelope = build_document_envelope(context, None, DocumentEnvelopeOptions::minimal())?;
-        Ok(context.finish(ToolResult::success_with(GoForwardOutput {
-            envelope,
-            action: "go_forward".to_string(),
-        })))
+        Ok(
+            context.finish(ToolResult::success_with(DocumentActionResult::new(
+                "go_forward",
+                envelope.document,
+            ))),
+        )
     }
 }

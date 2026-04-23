@@ -4,7 +4,7 @@
 //! It exposes browser automation tools that can be used by AI assistants and other MCP clients.
 
 use chromewright::{BrowserServer, ConnectionOptions, LaunchOptions};
-use clap::{Parser, ValueEnum};
+use clap::{Parser, Subcommand};
 use log::{debug, info};
 use rmcp::{ServiceExt, transport::stdio};
 use std::io::{stdin, stdout};
@@ -15,18 +15,24 @@ use rmcp::transport::streamable_http_server::{
     StreamableHttpService, session::local::LocalSessionManager,
 };
 
-#[derive(Debug, Clone, Copy, ValueEnum)]
-enum Transport {
-    /// Standard input/output transport
-    Stdio,
-    /// HTTP streamable transport (default)
-    Http,
-}
-
 #[derive(Debug, Clone)]
 enum BrowserMode {
     Launch(LaunchOptions),
     Connect(ConnectionOptions),
+}
+
+#[derive(Debug, Clone, Subcommand)]
+enum Command {
+    /// Serve streamable HTTP on loopback for shared local MCP sessions.
+    Serve {
+        /// Port for HTTP transport (default: 3000)
+        #[arg(long, short = 'p', default_value_t = 3000)]
+        port: u16,
+
+        /// HTTP streamable endpoint path (default: /mcp)
+        #[arg(long, default_value = "/mcp")]
+        http_path: String,
+    },
 }
 
 #[derive(Debug, Parser)]
@@ -34,9 +40,9 @@ enum BrowserMode {
 #[command(version)]
 #[command(about = "Browser automation MCP server", long_about = None)]
 struct Cli {
-    /// Launch a new browser in headed mode instead of attaching to the default Chrome session
-    #[arg(long, short = 'H', conflicts_with = "ws_endpoint")]
-    headed: bool,
+    /// Launch a new browser in headless mode instead of headed launch mode
+    #[arg(long, conflicts_with = "ws_endpoint")]
+    headless: bool,
 
     /// Path to custom browser executable for launch mode
     #[arg(long, value_name = "PATH", conflicts_with = "ws_endpoint")]
@@ -47,7 +53,7 @@ struct Cli {
     #[arg(
         long,
         value_name = "URL",
-        conflicts_with_all = ["headed", "executable_path", "user_data_dir", "debug_port"]
+        conflicts_with_all = ["headless", "executable_path", "user_data_dir", "debug_port"]
     )]
     ws_endpoint: Option<String>,
 
@@ -59,23 +65,14 @@ struct Cli {
     #[arg(long, value_name = "PORT", conflicts_with = "ws_endpoint")]
     debug_port: Option<u16>,
 
-    /// Transport type to use
-    #[arg(long, short = 't', value_enum, default_value = "http")]
-    transport: Transport,
-
-    /// Port for HTTP transport (default: 3000)
-    #[arg(long, short = 'p', default_value = "3000")]
-    port: u16,
-
-    /// HTTP streamable endpoint path (default: /mcp)
-    #[arg(long, default_value = "/mcp")]
-    http_path: String,
+    #[command(subcommand)]
+    command: Option<Command>,
 }
 
 const DEFAULT_WS_ENDPOINT: &str = "http://127.0.0.1:9222";
 
 fn wants_launch_mode(cli: &Cli) -> bool {
-    cli.headed
+    cli.headless
         || cli.executable_path.is_some()
         || cli.user_data_dir.is_some()
         || cli.debug_port.is_some()
@@ -91,7 +88,7 @@ fn browser_mode_from_cli(cli: &Cli) -> BrowserMode {
     }
 
     BrowserMode::Launch(LaunchOptions {
-        headless: !cli.headed,
+        headless: cli.headless,
         chrome_path: cli.executable_path.clone(),
         user_data_dir: cli.user_data_dir.clone(),
         debug_port: cli.debug_port,
@@ -144,9 +141,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Route to appropriate transport
-    match cli.transport {
-        Transport::Stdio => {
+    match cli.command {
+        None => {
             info!("Transport: stdio");
             info!("Ready to accept MCP connections via stdio");
             let (_read, _write) = (stdin(), stdout());
@@ -154,7 +150,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map_err(|e| format!("Failed to create browser server: {}", e))?;
             let server = service.serve(stdio()).await?;
 
-            // Set up signal handler for graceful shutdown
             #[cfg(unix)]
             {
                 let mut sigterm =
@@ -199,18 +194,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 debug!("Server quit with reason: {:?}", quit_reason);
             }
         }
-        Transport::Http => {
+        Some(Command::Serve { port, http_path }) => {
             info!("Transport: HTTP streamable");
-            info!("Port: {}", cli.port);
-            info!("HTTP path: {}", cli.http_path);
+            info!("Port: {}", port);
+            info!("HTTP path: {}", http_path);
 
-            let bind_addr = format!("127.0.0.1:{}", cli.port);
+            let bind_addr = format!("127.0.0.1:{}", port);
             let browser_mode = browser_mode.clone();
 
-            // Create service factory closure
             let service_factory = move || {
                 create_browser_server(&browser_mode)
-                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+                    .map_err(|e| std::io::Error::other(e.to_string()))
             };
 
             let http_service = StreamableHttpService::new(
@@ -219,11 +213,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Default::default(),
             );
 
-            let router = axum::Router::new().nest_service(&cli.http_path, http_service);
+            let router = axum::Router::new().nest_service(&http_path, http_service);
 
             info!(
                 "Ready to accept MCP connections at http://{}{}",
-                bind_addr, cli.http_path
+                bind_addr, http_path
             );
 
             let listener = tokio::net::TcpListener::bind(bind_addr).await?;
@@ -240,10 +234,23 @@ mod tests {
     use clap::error::ErrorKind;
 
     #[test]
-    fn test_cli_defaults_to_streamable_http_transport() {
+    fn test_cli_defaults_to_stdio_without_subcommand() {
         let cli = Cli::try_parse_from(["chromewright"]).expect("CLI should parse");
 
-        assert!(matches!(cli.transport, Transport::Http));
+        assert!(cli.command.is_none());
+    }
+
+    #[test]
+    fn test_cli_serve_subcommand_defaults_to_streamable_http() {
+        let cli = Cli::try_parse_from(["chromewright", "serve"]).expect("CLI should parse");
+
+        match cli.command {
+            Some(Command::Serve { port, http_path }) => {
+                assert_eq!(port, 3000);
+                assert_eq!(http_path, "/mcp");
+            }
+            None => panic!("expected serve subcommand"),
+        }
     }
 
     #[test]
@@ -262,7 +269,6 @@ mod tests {
     fn test_browser_mode_uses_local_launch_flags() {
         let cli = Cli::try_parse_from([
             "chromewright",
-            "--headed",
             "--executable-path",
             "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
             "--user-data-dir",
@@ -274,7 +280,10 @@ mod tests {
 
         match browser_mode_from_cli(&cli) {
             BrowserMode::Launch(options) => {
-                assert!(!options.headless);
+                assert!(
+                    !options.headless,
+                    "launch mode should default to headed when no --headless flag is passed"
+                );
                 assert_eq!(
                     options.chrome_path,
                     Some(PathBuf::from(
@@ -292,12 +301,12 @@ mod tests {
     }
 
     #[test]
-    fn test_headed_launch_without_ws_endpoint_uses_launch_mode() {
-        let cli = Cli::try_parse_from(["chromewright", "--headed"]).expect("CLI should parse");
+    fn test_headless_flag_without_ws_endpoint_uses_launch_mode() {
+        let cli = Cli::try_parse_from(["chromewright", "--headless"]).expect("CLI should parse");
 
         match browser_mode_from_cli(&cli) {
             BrowserMode::Launch(options) => {
-                assert!(!options.headless);
+                assert!(options.headless);
             }
             BrowserMode::Connect(_) => panic!("expected local launch mode"),
         }
@@ -339,7 +348,7 @@ mod tests {
             "chromewright",
             "--ws-endpoint",
             "ws://127.0.0.1:9222/devtools/browser/test",
-            "--headed",
+            "--headless",
         ])
         .expect_err("CLI should reject conflicting browser modes");
 

@@ -41,13 +41,12 @@ impl Tool for CloseTool {
         let session_origin = context.session.session_origin_label().to_string();
         let (closed_tabs, skipped_tabs, scope, message) =
             if context.session.is_connected_session() && !params.confirm_destructive {
-                let summary = context
-                    .session
-                    .close_managed_tabs()
-                    .map_err(|e| BrowserError::ToolExecutionFailed {
+                let summary = context.session.close_managed_tabs().map_err(|e| {
+                    BrowserError::ToolExecutionFailed {
                         tool: "close".to_string(),
                         reason: e.to_string(),
-                    })?;
+                    }
+                })?;
                 (
                     summary.closed_tabs,
                     summary.skipped_tabs,
@@ -97,7 +96,7 @@ mod tests {
             .open_tab_entry("https://second.example")
             .expect("second tab should open");
 
-        let tool = CloseTool::default();
+        let tool = CloseTool;
         let mut context = ToolContext::new(&session);
         let result = tool
             .execute_typed(
@@ -133,7 +132,7 @@ mod tests {
             .open_tab_entry("https://stuck.example")
             .expect("stuck tab should open");
 
-        let tool = CloseTool::default();
+        let tool = CloseTool;
         let mut context = ToolContext::new(&session);
         let err = tool
             .execute_typed(
@@ -168,7 +167,7 @@ mod tests {
             .open_tab_entry("https://managed.example")
             .expect("managed tab should open");
 
-        let tool = CloseTool::default();
+        let tool = CloseTool;
         let mut context = ToolContext::new(&session);
         let result = tool
             .execute_typed(
@@ -200,7 +199,7 @@ mod tests {
             .open_tab_entry("https://managed.example")
             .expect("managed tab should open");
 
-        let tool = CloseTool::default();
+        let tool = CloseTool;
         let mut context = ToolContext::new(&session);
         let result = tool
             .execute_typed(

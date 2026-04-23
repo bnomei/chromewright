@@ -1,5 +1,6 @@
 use crate::error::Result;
-use crate::tools::{Tool, ToolContext, ToolResult};
+use crate::tools::core::structured_tool_failure;
+use crate::tools::{DocumentResult, Tool, ToolContext, ToolResult};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -22,6 +23,8 @@ pub struct ReadLinksTool;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ReadLinksOutput {
+    #[serde(flatten)]
+    pub result: DocumentResult,
     pub links: Vec<Link>,
     pub count: usize,
 }
@@ -63,20 +66,24 @@ impl Tool for ReadLinksTool {
         let links = match parse_links_output(result.value) {
             Ok(links) => links,
             Err(reason) => {
-                return Ok(context.finish(ToolResult::failure_with(
-                    reason.clone(),
-                    serde_json::json!({
-                        "code": "invalid_links_payload",
-                        "error": reason,
-                        "recovery": {
-                            "suggested_tool": "snapshot",
-                        }
-                    }),
+                return Ok(context.finish(structured_tool_failure(
+                    "invalid_links_payload",
+                    reason,
+                    None,
+                    None,
+                    Some(serde_json::json!({
+                        "suggested_tool": "snapshot",
+                    })),
+                    None,
                 )));
             }
         };
 
+        context.record_browser_evaluation();
+        let document = context.session.document_metadata()?;
+
         Ok(context.finish(ToolResult::success_with(ReadLinksOutput {
+            result: DocumentResult::new(document),
             count: links.len(),
             links,
         })))
@@ -155,7 +162,11 @@ mod tests {
         }
 
         fn list_tabs(&self) -> crate::error::Result<Vec<TabDescriptor>> {
-            unreachable!("list_tabs is not used in this test")
+            Ok(vec![TabDescriptor {
+                id: "tab-1".to_string(),
+                title: "Test Tab".to_string(),
+                url: "about:blank".to_string(),
+            }])
         }
 
         fn active_tab(&self) -> crate::error::Result<TabDescriptor> {
@@ -182,7 +193,7 @@ mod tests {
     #[test]
     fn test_read_links_tool_records_browser_evaluation_metrics() {
         let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
-        let tool = ReadLinksTool::default();
+        let tool = ReadLinksTool;
         let mut context = ToolContext::new(&session);
 
         let result = tool
@@ -193,13 +204,13 @@ mod tests {
         let metrics = result.metadata[OPERATION_METRICS_METADATA_KEY]
             .as_object()
             .expect("metrics metadata should be present");
-        assert_eq!(metrics["browser_evaluations"].as_u64(), Some(1));
+        assert_eq!(metrics["browser_evaluations"].as_u64(), Some(2));
     }
 
     #[test]
     fn test_read_links_tool_returns_structured_failure_for_invalid_payload() {
         let session = BrowserSession::with_test_backend(InvalidLinksPayloadBackend);
-        let tool = ReadLinksTool::default();
+        let tool = ReadLinksTool;
         let mut context = ToolContext::new(&session);
 
         let result = tool
@@ -218,6 +229,7 @@ mod tests {
             .data
             .expect("invalid payload failure should include details");
         assert_eq!(data["code"].as_str(), Some("invalid_links_payload"));
+        assert!(data["details"].is_null() || data["details"].as_object().is_none());
         assert_eq!(
             data["recovery"]["suggested_tool"].as_str(),
             Some("snapshot")

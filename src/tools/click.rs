@@ -1,22 +1,26 @@
 use crate::dom::{Cursor, NodeRef};
 use crate::error::{BrowserError, Result};
 use crate::tools::{
-    DocumentEnvelope, TargetEnvelope, TargetResolution, Tool, ToolContext, ToolResult,
+    TargetResolution, Tool, ToolContext, ToolResult,
     actionability::ActionabilityPredicate,
     browser_kernel::render_browser_kernel_script,
+    core::PublicTarget,
+    core::TargetedActionResult,
     services::interaction::{
-        ActionabilityWaitState, DEFAULT_ACTIONABILITY_TIMEOUT_MS, TargetStatus,
-        build_actionability_failure, build_interaction_failure, build_interaction_handoff,
-        decode_action_result, resolve_interaction_target, wait_for_actionability,
+        ActionabilityWaitState, DEFAULT_ACTIONABILITY_TIMEOUT_MS, build_actionability_failure,
+        build_interaction_failure, build_interaction_handoff, decode_action_result,
+        resolve_interaction_target, wait_for_actionability,
     },
 };
-use schemars::JsonSchema;
+use schemars::{JsonSchema, Schema, SchemaGenerator};
+use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 
 const CLICK_JS: &str = include_str!("click.js");
 
 /// Parameters for the click tool
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ClickParams {
     /// CSS selector (use either this or index, not both)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -35,24 +39,51 @@ pub struct ClickParams {
     pub cursor: Option<Cursor>,
 }
 
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct StrictClickParams {
+    /// Target to activate.
+    pub target: PublicTarget,
+}
+
+impl From<StrictClickParams> for ClickParams {
+    fn from(params: StrictClickParams) -> Self {
+        let (selector, cursor) = params.target.into_selector_or_cursor();
+        Self {
+            selector,
+            index: None,
+            node_ref: None,
+            cursor,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ClickParams {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        StrictClickParams::deserialize(deserializer).map(Into::into)
+    }
+}
+
+impl JsonSchema for ClickParams {
+    fn schema_name() -> Cow<'static, str> {
+        "ClickParams".into()
+    }
+
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        StrictClickParams::json_schema(generator)
+    }
+}
+
 /// Tool for clicking elements
 #[derive(Default)]
 pub struct ClickTool;
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct ClickOutput {
-    #[serde(flatten)]
-    pub envelope: DocumentEnvelope,
-    pub action: String,
-    pub target_before: TargetEnvelope,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub target_after: Option<TargetEnvelope>,
-    pub target_status: TargetStatus,
-}
-
 impl Tool for ClickTool {
     type Params = ClickParams;
-    type Output = ClickOutput;
+    type Output = TargetedActionResult;
 
     fn name(&self) -> &str {
         "click"
@@ -144,13 +175,15 @@ impl Tool for ClickTool {
         }
 
         let handoff = build_interaction_handoff(context, &target)?;
-        Ok(context.finish(ToolResult::success_with(ClickOutput {
-            envelope: handoff.envelope,
-            action: "click".to_string(),
-            target_before: handoff.target_before,
-            target_after: handoff.target_after,
-            target_status: handoff.target_status,
-        })))
+        Ok(
+            context.finish(ToolResult::success_with(TargetedActionResult::new(
+                "click",
+                handoff.document,
+                handoff.target_before,
+                handoff.target_after,
+                handoff.target_status,
+            ))),
+        )
     }
 }
 
@@ -171,9 +204,12 @@ fn click_actionability_predicates() -> &'static [ActionabilityPredicate] {
 
 #[cfg(test)]
 mod tests {
+    use super::ClickParams;
     use crate::browser::BrowserSession;
     use crate::browser::backend::FakeSessionBackend;
     use crate::tools::{OPERATION_METRICS_METADATA_KEY, Tool, ToolContext};
+    use schemars::schema_for;
+    use serde_json::json;
 
     use super::build_click_js;
 
@@ -193,7 +229,7 @@ mod tests {
     #[test]
     fn test_click_tool_executes_against_fake_backend_and_attaches_metrics() {
         let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
-        let tool = super::ClickTool::default();
+        let tool = super::ClickTool;
         let mut context = ToolContext::new(&session);
 
         let result = tool
@@ -217,5 +253,91 @@ mod tests {
             metrics["browser_evaluations"].as_u64().unwrap_or_default() > 0,
             "click should record browser evaluations"
         );
+    }
+
+    #[test]
+    fn test_click_params_deserializes_strict_target_selector() {
+        let params: ClickParams = serde_json::from_value(json!({
+            "target": {
+                "kind": "selector",
+                "selector": "#save"
+            }
+        }))
+        .expect("strict selector target should deserialize");
+
+        assert_eq!(params.selector.as_deref(), Some("#save"));
+        assert_eq!(params.index, None);
+        assert_eq!(params.node_ref, None);
+        assert_eq!(params.cursor, None);
+    }
+
+    #[test]
+    fn test_click_params_rejects_legacy_public_target_fields() {
+        let error = serde_json::from_value::<ClickParams>(json!({
+            "selector": "#save"
+        }))
+        .expect_err("legacy selector field should be rejected");
+        assert!(error.to_string().contains("unknown field `selector`"));
+
+        let error = serde_json::from_value::<ClickParams>(json!({
+            "target": {
+                "kind": "selector",
+                "selector": "#save"
+            },
+            "index": 1
+        }))
+        .expect_err("legacy index field should be rejected");
+        assert!(error.to_string().contains("unknown field `index`"));
+
+        let error = serde_json::from_value::<ClickParams>(json!({
+            "target": {
+                "kind": "selector",
+                "selector": "#save"
+            },
+            "node_ref": {
+                "document_id": "doc-1",
+                "revision": "main:1",
+                "index": 1
+            }
+        }))
+        .expect_err("legacy node_ref field should be rejected");
+        assert!(error.to_string().contains("unknown field `node_ref`"));
+    }
+
+    #[test]
+    fn test_click_params_schema_exposes_only_target_property() {
+        let schema = schema_for!(ClickParams);
+        let schema_json = serde_json::to_value(&schema).expect("schema should serialize");
+        let properties = schema_json
+            .get("properties")
+            .and_then(|value| value.as_object())
+            .expect("click params schema should expose properties");
+
+        assert!(properties.contains_key("target"));
+        assert!(!properties.contains_key("selector"));
+        assert!(!properties.contains_key("index"));
+        assert!(!properties.contains_key("node_ref"));
+        assert!(!properties.contains_key("cursor"));
+        assert_eq!(
+            schema_json
+                .get("required")
+                .and_then(|value| value.as_array())
+                .and_then(|items| items.first())
+                .and_then(|value| value.as_str()),
+            Some("target")
+        );
+
+        let target_schema = properties
+            .get("target")
+            .expect("target property should be present");
+        let target_json =
+            serde_json::to_string(target_schema).expect("target schema should serialize");
+        assert!(target_json.contains("$ref") || target_json.contains("oneOf"));
+
+        let full_schema_json =
+            serde_json::to_string(&schema_json).expect("full click schema should serialize");
+        assert!(full_schema_json.contains("\"kind\""));
+        assert!(full_schema_json.contains("\"selector\""));
+        assert!(full_schema_json.contains("\"cursor\""));
     }
 }

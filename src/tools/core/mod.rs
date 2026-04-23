@@ -1,8 +1,9 @@
-use crate::browser::BrowserSession;
-use crate::dom::{Cursor, DocumentMetadata, DomTree, NodeRef, SnapshotNode};
+use crate::browser::backend::{ATTACH_PAGE_TARGET_LOST_CODE, AttachSessionDegradedDetails};
+use crate::browser::{BrowserSession, SnapshotCacheEntry, SnapshotCacheScope};
+use crate::dom::{AriaChild, AriaNode, Cursor, DocumentMetadata, DomTree, NodeRef, SnapshotNode};
 use crate::error::BrowserError;
 use crate::error::Result;
-use crate::tools::snapshot::{RenderMode, render_aria_tree};
+use crate::tools::snapshot::{RenderMode, SnapshotMode, render_aria_tree};
 use crate::tools::{
     click, close, close_tab, evaluate, extract, go_back, go_forward, hover, input, inspect_node,
     markdown, navigate, new_tab, press_key, read_links, screenshot, scroll, select, snapshot,
@@ -155,13 +156,92 @@ pub struct DocumentEnvelope {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub nodes: Vec<SnapshotNode>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub interactive_count: Option<usize>,
+    pub scope: Option<SnapshotScope>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub global_interactive_count: Option<usize>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct DocumentResult {
+    pub document: DocumentMetadata,
+}
+
+impl DocumentResult {
+    pub fn new(document: DocumentMetadata) -> Self {
+        Self { document }
+    }
+}
+
+impl From<DocumentEnvelope> for DocumentResult {
+    fn from(envelope: DocumentEnvelope) -> Self {
+        Self::new(envelope.document)
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct DocumentActionResult {
+    #[serde(flatten)]
+    pub document_result: DocumentResult,
+    pub action: String,
+}
+
+impl DocumentActionResult {
+    pub fn new(action: impl Into<String>, document: DocumentMetadata) -> Self {
+        Self {
+            document_result: DocumentResult::new(document),
+            action: action.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct TargetedActionResult {
+    #[serde(flatten)]
+    pub document_action_result: DocumentActionResult,
+    pub target_before: TargetEnvelope,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_after: Option<TargetEnvelope>,
+    pub target_status: crate::tools::services::interaction::TargetStatus,
+}
+
+impl TargetedActionResult {
+    pub fn new(
+        action: impl Into<String>,
+        document: DocumentMetadata,
+        target_before: TargetEnvelope,
+        target_after: Option<TargetEnvelope>,
+        target_status: crate::tools::services::interaction::TargetStatus,
+    ) -> Self {
+        Self {
+            document_action_result: DocumentActionResult::new(action, document),
+            target_before,
+            target_after,
+            target_status,
+        }
+    }
+}
+
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema, PartialEq, Eq,
+)]
+pub struct SnapshotScope {
+    pub mode: SnapshotMode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fallback_mode: Option<SnapshotMode>,
+    pub viewport_biased: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub locality_fallback_reason: Option<String>,
+    pub unavailable_frame_count: usize,
+    pub returned_node_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub global_interactive_count: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct DocumentEnvelopeOptions {
     pub include_snapshot: bool,
     pub include_nodes: bool,
+    pub snapshot_mode: SnapshotMode,
 }
 
 impl DocumentEnvelopeOptions {
@@ -169,13 +249,20 @@ impl DocumentEnvelopeOptions {
         Self {
             include_snapshot: false,
             include_nodes: false,
+            snapshot_mode: SnapshotMode::Viewport,
         }
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub const fn full() -> Self {
+        Self::snapshot(SnapshotMode::Full)
+    }
+
+    pub const fn snapshot(snapshot_mode: SnapshotMode) -> Self {
         Self {
             include_snapshot: true,
             include_nodes: true,
+            snapshot_mode,
         }
     }
 }
@@ -183,6 +270,10 @@ impl DocumentEnvelopeOptions {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct TargetEnvelope {
     pub method: String,
+    #[serde(default = "default_target_resolution_status")]
+    pub resolution_status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recovered_from: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor: Option<Cursor>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -191,6 +282,49 @@ pub struct TargetEnvelope {
     pub selector: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub index: Option<usize>,
+}
+
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema, PartialEq, Eq,
+)]
+pub struct TabSummary {
+    pub tab_id: String,
+    pub index: usize,
+    pub active: bool,
+    pub title: String,
+    pub url: String,
+}
+
+impl TabSummary {
+    pub fn from_browser_tab(index: usize, tab: &crate::browser::TabInfo) -> Self {
+        Self {
+            tab_id: tab.id.clone(),
+            index,
+            active: tab.active,
+            title: tab.title.clone(),
+            url: tab.url.clone(),
+        }
+    }
+}
+
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema, PartialEq, Eq,
+)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PublicTarget {
+    /// Resolve the target from a selector in the current document.
+    Selector { selector: String },
+    /// Reuse a revision-scoped cursor from `snapshot` or `inspect_node`.
+    Cursor { cursor: Cursor },
+}
+
+impl PublicTarget {
+    pub(crate) fn into_selector_or_cursor(self) -> (Option<String>, Option<Cursor>) {
+        match self {
+            Self::Selector { selector } => (Some(selector), None),
+            Self::Cursor { cursor } => (None, Some(cursor)),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -204,8 +338,11 @@ pub(crate) struct ResolvedTarget {
 
 impl ResolvedTarget {
     pub fn to_target_envelope(&self) -> TargetEnvelope {
+        let (method, resolution_status, recovered_from) = decode_target_method(&self.method);
         TargetEnvelope {
-            method: self.method.clone(),
+            method,
+            resolution_status,
+            recovered_from,
             cursor: self.cursor.clone(),
             node_ref: self.node_ref.clone(),
             selector: Some(self.selector.clone()),
@@ -220,29 +357,102 @@ pub(crate) enum TargetResolution {
     Failure(ToolResult),
 }
 
-fn invalid_target_failure(message: impl Into<String>) -> ToolResult {
-    let message = message.into();
-    ToolResult::failure_with(
-        message.clone(),
-        serde_json::json!({
-            "code": "invalid_target",
-            "error": message,
-        }),
+fn default_target_resolution_status() -> String {
+    "exact".to_string()
+}
+
+#[derive(
+    Debug, Clone, Copy, serde::Serialize, serde::Deserialize, schemars::JsonSchema, PartialEq, Eq,
+)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum TargetRecoveredFrom {
+    Cursor,
+    NodeRef,
+}
+
+impl TargetRecoveredFrom {
+    fn encoded(self) -> &'static str {
+        match self {
+            Self::Cursor => "cursor",
+            Self::NodeRef => "node_ref",
+        }
+    }
+
+    fn decode(value: &str) -> Option<Self> {
+        match value {
+            "cursor" => Some(Self::Cursor),
+            "node_ref" => Some(Self::NodeRef),
+            _ => None,
+        }
+    }
+}
+
+const TARGET_METHOD_SELECTOR_REBOUND_MARKER: &str = "::selector_rebound::";
+
+pub(crate) fn encode_selector_rebound_method(
+    method: &str,
+    recovered_from: TargetRecoveredFrom,
+) -> String {
+    format!(
+        "{method}{TARGET_METHOD_SELECTOR_REBOUND_MARKER}{}",
+        recovered_from.encoded()
     )
 }
 
-fn stale_node_ref_failure(provided: &NodeRef, current: &DocumentMetadata) -> ToolResult {
-    ToolResult::failure_with(
+fn decode_target_method(encoded: &str) -> (String, String, Option<String>) {
+    let Some((method, recovered_from)) = encoded.split_once(TARGET_METHOD_SELECTOR_REBOUND_MARKER)
+    else {
+        return (
+            encoded.to_string(),
+            default_target_resolution_status(),
+            None,
+        );
+    };
+
+    let Some(recovered_from) = TargetRecoveredFrom::decode(recovered_from) else {
+        return (
+            encoded.to_string(),
+            default_target_resolution_status(),
+            None,
+        );
+    };
+
+    (
+        method.to_string(),
+        "selector_rebound".to_string(),
+        Some(recovered_from.encoded().to_string()),
+    )
+}
+
+fn invalid_target_failure(message: impl Into<String>) -> ToolResult {
+    let message = message.into();
+    structured_tool_failure("invalid_target", message, None, None, None, None)
+}
+
+fn stale_node_ref_failure(
+    provided: &NodeRef,
+    current: &DocumentMetadata,
+    selector: Option<&str>,
+    recovered_from: TargetRecoveredFrom,
+) -> ToolResult {
+    let selector = selector.filter(|selector| !selector.is_empty());
+    structured_tool_failure(
+        "stale_node_ref",
         "Stale node reference",
-        serde_json::json!({
-            "code": "stale_node_ref",
-            "error": "Stale node reference",
+        Some(current.clone()),
+        None,
+        Some(serde_json::json!({
+            "suggested_tool": "snapshot",
+            "suggested_selector": selector,
+        })),
+        Some(serde_json::json!({
             "provided": provided,
-            "current_document": {
-                "document_id": current.document_id,
-                "revision": current.revision,
-            }
-        }),
+            "resolution": {
+                "status": "unrecoverable_stale",
+                "recovered_from": recovered_from,
+                "selector_rebound_attempted": selector.is_some(),
+            },
+        })),
     )
 }
 
@@ -312,6 +522,8 @@ pub(crate) fn resolve_target_with_cursor(
                 return Ok(TargetResolution::Failure(stale_node_ref_failure(
                     &node_ref,
                     &dom.document,
+                    None,
+                    TargetRecoveredFrom::NodeRef,
                 )));
             }
 
@@ -340,9 +552,28 @@ pub(crate) fn resolve_target_with_cursor(
             if cursor_input.node_ref.document_id != dom.document.document_id
                 || cursor_input.node_ref.revision != dom.document.revision
             {
+                if !cursor_input.selector.is_empty() {
+                    if let Some(cursor) =
+                        actionable_cursor_for_selector(dom, &cursor_input.selector)
+                    {
+                        return Ok(TargetResolution::Resolved(ResolvedTarget {
+                            method: encode_selector_rebound_method(
+                                "cursor",
+                                TargetRecoveredFrom::Cursor,
+                            ),
+                            selector: cursor.selector.clone(),
+                            index: Some(cursor.index),
+                            node_ref: Some(cursor.node_ref.clone()),
+                            cursor: Some(cursor),
+                        }));
+                    }
+                }
+
                 return Ok(TargetResolution::Failure(stale_node_ref_failure(
                     &cursor_input.node_ref,
                     &dom.document,
+                    Some(cursor_input.selector.as_str()),
+                    TargetRecoveredFrom::Cursor,
                 )));
             }
 
@@ -442,13 +673,85 @@ impl ToolResult {
     }
 }
 
-fn structured_failure(code: &str, error: String) -> ToolResult {
+fn normalized_error_value(value: Value) -> Option<Value> {
+    match value {
+        Value::Null => None,
+        Value::Object(map) if map.is_empty() => None,
+        other => Some(other),
+    }
+}
+
+pub(crate) fn structured_error_payload(
+    code: impl Into<String>,
+    error: impl Into<String>,
+    document: Option<DocumentMetadata>,
+    target: Option<TargetEnvelope>,
+    recovery: Option<Value>,
+    details: Option<Value>,
+) -> Value {
+    let mut payload = serde_json::Map::new();
+    payload.insert("code".to_string(), Value::String(code.into()));
+    payload.insert("error".to_string(), Value::String(error.into()));
+
+    if let Some(document) = document
+        && let Some(value) =
+            normalized_error_value(serde_json::to_value(document).unwrap_or(Value::Null))
+    {
+        payload.insert("document".to_string(), value);
+    }
+
+    if let Some(target) = target
+        && let Some(value) =
+            normalized_error_value(serde_json::to_value(target).unwrap_or(Value::Null))
+    {
+        payload.insert("target".to_string(), value);
+    }
+
+    if let Some(recovery) = recovery.and_then(normalized_error_value) {
+        payload.insert("recovery".to_string(), recovery);
+    }
+
+    if let Some(details) = details.and_then(normalized_error_value) {
+        payload.insert("details".to_string(), details);
+    }
+
+    Value::Object(payload)
+}
+
+pub(crate) fn structured_tool_failure(
+    code: impl Into<String>,
+    error: impl Into<String>,
+    document: Option<DocumentMetadata>,
+    target: Option<TargetEnvelope>,
+    recovery: Option<Value>,
+    details: Option<Value>,
+) -> ToolResult {
+    let error = error.into();
     ToolResult::failure_with(
         error.clone(),
-        serde_json::json!({
-            "code": code,
-            "error": error,
-        }),
+        structured_error_payload(code, error, document, target, recovery, details),
+    )
+}
+
+fn structured_failure(code: &str, error: String) -> ToolResult {
+    structured_tool_failure(code, error, None, None, None, None)
+}
+
+fn attach_session_degraded_failure(details: AttachSessionDegradedDetails) -> ToolResult {
+    structured_tool_failure(
+        ATTACH_PAGE_TARGET_LOST_CODE,
+        details.error.clone(),
+        None,
+        None,
+        Some(serde_json::json!({
+            "suggested_tool": "tab_list",
+            "hint": details.recovery_hint,
+        })),
+        Some(serde_json::json!({
+            "kind": details.kind,
+            "operation": details.operation,
+            "session_origin": "connected",
+        })),
     )
 }
 
@@ -473,13 +776,15 @@ pub(crate) fn tool_result_from_browser_error(
             "dom_parse_failed",
             format!("Failed to parse DOM: {}", reason),
         )),
-        BrowserError::ToolExecutionFailed { tool, reason } => Ok(ToolResult::failure_with(
-            reason.clone(),
-            serde_json::json!({
-                "code": "tool_execution_failed",
-                "error": reason,
+        BrowserError::ToolExecutionFailed { tool, reason } => Ok(structured_tool_failure(
+            "tool_execution_failed",
+            reason,
+            None,
+            None,
+            None,
+            Some(serde_json::json!({
                 "tool": tool,
-            }),
+            })),
         )),
         BrowserError::NavigationFailed(reason) => {
             Ok(structured_failure("navigation_failed", reason))
@@ -492,6 +797,10 @@ pub(crate) fn tool_result_from_browser_error(
         }
         BrowserError::DownloadFailed(reason) => Ok(structured_failure("download_failed", reason)),
         BrowserError::TabOperationFailed(reason) => {
+            if let Some(details) = AttachSessionDegradedDetails::decode(&reason) {
+                return Ok(attach_session_degraded_failure(details));
+            }
+
             Ok(structured_failure("tab_operation_failed", reason))
         }
         BrowserError::JsonError(error) => Ok(structured_failure(
@@ -526,37 +835,61 @@ pub(crate) fn build_document_envelope(
     let target = target.map(|resolved| resolved.to_target_envelope());
 
     if options.include_snapshot || options.include_nodes {
-        let (document, snapshot, nodes, interactive_count) = {
+        let (document, snapshot, nodes, global_interactive_count, scope, render_micros) = {
             let dom = context.get_dom()?;
-            let snapshot = if options.include_snapshot {
-                let started = Instant::now();
-                let rendered = render_aria_tree(&dom.root, RenderMode::Ai, None);
-                Some((rendered, duration_micros(started.elapsed())))
-            } else {
-                None
+            let document = dom.document.clone();
+            let global_interactive_count = Some(dom.count_interactive());
+            let current_projection = match options.snapshot_mode {
+                SnapshotMode::Full => {
+                    snapshot_projection(dom, SnapshotMode::Full, global_interactive_count)
+                }
+                SnapshotMode::Viewport | SnapshotMode::Delta => {
+                    snapshot_projection(dom, SnapshotMode::Viewport, global_interactive_count)
+                }
             };
 
+            let (projection, cache_base) = match options.snapshot_mode {
+                SnapshotMode::Delta => {
+                    delta_snapshot_projection(context, &document, current_projection)?
+                }
+                SnapshotMode::Viewport => (current_projection.clone(), Some(current_projection)),
+                SnapshotMode::Full => (current_projection, None),
+            };
+
+            if let Some(cache_base) = cache_base {
+                context.session.store_snapshot_cache(Arc::new(
+                    snapshot_cache_entry_from_projection(&document, &cache_base),
+                ))?;
+            }
+
             (
-                dom.document.clone(),
-                snapshot,
+                document,
+                options.include_snapshot.then_some(projection.snapshot),
+                if options.include_nodes {
+                    projection.nodes
+                } else {
+                    Vec::new()
+                },
                 options
                     .include_nodes
-                    .then(|| dom.snapshot_nodes())
-                    .unwrap_or_default(),
-                options.include_nodes.then(|| dom.count_interactive()),
+                    .then_some(global_interactive_count)
+                    .flatten(),
+                Some(projection.scope),
+                projection.render_micros,
             )
         };
 
-        if let Some((_, micros)) = snapshot.as_ref() {
-            context.record_snapshot_render_micros(*micros);
+        if options.include_snapshot {
+            context.record_snapshot_render_micros(render_micros);
         }
 
         return Ok(DocumentEnvelope {
             document,
             target,
-            snapshot: snapshot.map(|(snapshot, _)| snapshot),
+            snapshot,
             nodes,
-            interactive_count,
+            scope,
+            global_interactive_count,
         });
     }
 
@@ -568,8 +901,315 @@ pub(crate) fn build_document_envelope(
         target,
         snapshot: None,
         nodes: Vec::new(),
-        interactive_count: None,
+        scope: None,
+        global_interactive_count: None,
     })
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SnapshotAnchorPolicy {
+    strict_viewport: bool,
+    allow_persistent_chrome: bool,
+}
+
+fn build_scoped_snapshot_root(root: &AriaNode, policy: SnapshotAnchorPolicy) -> AriaNode {
+    scoped_snapshot_node(root, policy, true).unwrap_or_else(AriaNode::fragment)
+}
+
+#[derive(Debug, Clone)]
+struct SnapshotProjection {
+    snapshot: String,
+    nodes: Vec<SnapshotNode>,
+    scope: SnapshotScope,
+    render_micros: u64,
+}
+
+fn snapshot_projection(
+    dom: &DomTree,
+    mode: SnapshotMode,
+    global_interactive_count: Option<usize>,
+) -> SnapshotProjection {
+    let (snapshot_root, locality_fallback_reason) = match mode {
+        SnapshotMode::Full => (dom.root.clone(), None),
+        SnapshotMode::Viewport | SnapshotMode::Delta => {
+            let viewport_local = build_scoped_snapshot_root(
+                &dom.root,
+                SnapshotAnchorPolicy {
+                    strict_viewport: true,
+                    allow_persistent_chrome: false,
+                },
+            );
+            if !viewport_local.children.is_empty() {
+                (viewport_local, None)
+            } else {
+                let viewport_with_persistent = build_scoped_snapshot_root(
+                    &dom.root,
+                    SnapshotAnchorPolicy {
+                        strict_viewport: true,
+                        allow_persistent_chrome: true,
+                    },
+                );
+                if !viewport_with_persistent.children.is_empty() {
+                    (
+                        viewport_with_persistent,
+                        Some("persistent_chrome_only".to_string()),
+                    )
+                } else {
+                    let visible_document = build_scoped_snapshot_root(
+                        &dom.root,
+                        SnapshotAnchorPolicy {
+                            strict_viewport: false,
+                            allow_persistent_chrome: false,
+                        },
+                    );
+                    if !visible_document.children.is_empty() {
+                        (
+                            visible_document,
+                            Some("no_viewport_local_anchors".to_string()),
+                        )
+                    } else {
+                        (
+                            build_scoped_snapshot_root(
+                                &dom.root,
+                                SnapshotAnchorPolicy {
+                                    strict_viewport: false,
+                                    allow_persistent_chrome: true,
+                                },
+                            ),
+                            Some("document_visible_fallback".to_string()),
+                        )
+                    }
+                }
+            }
+        }
+    };
+
+    let started = Instant::now();
+    let snapshot = render_aria_tree(&snapshot_root, RenderMode::Ai, None);
+    let render_micros = duration_micros(started.elapsed());
+    let nodes = snapshot_nodes_from_root(dom, &snapshot_root);
+
+    SnapshotProjection {
+        snapshot,
+        nodes: nodes.clone(),
+        scope: SnapshotScope {
+            mode,
+            fallback_mode: None,
+            viewport_biased: mode != SnapshotMode::Full,
+            locality_fallback_reason,
+            unavailable_frame_count: dom
+                .document
+                .frames
+                .iter()
+                .filter(|frame| frame.status != "expanded")
+                .count(),
+            returned_node_count: nodes.len(),
+            global_interactive_count,
+        },
+        render_micros,
+    }
+}
+
+fn delta_snapshot_projection(
+    context: &ToolContext<'_>,
+    document: &DocumentMetadata,
+    current_projection: SnapshotProjection,
+) -> Result<(SnapshotProjection, Option<SnapshotProjection>)> {
+    let Some(base) = context.session.snapshot_cache_entry(document)? else {
+        let mut fallback = current_projection.clone();
+        fallback.scope.mode = SnapshotMode::Delta;
+        fallback.scope.fallback_mode = Some(SnapshotMode::Viewport);
+        return Ok((fallback, Some(current_projection)));
+    };
+
+    if base.scope.mode == "full" {
+        let mut fallback = current_projection.clone();
+        fallback.scope.mode = SnapshotMode::Delta;
+        fallback.scope.fallback_mode = Some(SnapshotMode::Viewport);
+        return Ok((fallback, Some(current_projection)));
+    }
+
+    let mut projection = current_projection.clone();
+    projection.scope.mode = SnapshotMode::Delta;
+    projection.scope.fallback_mode = None;
+    projection.snapshot = delta_snapshot_text(base.snapshot.as_ref(), &current_projection.snapshot);
+
+    let mut nodes = delta_snapshot_nodes(&base.nodes, &current_projection.nodes);
+    if nodes.is_empty() && current_projection.snapshot != base.snapshot.as_ref() {
+        nodes = current_projection.nodes.clone();
+    }
+    projection.nodes = nodes;
+    projection.scope.returned_node_count = projection.nodes.len();
+
+    if projection.snapshot.is_empty() {
+        projection.snapshot = current_projection.snapshot.clone();
+    }
+
+    Ok((projection, Some(current_projection)))
+}
+
+fn snapshot_cache_entry_from_projection(
+    document: &DocumentMetadata,
+    projection: &SnapshotProjection,
+) -> SnapshotCacheEntry {
+    SnapshotCacheEntry {
+        document: document.clone(),
+        snapshot: Arc::<str>::from(projection.snapshot.clone()),
+        nodes: projection.nodes.clone(),
+        scope: SnapshotCacheScope {
+            mode: snapshot_mode_label(projection.scope.mode).to_string(),
+            fallback_mode: projection
+                .scope
+                .fallback_mode
+                .map(|mode| snapshot_mode_label(mode).to_string()),
+            viewport_biased: projection.scope.viewport_biased,
+            returned_node_count: projection.scope.returned_node_count,
+            unavailable_frame_count: projection.scope.unavailable_frame_count,
+            global_interactive_count: projection.scope.global_interactive_count,
+        },
+    }
+}
+
+fn snapshot_mode_label(mode: SnapshotMode) -> &'static str {
+    match mode {
+        SnapshotMode::Viewport => "viewport",
+        SnapshotMode::Delta => "delta",
+        SnapshotMode::Full => "full",
+    }
+}
+
+fn delta_snapshot_text(previous: &str, current: &str) -> String {
+    let mut previous_counts = HashMap::new();
+    for line in previous.lines() {
+        *previous_counts.entry(line).or_insert(0usize) += 1;
+    }
+
+    let mut changed_lines = Vec::new();
+    for line in current.lines() {
+        match previous_counts.get_mut(line) {
+            Some(count) if *count > 0 => {
+                *count -= 1;
+            }
+            _ => changed_lines.push(line.to_string()),
+        }
+    }
+
+    changed_lines.join("\n")
+}
+
+fn delta_snapshot_nodes(previous: &[SnapshotNode], current: &[SnapshotNode]) -> Vec<SnapshotNode> {
+    let previous_by_selector = previous
+        .iter()
+        .map(|node| (node.cursor.selector.as_str(), node))
+        .collect::<HashMap<_, _>>();
+
+    current
+        .iter()
+        .filter(
+            |node| match previous_by_selector.get(node.cursor.selector.as_str()) {
+                Some(previous_node) => **previous_node != **node,
+                None => true,
+            },
+        )
+        .cloned()
+        .collect()
+}
+
+fn scoped_snapshot_node(
+    node: &AriaNode,
+    policy: SnapshotAnchorPolicy,
+    is_root: bool,
+) -> Option<AriaNode> {
+    let is_anchor = node_is_snapshot_anchor(node, policy);
+    let mut cloned = node.clone();
+    let mut scoped_children = Vec::new();
+    let mut child_anchor_count = 0usize;
+
+    for child in &node.children {
+        match child {
+            AriaChild::Text(text) => {
+                if is_anchor || is_root {
+                    scoped_children.push(AriaChild::Text(text.clone()));
+                }
+            }
+            AriaChild::Node(child_node) => {
+                if let Some(scoped_child) = scoped_snapshot_node(child_node, policy, false) {
+                    child_anchor_count += 1;
+                    scoped_children.push(AriaChild::Node(Box::new(scoped_child)));
+                }
+            }
+        }
+    }
+
+    let expose_handle = node.has_public_handle()
+        && (node.carries_snapshot_state() || node_matches_policy(node, policy));
+
+    cloned.public_handle = expose_handle;
+    cloned.children = scoped_children;
+
+    let keep = is_root || is_anchor || child_anchor_count > 0;
+    if !keep {
+        return None;
+    }
+
+    let has_child_nodes = cloned
+        .children
+        .iter()
+        .any(|child| matches!(child, AriaChild::Node(_)));
+    let is_noise = cloned.role == "generic"
+        && cloned.name.is_empty()
+        && cloned.props.is_empty()
+        && !cloned.public_handle
+        && !cloned.carries_snapshot_state()
+        && !has_child_nodes;
+
+    if !is_root && is_noise {
+        return None;
+    }
+
+    Some(cloned)
+}
+
+fn node_matches_policy(node: &AriaNode, policy: SnapshotAnchorPolicy) -> bool {
+    let visible = if policy.strict_viewport {
+        node.box_info.in_viewport
+    } else {
+        node.box_info.visible
+    };
+
+    visible && (policy.allow_persistent_chrome || !node.is_persistent_chrome())
+}
+
+fn node_is_snapshot_anchor(node: &AriaNode, policy: SnapshotAnchorPolicy) -> bool {
+    node.carries_snapshot_state() || node_matches_policy(node, policy)
+}
+
+fn snapshot_nodes_from_root(dom: &DomTree, root: &AriaNode) -> Vec<SnapshotNode> {
+    let mut nodes = Vec::new();
+    collect_snapshot_nodes(dom, root, &mut nodes);
+    nodes
+}
+
+fn collect_snapshot_nodes(dom: &DomTree, node: &AriaNode, nodes: &mut Vec<SnapshotNode>) {
+    if node.has_public_handle() {
+        if let Some(index) = node.index {
+            if let Some(cursor) = dom.cursor_for_index(index) {
+                nodes.push(SnapshotNode {
+                    node_ref: cursor.node_ref.clone(),
+                    index: cursor.index,
+                    role: cursor.role.clone(),
+                    name: cursor.name.clone(),
+                    cursor,
+                });
+            }
+        }
+    }
+
+    for child in &node.children {
+        if let AriaChild::Node(child_node) = child {
+            collect_snapshot_nodes(dom, child_node, nodes);
+        }
+    }
 }
 
 /// Trait for browser automation tools with associated parameter types
@@ -703,13 +1343,12 @@ impl ToolRegistry {
         self.register(read_links::ReadLinksTool);
         self.register(snapshot::SnapshotTool);
         self.register(inspect_node::InspectNodeTool);
+        self.register(screenshot::ScreenshotTool);
         self.register(close::CloseTool);
     }
 
-    /// Register advanced operator tools such as raw JavaScript evaluation
-    /// and filesystem-bound screenshot capture.
+    /// Register advanced operator tools such as raw JavaScript evaluation.
     pub fn register_operator_tools(&mut self) {
-        self.register(screenshot::ScreenshotTool);
         self.register(evaluate::EvaluateTool);
     }
 
@@ -781,5 +1420,463 @@ impl ToolRegistry {
 impl Default for ToolRegistry {
     fn default() -> Self {
         Self::with_defaults()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::browser::backend::FakeSessionBackend;
+    use crate::browser::{SnapshotCacheEntry, SnapshotCacheScope};
+    use crate::dom::{AriaChild, AriaNode, DomTree};
+    use std::sync::Arc;
+
+    fn sample_dom() -> DomTree {
+        let root = AriaNode::fragment().with_child(AriaChild::Node(Box::new(
+            AriaNode::new("button", "Submit")
+                .with_index(1)
+                .with_box(true, Some("pointer".to_string())),
+        )));
+        let mut dom = DomTree::new(root);
+        dom.document.document_id = "doc-1".to_string();
+        dom.document.revision = "main:1".to_string();
+        dom.replace_selectors(vec![String::new(), "#submit".to_string()]);
+        dom
+    }
+
+    fn viewport_dom() -> DomTree {
+        let mut offscreen_button = AriaNode::new("button", "Offscreen save")
+            .with_index(0)
+            .with_public_handle(true)
+            .with_box(true, Some("pointer".to_string()));
+        offscreen_button.box_info.in_viewport = false;
+
+        let visible_heading = AriaNode::new("heading", "Visible story").with_box(true, None);
+
+        let visible_tab = AriaNode::new("button", "Visible tab")
+            .with_index(1)
+            .with_public_handle(true)
+            .with_box(true, Some("pointer".to_string()))
+            .with_selected(true);
+
+        let root = AriaNode::fragment()
+            .with_child(AriaChild::Node(Box::new(offscreen_button)))
+            .with_child(AriaChild::Node(Box::new(visible_heading)))
+            .with_child(AriaChild::Node(Box::new(visible_tab)));
+
+        let mut dom = DomTree::new(root);
+        dom.document.document_id = "doc-viewport".to_string();
+        dom.document.revision = "main:4".to_string();
+        dom.replace_selectors(vec![
+            "#offscreen-save".to_string(),
+            "#visible-tab".to_string(),
+        ]);
+        dom
+    }
+
+    fn persistent_chrome_dom() -> DomTree {
+        let mut header_button = AriaNode::new("button", "Header action")
+            .with_index(0)
+            .with_public_handle(true)
+            .with_box(true, Some("pointer".to_string()));
+        header_button.box_info.persistent_chrome = true;
+        header_button.box_info.persistent_position = Some("sticky".to_string());
+        header_button.box_info.persistent_edge = Some("top".to_string());
+
+        let local_heading = AriaNode::new("heading", "Local section").with_box(true, None);
+
+        let local_button = AriaNode::new("button", "Local action")
+            .with_index(1)
+            .with_public_handle(true)
+            .with_box(true, Some("pointer".to_string()));
+
+        let root = AriaNode::fragment()
+            .with_child(AriaChild::Node(Box::new(header_button)))
+            .with_child(AriaChild::Node(Box::new(local_heading)))
+            .with_child(AriaChild::Node(Box::new(local_button)));
+
+        let mut dom = DomTree::new(root);
+        dom.document.document_id = "doc-persistent".to_string();
+        dom.document.revision = "main:9".to_string();
+        dom.replace_selectors(vec![
+            "#header-action".to_string(),
+            "#local-action".to_string(),
+        ]);
+        dom
+    }
+
+    fn persistent_chrome_only_dom() -> DomTree {
+        let mut header_button = AriaNode::new("button", "Header action")
+            .with_index(0)
+            .with_public_handle(true)
+            .with_box(true, Some("pointer".to_string()));
+        header_button.box_info.persistent_chrome = true;
+        header_button.box_info.persistent_position = Some("fixed".to_string());
+        header_button.box_info.persistent_edge = Some("top".to_string());
+
+        let mut hidden_content = AriaNode::new("button", "Hidden content")
+            .with_index(1)
+            .with_public_handle(true)
+            .with_box(true, Some("pointer".to_string()));
+        hidden_content.box_info.in_viewport = false;
+
+        let root = AriaNode::fragment()
+            .with_child(AriaChild::Node(Box::new(header_button)))
+            .with_child(AriaChild::Node(Box::new(hidden_content)));
+
+        let mut dom = DomTree::new(root);
+        dom.document.document_id = "doc-persistent-only".to_string();
+        dom.document.revision = "main:2".to_string();
+        dom.replace_selectors(vec![
+            "#header-action".to_string(),
+            "#hidden-content".to_string(),
+        ]);
+        dom
+    }
+
+    fn persistent_delta_dom(details_visible: bool) -> DomTree {
+        let mut header_button = AriaNode::new("button", "Header action")
+            .with_index(0)
+            .with_public_handle(true)
+            .with_box(true, Some("pointer".to_string()));
+        header_button.box_info.persistent_chrome = true;
+        header_button.box_info.persistent_position = Some("sticky".to_string());
+        header_button.box_info.persistent_edge = Some("top".to_string());
+
+        let local_toggle = AriaNode::new("button", "Show details")
+            .with_index(1)
+            .with_public_handle(true)
+            .with_box(true, Some("pointer".to_string()));
+
+        let mut root = AriaNode::fragment()
+            .with_child(AriaChild::Node(Box::new(header_button)))
+            .with_child(AriaChild::Node(Box::new(
+                AriaNode::new("heading", "Local section").with_box(true, None),
+            )))
+            .with_child(AriaChild::Node(Box::new(local_toggle)));
+
+        if details_visible {
+            root = root.with_child(AriaChild::Node(Box::new(
+                AriaNode::new("button", "Details")
+                    .with_index(2)
+                    .with_public_handle(true)
+                    .with_box(true, Some("pointer".to_string())),
+            )));
+        }
+
+        let mut dom = DomTree::new(root);
+        dom.document.document_id = "doc-persistent-delta".to_string();
+        dom.document.revision = if details_visible {
+            "main:7".to_string()
+        } else {
+            "main:6".to_string()
+        };
+        dom.replace_selectors(vec![
+            "#header-action".to_string(),
+            "#toggle".to_string(),
+            "#details".to_string(),
+        ]);
+        dom
+    }
+
+    #[test]
+    fn tool_result_maps_attach_page_target_loss_to_structured_degraded_failure() {
+        let error = AttachSessionDegradedDetails::page_target_lost(
+            "snapshot",
+            "Attached browser session lost its active page target during snapshot.".to_string(),
+        )
+        .into_browser_error();
+
+        let result = tool_result_from_browser_error(error)
+            .expect("degraded attach failures stay tool-local");
+
+        assert!(!result.success);
+        let data = result
+            .data
+            .expect("structured failure data should be present");
+        assert_eq!(data["code"].as_str(), Some(ATTACH_PAGE_TARGET_LOST_CODE));
+        assert_eq!(data["details"]["kind"].as_str(), Some("page_target_lost"));
+        assert_eq!(data["details"]["operation"].as_str(), Some("snapshot"));
+        assert_eq!(
+            data["details"]["session_origin"].as_str(),
+            Some("connected")
+        );
+        assert_eq!(
+            data["recovery"]["suggested_tool"].as_str(),
+            Some("tab_list")
+        );
+        assert!(
+            data["recovery"]["hint"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("tab_list")
+        );
+    }
+
+    #[test]
+    fn resolve_target_with_cursor_rebinds_stale_cursor_via_selector() {
+        let dom = sample_dom();
+        let mut stale_cursor = dom.cursor_for_index(1).expect("cursor should exist");
+        stale_cursor.node_ref.revision = "main:0".to_string();
+
+        let result =
+            resolve_target_with_cursor("click", None, None, None, Some(stale_cursor), Some(&dom))
+                .expect("stale cursor should resolve via selector rebound");
+
+        match result {
+            TargetResolution::Resolved(target) => {
+                let rebound_cursor = target
+                    .cursor
+                    .as_ref()
+                    .expect("rebound cursor should be present");
+                assert_eq!(
+                    target.method,
+                    encode_selector_rebound_method("cursor", TargetRecoveredFrom::Cursor)
+                );
+                assert_eq!(target.selector, "#submit");
+                assert_eq!(target.index, Some(1));
+                assert_eq!(rebound_cursor.selector, "#submit");
+                assert_eq!(rebound_cursor.node_ref.document_id, "doc-1");
+                assert_eq!(rebound_cursor.node_ref.revision, "main:1");
+                assert_eq!(rebound_cursor.node_ref.index, 1);
+                let envelope = target.to_target_envelope();
+                assert_eq!(envelope.method, "cursor");
+                assert_eq!(envelope.resolution_status, "selector_rebound");
+                assert_eq!(envelope.recovered_from.as_deref(), Some("cursor"));
+            }
+            TargetResolution::Failure(failure) => panic!("unexpected failure: {:?}", failure),
+        }
+    }
+
+    #[test]
+    fn build_document_envelope_viewport_mode_scopes_snapshot_handles() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        let dom = viewport_dom();
+        let mut context = ToolContext::with_dom(&session, dom);
+
+        let envelope = build_document_envelope(
+            &mut context,
+            None,
+            DocumentEnvelopeOptions::snapshot(SnapshotMode::Viewport),
+        )
+        .expect("viewport envelope should build");
+
+        assert_eq!(
+            envelope.scope.as_ref().map(|scope| scope.mode),
+            Some(SnapshotMode::Viewport)
+        );
+        assert_eq!(
+            envelope.scope.as_ref().map(|scope| scope.viewport_biased),
+            Some(true)
+        );
+        assert_eq!(
+            envelope
+                .scope
+                .as_ref()
+                .and_then(|scope| scope.locality_fallback_reason.as_deref()),
+            None
+        );
+        assert_eq!(envelope.global_interactive_count, Some(2));
+        assert_eq!(envelope.nodes.len(), 1);
+        assert_eq!(envelope.nodes[0].name, "Visible tab");
+        let snapshot = envelope.snapshot.expect("viewport snapshot should render");
+        assert!(snapshot.contains("Visible story"));
+        assert!(snapshot.contains("Visible tab"));
+        assert!(!snapshot.contains("Offscreen save"));
+    }
+
+    #[test]
+    fn build_document_envelope_full_mode_preserves_exhaustive_snapshot_handles() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        let dom = viewport_dom();
+        let mut context = ToolContext::with_dom(&session, dom);
+
+        let envelope = build_document_envelope(
+            &mut context,
+            None,
+            DocumentEnvelopeOptions::snapshot(SnapshotMode::Full),
+        )
+        .expect("full envelope should build");
+
+        assert_eq!(
+            envelope.scope.as_ref().map(|scope| scope.mode),
+            Some(SnapshotMode::Full)
+        );
+        assert_eq!(
+            envelope.scope.as_ref().map(|scope| scope.viewport_biased),
+            Some(false)
+        );
+        assert_eq!(
+            envelope
+                .scope
+                .as_ref()
+                .and_then(|scope| scope.locality_fallback_reason.as_deref()),
+            None
+        );
+        assert_eq!(envelope.global_interactive_count, Some(2));
+        assert_eq!(envelope.nodes.len(), 2);
+        let snapshot = envelope.snapshot.expect("full snapshot should render");
+        assert!(snapshot.contains("Offscreen save"));
+        assert!(snapshot.contains("Visible tab"));
+    }
+
+    #[test]
+    fn build_document_envelope_delta_mode_falls_back_to_viewport_without_base() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        let dom = viewport_dom();
+        let mut context = ToolContext::with_dom(&session, dom);
+
+        let envelope = build_document_envelope(
+            &mut context,
+            None,
+            DocumentEnvelopeOptions::snapshot(SnapshotMode::Delta),
+        )
+        .expect("delta envelope should build");
+
+        let scope = envelope.scope.expect("delta scope should be present");
+        assert_eq!(scope.mode, SnapshotMode::Delta);
+        assert_eq!(scope.fallback_mode, Some(SnapshotMode::Viewport));
+        assert_eq!(scope.locality_fallback_reason.as_deref(), None);
+        assert_eq!(scope.returned_node_count, envelope.nodes.len());
+        assert_eq!(envelope.nodes.len(), 1);
+        assert_eq!(envelope.nodes[0].name, "Visible tab");
+    }
+
+    #[test]
+    fn build_document_envelope_delta_mode_uses_same_document_prior_revision_base() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        let dom = viewport_dom();
+        session
+            .store_snapshot_cache(Arc::new(SnapshotCacheEntry {
+                document: DocumentMetadata {
+                    document_id: "doc-viewport".to_string(),
+                    revision: "main:3".to_string(),
+                    url: "https://viewport.example".to_string(),
+                    title: "Viewport".to_string(),
+                    ready_state: "complete".to_string(),
+                    frames: Vec::new(),
+                },
+                snapshot: Arc::<str>::from("- heading \"Visible story\""),
+                nodes: Vec::new(),
+                scope: SnapshotCacheScope {
+                    mode: "viewport".to_string(),
+                    fallback_mode: None,
+                    viewport_biased: true,
+                    returned_node_count: 0,
+                    unavailable_frame_count: 0,
+                    global_interactive_count: Some(2),
+                },
+            }))
+            .expect("snapshot cache should seed");
+        let mut context = ToolContext::with_dom(&session, dom);
+
+        let envelope = build_document_envelope(
+            &mut context,
+            None,
+            DocumentEnvelopeOptions::snapshot(SnapshotMode::Delta),
+        )
+        .expect("delta envelope should build from prior base");
+
+        let scope = envelope.scope.expect("delta scope should be present");
+        assert_eq!(scope.mode, SnapshotMode::Delta);
+        assert_eq!(scope.fallback_mode, None);
+        assert_eq!(scope.locality_fallback_reason.as_deref(), None);
+        assert_eq!(envelope.nodes.len(), 1);
+        assert_eq!(envelope.nodes[0].name, "Visible tab");
+        let snapshot = envelope.snapshot.expect("delta snapshot should render");
+        assert!(snapshot.contains("Visible tab"));
+    }
+
+    #[test]
+    fn build_document_envelope_viewport_mode_demotes_persistent_chrome_when_local_anchors_exist() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        let dom = persistent_chrome_dom();
+        let mut context = ToolContext::with_dom(&session, dom);
+
+        let envelope = build_document_envelope(
+            &mut context,
+            None,
+            DocumentEnvelopeOptions::snapshot(SnapshotMode::Viewport),
+        )
+        .expect("viewport envelope should build");
+
+        let scope = envelope.scope.expect("viewport scope should be present");
+        assert_eq!(scope.mode, SnapshotMode::Viewport);
+        assert_eq!(scope.locality_fallback_reason.as_deref(), None);
+        assert_eq!(envelope.nodes.len(), 1);
+        assert_eq!(envelope.nodes[0].name, "Local action");
+        let snapshot = envelope.snapshot.expect("viewport snapshot should render");
+        assert!(snapshot.contains("Local section"));
+        assert!(snapshot.contains("Local action"));
+        assert!(!snapshot.contains("Header action"));
+    }
+
+    #[test]
+    fn build_document_envelope_viewport_mode_reports_persistent_chrome_only_fallback() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        let dom = persistent_chrome_only_dom();
+        let mut context = ToolContext::with_dom(&session, dom);
+
+        let envelope = build_document_envelope(
+            &mut context,
+            None,
+            DocumentEnvelopeOptions::snapshot(SnapshotMode::Viewport),
+        )
+        .expect("viewport envelope should build");
+
+        let scope = envelope.scope.expect("viewport scope should be present");
+        assert_eq!(scope.mode, SnapshotMode::Viewport);
+        assert_eq!(
+            scope.locality_fallback_reason.as_deref(),
+            Some("persistent_chrome_only")
+        );
+        assert_eq!(envelope.nodes.len(), 1);
+        assert_eq!(envelope.nodes[0].name, "Header action");
+        let snapshot = envelope.snapshot.expect("viewport snapshot should render");
+        assert!(snapshot.contains("Header action"));
+        assert!(!snapshot.contains("Hidden content"));
+    }
+
+    #[test]
+    fn build_document_envelope_delta_mode_keeps_local_changes_ahead_of_persistent_chrome() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        let base_dom = persistent_delta_dom(false);
+        let base_projection = snapshot_projection(
+            &base_dom,
+            SnapshotMode::Viewport,
+            Some(base_dom.count_interactive()),
+        );
+        session
+            .store_snapshot_cache(Arc::new(snapshot_cache_entry_from_projection(
+                &base_dom.document,
+                &base_projection,
+            )))
+            .expect("snapshot cache should seed");
+
+        let current_dom = persistent_delta_dom(true);
+        let mut context = ToolContext::with_dom(&session, current_dom);
+
+        let envelope = build_document_envelope(
+            &mut context,
+            None,
+            DocumentEnvelopeOptions::snapshot(SnapshotMode::Delta),
+        )
+        .expect("delta envelope should build");
+
+        let scope = envelope.scope.expect("delta scope should be present");
+        assert_eq!(scope.mode, SnapshotMode::Delta);
+        assert_eq!(scope.fallback_mode, None);
+        assert_eq!(scope.locality_fallback_reason.as_deref(), None);
+        let node_names = envelope
+            .nodes
+            .iter()
+            .map(|node| node.name.as_str())
+            .collect::<Vec<_>>();
+        assert!(node_names.contains(&"Details"));
+        assert!(node_names.contains(&"Show details"));
+        assert!(!node_names.contains(&"Header action"));
+        let snapshot = envelope.snapshot.expect("delta snapshot should render");
+        assert!(snapshot.contains("Details"));
+        assert!(!snapshot.contains("Header action"));
     }
 }

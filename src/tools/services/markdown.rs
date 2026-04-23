@@ -3,7 +3,7 @@ use crate::error::{BrowserError, Result};
 use crate::tools::html_to_markdown::convert_html_to_markdown;
 use crate::tools::markdown::{GetMarkdownOutput, GetMarkdownParams};
 use crate::tools::readability_script::READABILITY_SCRIPT;
-use crate::tools::{ToolContext, ToolResult};
+use crate::tools::{DocumentResult, ToolContext, ToolResult};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
@@ -16,10 +16,9 @@ pub(crate) fn execute_get_markdown(
     context.record_browser_evaluation();
     let document = context.session.document_metadata()?;
     if let Some(entry) = context.session.markdown_cache_entry(&document)? {
-        return Ok(context.finish(ToolResult::success_with(paginate_markdown(
-            entry.as_ref(),
-            &params,
-        )?)));
+        let mut output = paginate_markdown(entry.as_ref(), &params)?;
+        output.result = DocumentResult::new(document);
+        return Ok(context.finish(ToolResult::success_with(output)));
     }
 
     if document.ready_state != "complete" {
@@ -32,10 +31,9 @@ pub(crate) fn execute_get_markdown(
     context.record_browser_evaluation();
     let document = context.session.document_metadata()?;
     if let Some(entry) = context.session.markdown_cache_entry(&document)? {
-        return Ok(context.finish(ToolResult::success_with(paginate_markdown(
-            entry.as_ref(),
-            &params,
-        )?)));
+        let mut output = paginate_markdown(entry.as_ref(), &params)?;
+        output.result = DocumentResult::new(document);
+        return Ok(context.finish(ToolResult::success_with(output)));
     }
 
     let extraction_result = extract_markdown(context)?;
@@ -50,8 +48,8 @@ pub(crate) fn execute_get_markdown(
     }
 
     let entry = Arc::new(MarkdownCacheEntry {
-        document_id: document.document_id,
-        revision: document.revision,
+        document_id: document.document_id.clone(),
+        revision: document.revision.clone(),
         title: extraction_result.title,
         url: extraction_result.url,
         byline: extraction_result.byline,
@@ -61,10 +59,9 @@ pub(crate) fn execute_get_markdown(
     });
     context.session.store_markdown_cache(Arc::clone(&entry))?;
 
-    Ok(context.finish(ToolResult::success_with(paginate_markdown(
-        entry.as_ref(),
-        &params,
-    )?)))
+    let mut output = paginate_markdown(entry.as_ref(), &params)?;
+    output.result = DocumentResult::new(document);
+    Ok(context.finish(ToolResult::success_with(output)))
 }
 
 pub(crate) fn paginate_markdown(
@@ -116,6 +113,14 @@ pub(crate) fn paginate_markdown(
     let length = page_content.len();
 
     Ok(GetMarkdownOutput {
+        result: DocumentResult::new(crate::dom::DocumentMetadata {
+            document_id: entry.document_id.clone(),
+            revision: entry.revision.clone(),
+            url: entry.url.clone(),
+            title: entry.title.clone(),
+            ready_state: "complete".to_string(),
+            frames: Vec::new(),
+        }),
         markdown: page_content,
         title: entry.title.clone(),
         url: entry.url.clone(),
@@ -331,7 +336,11 @@ mod tests {
         }
 
         fn list_tabs(&self) -> Result<Vec<TabDescriptor>> {
-            unreachable!("list_tabs is not used in this test")
+            Ok(vec![TabDescriptor {
+                id: "tab-1".to_string(),
+                title: "Test Tab".to_string(),
+                url: "about:blank".to_string(),
+            }])
         }
 
         fn active_tab(&self) -> Result<TabDescriptor> {
@@ -399,7 +408,11 @@ mod tests {
         }
 
         fn list_tabs(&self) -> Result<Vec<TabDescriptor>> {
-            unreachable!("list_tabs is not used in this test")
+            Ok(vec![TabDescriptor {
+                id: "tab-1".to_string(),
+                title: "Test Tab".to_string(),
+                url: "about:blank".to_string(),
+            }])
         }
 
         fn active_tab(&self) -> Result<TabDescriptor> {

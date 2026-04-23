@@ -1,6 +1,7 @@
 use crate::error::{BrowserError, Result};
 use crate::tools::{
     DocumentEnvelopeOptions, Tool, ToolContext, ToolResult, build_document_envelope,
+    core::DocumentActionResult,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -13,16 +14,9 @@ pub struct GoBackParams {}
 #[derive(Default)]
 pub struct GoBackTool;
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct GoBackOutput {
-    #[serde(flatten)]
-    pub envelope: crate::tools::DocumentEnvelope,
-    pub action: String,
-}
-
 impl Tool for GoBackTool {
     type Params = GoBackParams;
-    type Output = GoBackOutput;
+    type Output = DocumentActionResult;
 
     fn name(&self) -> &str {
         "go_back"
@@ -48,9 +42,11 @@ impl Tool for GoBackTool {
 
         context.invalidate_dom();
         let envelope = build_document_envelope(context, None, DocumentEnvelopeOptions::minimal())?;
-        Ok(context.finish(ToolResult::success_with(GoBackOutput {
-            envelope,
-            action: "go_back".to_string(),
-        })))
+        Ok(
+            context.finish(ToolResult::success_with(DocumentActionResult::new(
+                "go_back",
+                envelope.document,
+            ))),
+        )
     }
 }

@@ -199,6 +199,45 @@
     }
   }
 
+  function buildSelector(element) {
+    if (!element || !element.ownerDocument) {
+      return null;
+    }
+
+    const doc = element.ownerDocument;
+    if (element.id) {
+      return '#' + escapeCssIdentifier(element.id);
+    }
+
+    const path = [];
+    let current = element;
+
+    while (current && current !== doc.body) {
+      let selector = current.tagName.toLowerCase();
+
+      if (current.className && typeof current.className === 'string') {
+        const classes = current.className.trim().split(/\s+/).filter(Boolean);
+        if (classes.length > 0) {
+          selector += '.' + escapeCssIdentifier(classes[0]);
+        }
+      }
+
+      const parent = current.parentElement;
+      if (parent) {
+        const siblings = Array.from(parent.children);
+        const siblingIndex = siblings.indexOf(current);
+        if (siblings.filter((sibling) => sibling.tagName === current.tagName).length > 1) {
+          selector += ':nth-child(' + (siblingIndex + 1) + ')';
+        }
+      }
+
+      path.unshift(selector);
+      current = current.parentElement;
+    }
+
+    return path.join(' > ') || null;
+  }
+
   function inspectElement(element, frameDepth, actionableIndex) {
     const view = getDocumentView(element.ownerDocument);
     const box = computeBox(element);
@@ -257,6 +296,7 @@
         inside_shadow_root: insideShadowRoot
       },
       actionable_index: actionableIndex,
+      resolved_selector: buildSelector(element),
       boundary: buildBoundary(element),
       sections: buildSections(element)
     };

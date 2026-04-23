@@ -33,8 +33,8 @@ fn test_go_back_tool() {
     assert!(current_url.contains("Page 2"));
 
     // Create tool and context
-    let tool = GoBackTool::default();
-    let mut context = ToolContext::new(&session);
+    let tool = GoBackTool;
+    let mut context = ToolContext::new(session);
 
     // Execute the tool to go back
     let result = tool
@@ -93,8 +93,8 @@ fn test_go_forward_tool() {
     assert!(current_url.contains("Page 1"));
 
     // Create tool and context
-    let tool = GoForwardTool::default();
-    let mut context = ToolContext::new(&session);
+    let tool = GoForwardTool;
+    let mut context = ToolContext::new(session);
 
     // Execute the tool to go forward
     let result = tool
@@ -159,11 +159,11 @@ fn test_navigation_workflow() {
     info!("On page 3");
 
     // Create tools
-    let go_back_tool = GoBackTool::default();
-    let go_forward_tool = GoForwardTool::default();
+    let go_back_tool = GoBackTool;
+    let go_forward_tool = GoForwardTool;
 
     // Go back to page 2
-    let mut context = ToolContext::new(&session);
+    let mut context = ToolContext::new(session);
     let result = go_back_tool
         .execute_typed(GoBackParams {}, &mut context)
         .expect("Failed to go back");
@@ -174,7 +174,7 @@ fn test_navigation_workflow() {
     common::wait_for_url_contains(session, "Page 2").expect("Should return to page 2");
 
     // Go back to page 1
-    let mut context = ToolContext::new(&session);
+    let mut context = ToolContext::new(session);
     let result = go_back_tool
         .execute_typed(GoBackParams {}, &mut context)
         .expect("Failed to go back");
@@ -189,7 +189,7 @@ fn test_navigation_workflow() {
     assert!(current_url.contains("Page 1"));
 
     // Go forward to page 2
-    let mut context = ToolContext::new(&session);
+    let mut context = ToolContext::new(session);
     let result = go_forward_tool
         .execute_typed(GoForwardParams {}, &mut context)
         .expect("Failed to go forward");
@@ -224,8 +224,8 @@ fn test_close_tool() {
     assert!(!tabs.is_empty(), "Should have at least one tab");
 
     // Create tool and context
-    let tool = CloseTool::default();
-    let mut context = ToolContext::new(&session);
+    let tool = CloseTool;
+    let mut context = ToolContext::new(session);
 
     // Execute the tool to close the browser
     let result = tool
@@ -274,8 +274,8 @@ fn test_go_back_on_first_page() {
     .expect("Failed to navigate");
 
     // Create tool and context
-    let tool = GoBackTool::default();
-    let mut context = ToolContext::new(&session);
+    let tool = GoBackTool;
+    let mut context = ToolContext::new(session);
 
     // Execute the tool - should succeed but do nothing
     let result = tool
@@ -309,8 +309,8 @@ fn test_go_forward_on_last_page() {
     .expect("Failed to navigate");
 
     // Create tool and context
-    let tool = GoForwardTool::default();
-    let mut context = ToolContext::new(&session);
+    let tool = GoForwardTool;
+    let mut context = ToolContext::new(session);
 
     // Execute the tool - should succeed but do nothing
     let result = tool
@@ -341,8 +341,8 @@ fn test_wait_tool_navigation_settled() {
     )
     .expect("Failed to navigate");
 
-    let tool = WaitTool::default();
-    let mut context = ToolContext::new(&session);
+    let tool = WaitTool;
+    let mut context = ToolContext::new(session);
 
     let result = tool
         .execute_typed(

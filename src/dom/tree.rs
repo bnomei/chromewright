@@ -238,6 +238,22 @@ struct LegacySnapshotResponse {
 }
 
 impl DomTree {
+    fn apply_public_handle_flags(
+        node: &mut AriaNode,
+        selector_overrides: &BTreeMap<usize, String>,
+    ) {
+        node.public_handle = node
+            .index
+            .and_then(|index| selector_overrides.get(&index))
+            .is_some_and(|selector| !selector.is_empty());
+
+        for child in &mut node.children {
+            if let AriaChild::Node(child_node) = child {
+                Self::apply_public_handle_flags(child_node, selector_overrides);
+            }
+        }
+    }
+
     fn selector_map_from_slots(selectors: Vec<String>) -> BTreeMap<usize, String> {
         selectors
             .into_iter()
@@ -247,6 +263,7 @@ impl DomTree {
     }
 
     fn rebuild_indexed_from_selector_map(&mut self, selector_overrides: BTreeMap<usize, String>) {
+        Self::apply_public_handle_flags(&mut self.root, &selector_overrides);
         self.indexed = IndexedSnapshot::from_root(&self.root, &selector_overrides);
     }
 
@@ -305,12 +322,13 @@ impl DomTree {
 
     /// Create a new DomTree from an AriaNode
     pub fn new(root: AriaNode) -> Self {
-        let indexed = IndexedSnapshot::from_root(&root, &BTreeMap::new());
-        Self {
+        let mut tree = Self {
             document: DocumentMetadata::default(),
             root,
-            indexed,
-        }
+            indexed: IndexedSnapshot::default(),
+        };
+        tree.rebuild_indexed_from_selector_map(BTreeMap::new());
+        tree
     }
 
     /// Build DOM tree from a browser tab
@@ -365,13 +383,14 @@ impl DomTree {
             selectors,
             _iframe_indices: _,
         } = response;
-        let indexed = IndexedSnapshot::from_root(&root, &Self::selector_map_from_slots(selectors));
-
-        Ok(Self {
+        let mut tree = Self {
             document,
             root,
-            indexed,
-        })
+            indexed: IndexedSnapshot::default(),
+        };
+        tree.rebuild_indexed_from_selector_map(Self::selector_map_from_slots(selectors));
+
+        Ok(tree)
     }
 
     /// Get CSS selector for a given index
@@ -424,11 +443,8 @@ impl DomTree {
         self.indexed
             .records
             .iter()
-            .filter_map(|(index, record)| {
-                (record.selector.as_deref() == Some(selector))
-                    .then(|| self.cursor_for_index(*index))
-            })
-            .flatten()
+            .filter(|(_, record)| record.selector.as_deref() == Some(selector))
+            .filter_map(|(index, _)| self.cursor_for_index(*index))
             .collect()
     }
 
@@ -701,6 +717,31 @@ mod tests {
         assert_eq!(snapshot_nodes[1].index, 1);
         assert_eq!(snapshot_nodes[1].role, "link");
         assert_eq!(snapshot_nodes[1].cursor.selector, "a[href='/next']");
+        assert!(
+            tree.find_node_by_index(0)
+                .is_some_and(AriaNode::has_public_handle)
+        );
+        assert!(
+            tree.find_node_by_index(1)
+                .is_some_and(AriaNode::has_public_handle)
+        );
+    }
+
+    #[test]
+    fn test_replace_selectors_marks_only_selector_backed_nodes_as_public_handles() {
+        let root = create_test_tree();
+        let mut tree = DomTree::new(root);
+        tree.replace_selectors(vec!["button.primary".to_string()]);
+
+        assert!(
+            tree.find_node_by_index(0)
+                .is_some_and(AriaNode::has_public_handle)
+        );
+        assert!(
+            !tree
+                .find_node_by_index(1)
+                .is_some_and(AriaNode::has_public_handle)
+        );
     }
 
     #[test]

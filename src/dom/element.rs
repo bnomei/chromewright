@@ -1,6 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 /// Represents an ARIA node in the accessibility tree
 /// Based on Playwright's AriaNode structure
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -11,9 +15,25 @@ pub struct AriaNode {
     /// Accessible name of the element
     pub name: String,
 
+    /// Backing DOM tag name for reconciliation and debugging.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+
+    /// Backing DOM id for reconciliation and debugging.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+
+    /// Backing DOM classes for reconciliation and debugging.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub classes: Vec<String>,
+
     /// Index of the element in the interactive elements array
     #[serde(skip_serializing_if = "Option::is_none")]
     pub index: Option<usize>,
+
+    /// Whether this node currently has a public follow-up handle.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub public_handle: bool,
 
     /// Child nodes (can be AriaNode or text strings)
     #[serde(default)]
@@ -82,24 +102,31 @@ pub enum AriaPressed {
 }
 
 /// Box/visibility information for an element
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct BoxInfo {
     /// Whether the element is visible (non-zero bounding box)
     #[serde(default)]
     pub visible: bool,
 
+    /// Whether any part of the element intersects the current viewport.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub in_viewport: bool,
+
+    /// Whether this node is inside persistent sticky or fixed chrome.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub persistent_chrome: bool,
+
+    /// Position mode of the sticky or fixed chrome host, when present.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub persistent_position: Option<String>,
+
+    /// Viewport edge where the persistent chrome is pinned.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub persistent_edge: Option<String>,
+
     /// CSS cursor value (e.g., "pointer", "default")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,
-}
-
-impl Default for BoxInfo {
-    fn default() -> Self {
-        Self {
-            visible: false,
-            cursor: None,
-        }
-    }
 }
 
 impl AriaNode {
@@ -108,7 +135,11 @@ impl AriaNode {
         Self {
             role: role.into(),
             name: name.into(),
+            tag: None,
+            id: None,
+            classes: Vec::new(),
             index: None,
+            public_handle: false,
             children: Vec::new(),
             props: HashMap::new(),
             box_info: BoxInfo::default(),
@@ -133,6 +164,25 @@ impl AriaNode {
         self
     }
 
+    /// Builder: set backing DOM identity fields.
+    pub fn with_dom_identity(
+        mut self,
+        tag: impl Into<String>,
+        id: Option<String>,
+        classes: Vec<String>,
+    ) -> Self {
+        self.tag = Some(tag.into());
+        self.id = id;
+        self.classes = classes;
+        self
+    }
+
+    /// Builder: mark whether the node has a public follow-up handle.
+    pub fn with_public_handle(mut self, public_handle: bool) -> Self {
+        self.public_handle = public_handle;
+        self
+    }
+
     /// Builder: add a child node
     pub fn with_child(mut self, child: AriaChild) -> Self {
         self.children.push(child);
@@ -153,7 +203,14 @@ impl AriaNode {
 
     /// Builder: set box info
     pub fn with_box(mut self, visible: bool, cursor: Option<String>) -> Self {
-        self.box_info = BoxInfo { visible, cursor };
+        self.box_info = BoxInfo {
+            visible,
+            in_viewport: visible,
+            persistent_chrome: false,
+            persistent_position: None,
+            persistent_edge: None,
+            cursor,
+        };
         self
     }
 
@@ -175,6 +232,18 @@ impl AriaNode {
         self
     }
 
+    /// Builder: set selected state
+    pub fn with_selected(mut self, selected: bool) -> Self {
+        self.selected = Some(selected);
+        self
+    }
+
+    /// Builder: set active state
+    pub fn with_active(mut self, active: bool) -> Self {
+        self.active = Some(active);
+        self
+    }
+
     /// Builder: set level
     pub fn with_level(mut self, level: u32) -> Self {
         self.level = Some(level);
@@ -186,12 +255,32 @@ impl AriaNode {
         self.index.is_some() && self.box_info.visible
     }
 
+    /// Check if this node advertises a public revision-local follow-up handle.
+    pub fn has_public_handle(&self) -> bool {
+        self.index.is_some() && self.public_handle
+    }
+
     /// Check if this node has pointer cursor
     pub fn has_pointer_cursor(&self) -> bool {
         self.box_info
             .cursor
             .as_ref()
-            .map_or(false, |c| c == "pointer")
+            .is_some_and(|c| c == "pointer")
+    }
+
+    /// Whether this node belongs to persistent sticky/fixed chrome.
+    pub fn is_persistent_chrome(&self) -> bool {
+        self.box_info.persistent_chrome
+    }
+
+    /// Whether this node currently carries state worth preserving in compact snapshots.
+    pub fn carries_snapshot_state(&self) -> bool {
+        self.active == Some(true)
+            || self.expanded == Some(true)
+            || self.selected == Some(true)
+            || self.checked.is_some()
+            || self.pressed.is_some()
+            || self.disabled == Some(true)
     }
 
     /// Check if this is a fragment or iframe
@@ -378,6 +467,21 @@ mod tests {
         let without_pointer =
             AriaNode::new("button", "").with_box(true, Some("default".to_string()));
         assert!(!without_pointer.has_pointer_cursor());
+    }
+
+    #[test]
+    fn test_is_persistent_chrome() {
+        let mut sticky = AriaNode::new("button", "Nav").with_box(true, Some("pointer".to_string()));
+        sticky.box_info.persistent_chrome = true;
+        sticky.box_info.persistent_position = Some("sticky".to_string());
+        sticky.box_info.persistent_edge = Some("top".to_string());
+
+        assert!(sticky.is_persistent_chrome());
+        assert_eq!(
+            sticky.box_info.persistent_position.as_deref(),
+            Some("sticky")
+        );
+        assert_eq!(sticky.box_info.persistent_edge.as_deref(), Some("top"));
     }
 
     #[test]

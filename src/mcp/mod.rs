@@ -13,6 +13,99 @@ use rmcp::{
     model::{CallToolResult, Content, Meta},
 };
 
+fn merge_error_details(
+    existing: Option<serde_json::Value>,
+    extras: serde_json::Map<String, serde_json::Value>,
+) -> Option<serde_json::Value> {
+    if extras.is_empty() {
+        return existing;
+    }
+
+    match existing {
+        Some(serde_json::Value::Object(mut details)) => {
+            details.extend(extras);
+            Some(serde_json::Value::Object(details))
+        }
+        Some(other) => Some(serde_json::json!({
+            "payload": other,
+            "extra": extras,
+        })),
+        None => Some(serde_json::Value::Object(extras)),
+    }
+}
+
+fn normalize_structured_error(
+    error_msg: String,
+    data: Option<serde_json::Value>,
+) -> serde_json::Value {
+    let mut normalized = serde_json::Map::new();
+    let mut extras = serde_json::Map::new();
+    let mut details = None;
+
+    match data {
+        Some(serde_json::Value::Object(mut object)) => {
+            let code = object
+                .remove("code")
+                .unwrap_or_else(|| serde_json::Value::String("tool_error".to_string()));
+            let error = object
+                .remove("error")
+                .unwrap_or_else(|| serde_json::Value::String(error_msg.clone()));
+            let document = object.remove("document");
+            let target = object.remove("target");
+            let recovery = object.remove("recovery");
+            details = object.remove("details");
+            extras = object;
+
+            normalized.insert("code".to_string(), code);
+            normalized.insert("error".to_string(), error);
+            if let Some(document) = document
+                && !document.is_null()
+            {
+                normalized.insert("document".to_string(), document);
+            }
+            if let Some(target) = target
+                && !target.is_null()
+            {
+                normalized.insert("target".to_string(), target);
+            }
+            if let Some(recovery) = recovery
+                && !recovery.is_null()
+            {
+                normalized.insert("recovery".to_string(), recovery);
+            }
+        }
+        Some(other) => {
+            normalized.insert(
+                "code".to_string(),
+                serde_json::Value::String("tool_error".to_string()),
+            );
+            normalized.insert(
+                "error".to_string(),
+                serde_json::Value::String(error_msg.clone()),
+            );
+            details = Some(other);
+        }
+        None => {
+            normalized.insert(
+                "code".to_string(),
+                serde_json::Value::String("tool_error".to_string()),
+            );
+            normalized.insert(
+                "error".to_string(),
+                serde_json::Value::String(error_msg.clone()),
+            );
+        }
+    }
+
+    if let Some(details) = merge_error_details(details, extras)
+        && !details.is_null()
+    {
+        normalized.insert("details".to_string(), details);
+    }
+
+    serde_json::Value::Object(normalized)
+}
+
 fn with_metadata(
     result: CallToolResult,
     metadata: std::collections::HashMap<String, serde_json::Value>,
@@ -43,21 +136,7 @@ pub(crate) fn convert_result(result: InternalToolResult) -> Result<CallToolResul
         Ok(with_metadata(result, metadata))
     } else {
         let error_msg = error.unwrap_or_else(|| "Unknown error".to_string());
-        let structured_error = match data {
-            Some(serde_json::Value::Object(mut object)) => {
-                object
-                    .entry("error".to_string())
-                    .or_insert_with(|| serde_json::Value::String(error_msg.clone()));
-                serde_json::Value::Object(object)
-            }
-            Some(other) => serde_json::json!({
-                "error": error_msg,
-                "details": other,
-            }),
-            None => serde_json::json!({
-                "error": error_msg,
-            }),
-        };
+        let structured_error = normalize_structured_error(error_msg, data);
         let result = CallToolResult::structured_error(structured_error);
 
         Ok(with_metadata(result, metadata))
@@ -141,6 +220,7 @@ mod tests {
         assert_eq!(
             result.structured_content,
             Some(json!({
+                "code": "tool_error",
                 "error": "Element not found",
             }))
         );
@@ -187,7 +267,9 @@ mod tests {
             Some(json!({
                 "code": "tool_execution_failed",
                 "error": "Session close encountered 1 error(s)",
-                "tool": "close",
+                "details": {
+                    "tool": "close",
+                },
             }))
         );
         assert_eq!(result.is_error, Some(true));
@@ -252,6 +334,31 @@ mod tests {
     }
 
     #[test]
+    fn test_live_mcp_input_schemas_match_registered_tool_descriptors() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        let descriptor_schemas: HashMap<String, serde_json::Value> = session
+            .tool_registry()
+            .descriptors()
+            .into_iter()
+            .map(|descriptor| (descriptor.name.to_string(), descriptor.parameters_schema))
+            .collect();
+
+        let tools = BrowserServer::from_session(session).list_mcp_tools();
+
+        for tool in tools {
+            let expected = descriptor_schemas
+                .get(tool.name.as_ref())
+                .unwrap_or_else(|| panic!("missing descriptor schema for {}", tool.name));
+            let advertised = serde_json::Value::Object(tool.input_schema.as_ref().clone());
+            assert_eq!(
+                &advertised, expected,
+                "live MCP input schema drifted from registered descriptor for {}",
+                tool.name
+            );
+        }
+    }
+
+    #[test]
     fn test_mcp_tool_descriptions_are_concise() {
         let tools = BrowserServer::from_session(BrowserSession::with_test_backend(
             FakeSessionBackend::new(),
@@ -304,15 +411,19 @@ mod tests {
             ("read_links", ["click", "navigate"].as_slice()),
             (
                 "snapshot",
-                ["cursors", "inspect_node", "click", "wait"].as_slice(),
+                ["viewport", "inspect_node", "click", "wait"].as_slice(),
             ),
-            ("inspect_node", ["cursor", "snapshot"].as_slice()),
+            (
+                "inspect_node",
+                ["target", "selector", "cursor", "snapshot"].as_slice(),
+            ),
             ("click", ["snapshot", "wait"].as_slice()),
             ("input", ["snapshot", "press_key"].as_slice()),
             ("select", ["snapshot", "wait"].as_slice()),
             ("new_tab", ["tab_list", "switch_tab"].as_slice()),
             ("tab_list", ["switch_tab"].as_slice()),
             ("switch_tab", ["tab_list", "snapshot"].as_slice()),
+            ("screenshot", ["managed", "target", "mode", "scale"].as_slice()),
         ];
 
         for (tool_name, keywords) in expectations {
@@ -347,10 +458,25 @@ mod tests {
             tool_names.iter().any(|name| name == "read_links"),
             "read_links should be exported via MCP"
         );
+        assert!(
+            tool_names.iter().any(|name| name == "screenshot"),
+            "screenshot should be exported via MCP"
+        );
     }
 
     #[test]
     fn test_mcp_surface_reflects_operator_tool_registration() {
+        let default_tool_names: Vec<String> = BrowserServer::from_session(
+            BrowserSession::with_test_backend(FakeSessionBackend::new()),
+        )
+        .list_mcp_tools()
+        .into_iter()
+        .map(|tool| tool.name.to_string())
+        .collect();
+
+        assert!(!default_tool_names.iter().any(|name| name == "evaluate"));
+        assert!(default_tool_names.iter().any(|name| name == "screenshot"));
+
         let mut session = BrowserSession::with_test_backend(FakeSessionBackend::new());
         session.tool_registry_mut().register_operator_tools();
 
@@ -362,5 +488,132 @@ mod tests {
 
         assert!(tool_names.iter().any(|name| name == "evaluate"));
         assert!(tool_names.iter().any(|name| name == "screenshot"));
+    }
+
+    #[test]
+    fn test_screenshot_schema_exposes_managed_artifact_contract() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        let descriptor = session
+            .tool_registry()
+            .descriptors()
+            .into_iter()
+            .find(|tool| tool.name == "screenshot")
+            .expect("screenshot descriptor should exist");
+
+        assert!(descriptor.description.contains("managed"));
+        assert!(descriptor.description.contains("mode"));
+        assert!(descriptor.description.contains("scale"));
+        assert!(!descriptor.description.contains("confirm_unsafe"));
+        assert!(!descriptor.description.contains("path"));
+
+        let params = &descriptor.parameters_schema["properties"];
+        assert!(params.get("mode").is_some());
+        assert!(params.get("scale").is_some());
+        assert!(params.get("tab_id").is_some());
+        assert!(params.get("target").is_some());
+        assert!(params.get("region").is_some());
+        assert!(params.get("path").is_none());
+        assert!(params.get("full_page").is_none());
+        assert!(params.get("confirm_unsafe").is_none());
+
+        let output = &descriptor.output_schema["properties"];
+        assert!(output.get("artifact_uri").is_some());
+        assert!(output.get("artifact_path").is_some());
+        assert!(output.get("format").is_some());
+        assert!(output.get("mime_type").is_some());
+        assert!(output.get("byte_count").is_some());
+        assert!(output.get("width").is_some());
+        assert!(output.get("height").is_some());
+        assert!(output.get("css_width").is_some());
+        assert!(output.get("css_height").is_some());
+        assert!(output.get("device_pixel_ratio").is_some());
+        assert!(output.get("pixel_scale").is_some());
+        assert!(output.get("revealed_from_offscreen").is_some());
+        assert!(output.get("clip").is_some());
+    }
+
+    #[test]
+    fn test_live_mcp_target_schemas_stay_object_typed_for_dom_tools() {
+        let tools: HashMap<String, rmcp::model::Tool> = BrowserServer::from_session(
+            BrowserSession::with_test_backend(FakeSessionBackend::new()),
+        )
+        .list_mcp_tools()
+        .into_iter()
+        .map(|tool| (tool.name.to_string(), tool))
+        .collect();
+
+        for tool_name in ["inspect_node", "screenshot", "click"] {
+            let tool = tools
+                .get(tool_name)
+                .unwrap_or_else(|| panic!("missing MCP tool {tool_name}"));
+            let schema = serde_json::Value::Object(tool.input_schema.as_ref().clone());
+            let properties = schema["properties"]
+                .as_object()
+                .unwrap_or_else(|| panic!("{tool_name} should advertise object properties"));
+            let target = properties
+                .get("target")
+                .unwrap_or_else(|| panic!("{tool_name} should advertise target"));
+
+            assert_ne!(
+                target.get("type").and_then(|value| value.as_str()),
+                Some("string"),
+                "{tool_name} target regressed to a string-shaped schema"
+            );
+
+            let serialized =
+                serde_json::to_string(&schema).expect("schema should serialize for assertions");
+            assert!(
+                serialized.contains("\"kind\""),
+                "{tool_name} schema should advertise the target kind discriminator"
+            );
+            assert!(
+                serialized.contains("\"selector\""),
+                "{tool_name} schema should advertise selector targeting"
+            );
+            assert!(
+                serialized.contains("\"cursor\""),
+                "{tool_name} schema should advertise cursor targeting"
+            );
+        }
+    }
+
+    #[test]
+    fn test_snapshot_schema_exposes_mode_and_scope_contract() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        let descriptor = session
+            .tool_registry()
+            .descriptors()
+            .into_iter()
+            .find(|tool| tool.name == "snapshot")
+            .expect("snapshot descriptor should exist");
+
+        let params = &descriptor.parameters_schema["properties"];
+        assert!(params.get("mode").is_some());
+        assert!(params.get("incremental").is_none());
+
+        let output = &descriptor.output_schema["properties"];
+        assert!(output.get("scope").is_some());
+        assert!(output.get("global_interactive_count").is_some());
+        let output_schema =
+            serde_json::to_string(&descriptor.output_schema).expect("schema should serialize");
+        assert!(output_schema.contains("locality_fallback_reason"));
+    }
+
+    #[test]
+    fn test_inspect_node_schema_exposes_target_resolution_metadata() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        let descriptor = session
+            .tool_registry()
+            .descriptors()
+            .into_iter()
+            .find(|tool| tool.name == "inspect_node")
+            .expect("inspect_node descriptor should exist");
+
+        let schema =
+            serde_json::to_string(&descriptor.output_schema).expect("schema should serialize");
+        assert!(schema.contains("resolution_status"));
+        assert!(schema.contains("recovered_from"));
+        assert!(schema.contains("cursor"));
+        assert!(schema.contains("node_ref"));
     }
 }

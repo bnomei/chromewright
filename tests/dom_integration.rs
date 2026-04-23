@@ -126,8 +126,8 @@ fn test_read_links() {
 
     common::navigate_encoded_html(session, html).expect("Failed navigate");
 
-    let tool = ReadLinksTool::default();
-    let mut context = ToolContext::new(&session);
+    let tool = ReadLinksTool;
+    let mut context = ToolContext::new(session);
 
     let result = tool
         .execute_typed(ReadLinksParams {}, &mut context)
@@ -226,8 +226,8 @@ fn test_press_key_enter() {
     .expect("Input should receive focus");
 
     // Create tool and context
-    let tool = PressKeyTool::default();
-    let mut context = ToolContext::new(&session);
+    let tool = PressKeyTool;
+    let mut context = ToolContext::new(session);
 
     // Execute the tool to press Enter
     let result = tool
@@ -285,7 +285,9 @@ fn test_press_key_enter() {
 #[test]
 #[ignore]
 fn test_snapshot_tool_exposes_document_metadata_and_node_refs() {
-    use chromewright::tools::{SnapshotParams, Tool, ToolContext, snapshot::SnapshotTool};
+    use chromewright::tools::{
+        SnapshotMode, SnapshotParams, Tool, ToolContext, snapshot::SnapshotTool,
+    };
 
     let Some(browser) = common::browser_or_skip() else {
         return;
@@ -303,8 +305,8 @@ fn test_snapshot_tool_exposes_document_metadata_and_node_refs() {
 
     common::navigate_html(session, html).expect("Failed to navigate");
 
-    let tool = SnapshotTool::default();
-    let mut context = ToolContext::new(&session);
+    let tool = SnapshotTool;
+    let mut context = ToolContext::new(session);
 
     let result = tool
         .execute_typed(SnapshotParams::default(), &mut context)
@@ -321,6 +323,17 @@ fn test_snapshot_tool_exposes_document_metadata_and_node_refs() {
     assert!(document["revision"].as_str().is_some());
     assert_eq!(document["ready_state"].as_str(), Some("complete"));
     assert!(data["snapshot"].as_str().is_some());
+    assert_eq!(data["scope"]["mode"].as_str(), Some("viewport"));
+    assert_eq!(data["scope"]["fallback_mode"].as_str(), None);
+    assert_eq!(data["scope"]["viewport_biased"].as_bool(), Some(true));
+    assert_eq!(
+        data["scope"]["returned_node_count"].as_u64(),
+        Some(nodes.len() as u64)
+    );
+    assert_eq!(
+        data["global_interactive_count"].as_u64(),
+        Some(nodes.len() as u64)
+    );
     assert!(!nodes.is_empty(), "expected actionable nodes in snapshot");
 
     let first_ref = &nodes[0]["node_ref"];
@@ -339,6 +352,18 @@ fn test_snapshot_tool_exposes_document_metadata_and_node_refs() {
     assert_eq!(first_cursor["role"].as_str(), nodes[0]["role"].as_str());
     assert_eq!(first_cursor["name"].as_str(), nodes[0]["name"].as_str());
     assert!(first_cursor["selector"].as_str().is_some());
+
+    let full = tool
+        .execute_typed(
+            SnapshotParams {
+                mode: SnapshotMode::Full,
+            },
+            &mut context,
+        )
+        .expect("full snapshot should execute");
+    let full_data = full.data.expect("full snapshot should include data");
+    assert_eq!(full_data["scope"]["mode"].as_str(), Some("full"));
+    assert_eq!(full_data["scope"]["viewport_biased"].as_bool(), Some(false));
 }
 
 #[test]
@@ -364,9 +389,9 @@ fn test_stale_node_ref_returns_structured_failure() {
 
     common::navigate_html(session, html).expect("Failed to navigate");
 
-    let snapshot_tool = SnapshotTool::default();
-    let click_tool = ClickTool::default();
-    let mut context = ToolContext::new(&session);
+    let snapshot_tool = SnapshotTool;
+    let click_tool = ClickTool;
+    let mut context = ToolContext::new(session);
 
     let snapshot = snapshot_tool
         .execute_typed(SnapshotParams::default(), &mut context)
@@ -431,9 +456,9 @@ fn test_click_tool_reports_detached_handoff_after_target_removal() {
 
     common::navigate_html(session, html).expect("Failed to navigate");
 
-    let snapshot_tool = SnapshotTool::default();
-    let click_tool = ClickTool::default();
-    let mut context = ToolContext::new(&session);
+    let snapshot_tool = SnapshotTool;
+    let click_tool = ClickTool;
+    let mut context = ToolContext::new(session);
 
     let snapshot = snapshot_tool
         .execute_typed(SnapshotParams::default(), &mut context)
@@ -463,7 +488,7 @@ fn test_click_tool_reports_detached_handoff_after_target_removal() {
     );
     assert_eq!(data["target_status"].as_str(), Some("detached"));
     assert!(data["target_after"].is_null());
-    assert!(data["target"].is_null());
+    assert!(data.get("target").is_none());
 }
 
 #[test]
@@ -495,8 +520,8 @@ fn test_same_origin_iframe_content_is_included_in_snapshot() {
     assert_eq!(initial_metadata.revision, initial_dom.document.revision);
     assert_eq!(initial_metadata.frames, initial_dom.document.frames);
 
-    let tool = SnapshotTool::default();
-    let mut context = ToolContext::new(&session);
+    let tool = SnapshotTool;
+    let mut context = ToolContext::new(session);
 
     let result = tool
         .execute_typed(SnapshotParams::default(), &mut context)
@@ -510,6 +535,7 @@ fn test_same_origin_iframe_content_is_included_in_snapshot() {
             .unwrap_or_default()
             .contains("Inside Frame")
     );
+    assert_eq!(data["scope"]["mode"].as_str(), Some("viewport"));
     assert_eq!(
         data["document"]["frames"][0]["status"].as_str(),
         Some("expanded")
@@ -613,7 +639,7 @@ fn test_same_origin_iframe_content_is_included_in_snapshot() {
     assert_eq!(final_metadata.frames[0].status.as_str(), "expanded");
     assert_eq!(final_metadata.frames[1].status.as_str(), "expanded");
 
-    let mut updated_context = ToolContext::new(&session);
+    let mut updated_context = ToolContext::new(session);
     let updated_snapshot = tool
         .execute_typed(SnapshotParams::default(), &mut updated_context)
         .expect("snapshot should succeed after iframe updates");
@@ -658,8 +684,8 @@ fn test_snapshot_tool_exposes_cursor_for_same_origin_iframe_node() {
 
     common::navigate_html(session, html).expect("Failed to navigate");
 
-    let tool = SnapshotTool::default();
-    let mut context = ToolContext::new(&session);
+    let tool = SnapshotTool;
+    let mut context = ToolContext::new(session);
 
     let result = tool
         .execute_typed(SnapshotParams::default(), &mut context)
@@ -667,6 +693,7 @@ fn test_snapshot_tool_exposes_cursor_for_same_origin_iframe_node() {
 
     assert!(result.success);
     let data = result.data.unwrap();
+    assert_eq!(data["scope"]["mode"].as_str(), Some("viewport"));
     let nodes = data["nodes"]
         .as_array()
         .expect("snapshot should return nodes");
@@ -686,7 +713,9 @@ fn test_snapshot_tool_exposes_cursor_for_same_origin_iframe_node() {
 #[test]
 #[ignore]
 fn test_snapshot_tool_keeps_inline_handles_aligned_with_exposed_cursor_nodes() {
-    use chromewright::tools::{SnapshotParams, Tool, ToolContext, snapshot::SnapshotTool};
+    use chromewright::tools::{
+        SnapshotMode, SnapshotParams, Tool, ToolContext, snapshot::SnapshotTool,
+    };
 
     let Some(browser) = common::browser_or_skip() else {
         return;
@@ -696,15 +725,21 @@ fn test_snapshot_tool_keeps_inline_handles_aligned_with_exposed_cursor_nodes() {
     common::navigate_encoded_html(session, production_inspection_fixture_html())
         .expect("Failed to navigate");
 
-    let tool = SnapshotTool::default();
-    let mut context = ToolContext::new(&session);
+    let tool = SnapshotTool;
+    let mut context = ToolContext::new(session);
 
     let result = tool
-        .execute_typed(SnapshotParams::default(), &mut context)
+        .execute_typed(
+            SnapshotParams {
+                mode: SnapshotMode::Full,
+            },
+            &mut context,
+        )
         .expect("snapshot should succeed");
 
     assert!(result.success);
     let data = result.data.expect("snapshot should include data");
+    assert_eq!(data["scope"]["mode"].as_str(), Some("full"));
     let snapshot = data["snapshot"]
         .as_str()
         .expect("snapshot should include a rendered tree");
@@ -741,5 +776,333 @@ fn test_snapshot_tool_keeps_inline_handles_aligned_with_exposed_cursor_nodes() {
         nodes
             .iter()
             .all(|node| node["name"].as_str() != Some("Workspace agent diagram"))
+    );
+}
+
+#[test]
+#[ignore]
+fn test_snapshot_viewport_mode_stays_local_while_full_mode_keeps_exhaustive_escape_hatch() {
+    use chromewright::tools::{
+        SnapshotMode, SnapshotParams, Tool, ToolContext, snapshot::SnapshotTool,
+    };
+
+    let Some(browser) = common::browser_or_skip() else {
+        return;
+    };
+    let session = browser.session();
+
+    let html = r#"
+        <html>
+        <body style="margin: 0">
+            <button id="top-action">Top action</button>
+            <div style="height: 2200px"></div>
+            <button id="bottom-action">Bottom action</button>
+        </body>
+        </html>
+    "#;
+
+    common::navigate_html(session, html).expect("Failed to navigate");
+
+    let tool = SnapshotTool;
+    let mut context = ToolContext::new(session);
+    let top_snapshot = tool
+        .execute_typed(SnapshotParams::default(), &mut context)
+        .expect("viewport snapshot should succeed");
+    let top_data = top_snapshot
+        .data
+        .expect("viewport snapshot should include data");
+    let top_nodes = top_data["nodes"]
+        .as_array()
+        .expect("viewport snapshot should expose nodes");
+    assert_eq!(top_data["scope"]["mode"].as_str(), Some("viewport"));
+    assert_eq!(
+        top_nodes
+            .iter()
+            .filter_map(|node| node["name"].as_str())
+            .collect::<Vec<_>>(),
+        vec!["Top action"]
+    );
+
+    let full_snapshot = tool
+        .execute_typed(
+            SnapshotParams {
+                mode: SnapshotMode::Full,
+            },
+            &mut context,
+        )
+        .expect("full snapshot should succeed");
+    let full_data = full_snapshot
+        .data
+        .expect("full snapshot should include data");
+    let full_nodes = full_data["nodes"]
+        .as_array()
+        .expect("full snapshot should expose nodes");
+    let full_names = full_nodes
+        .iter()
+        .filter_map(|node| node["name"].as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(full_data["scope"]["mode"].as_str(), Some("full"));
+    assert!(full_names.contains(&"Top action"));
+    assert!(full_names.contains(&"Bottom action"));
+
+    common::evaluate(
+        session,
+        "window.scrollTo(0, document.body.scrollHeight); true",
+    )
+    .expect("scroll should succeed");
+
+    let mut scrolled_context = ToolContext::new(session);
+    let bottom_snapshot = tool
+        .execute_typed(SnapshotParams::default(), &mut scrolled_context)
+        .expect("viewport snapshot after scroll should succeed");
+    let bottom_data = bottom_snapshot
+        .data
+        .expect("viewport snapshot after scroll should include data");
+    let bottom_nodes = bottom_data["nodes"]
+        .as_array()
+        .expect("viewport snapshot after scroll should expose nodes");
+    assert_eq!(
+        bottom_nodes
+            .iter()
+            .filter_map(|node| node["name"].as_str())
+            .collect::<Vec<_>>(),
+        vec!["Bottom action"]
+    );
+}
+
+#[test]
+#[ignore]
+fn test_snapshot_delta_mode_reports_fallback_then_changed_local_surface() {
+    use chromewright::tools::{
+        ClickParams, SnapshotMode, SnapshotParams, Tool, ToolContext, click::ClickTool,
+        snapshot::SnapshotTool,
+    };
+
+    let Some(browser) = common::browser_or_skip() else {
+        return;
+    };
+    let session = browser.session();
+
+    let html = r#"
+        <html>
+        <body>
+            <button
+                id="toggle"
+                onclick="document.getElementById('details').hidden = false;"
+            >
+                Show details
+            </button>
+            <button id="details" hidden>Details</button>
+        </body>
+        </html>
+    "#;
+
+    common::navigate_html(session, html).expect("Failed to navigate");
+
+    let snapshot_tool = SnapshotTool;
+    let click_tool = ClickTool;
+    let mut context = ToolContext::new(session);
+
+    let first_delta = snapshot_tool
+        .execute_typed(
+            SnapshotParams {
+                mode: SnapshotMode::Delta,
+            },
+            &mut context,
+        )
+        .expect("first delta snapshot should succeed");
+    let first_delta_data = first_delta
+        .data
+        .expect("first delta snapshot should include data");
+    assert_eq!(first_delta_data["scope"]["mode"].as_str(), Some("delta"));
+    assert_eq!(
+        first_delta_data["scope"]["fallback_mode"].as_str(),
+        Some("viewport")
+    );
+
+    click_tool
+        .execute_typed(
+            ClickParams {
+                selector: Some("#toggle".to_string()),
+                index: None,
+                node_ref: None,
+                cursor: None,
+            },
+            &mut context,
+        )
+        .expect("toggle click should succeed");
+
+    let second_delta = snapshot_tool
+        .execute_typed(
+            SnapshotParams {
+                mode: SnapshotMode::Delta,
+            },
+            &mut context,
+        )
+        .expect("second delta snapshot should succeed");
+    let second_delta_data = second_delta
+        .data
+        .expect("second delta snapshot should include data");
+    let second_nodes = second_delta_data["nodes"]
+        .as_array()
+        .expect("second delta snapshot should expose nodes");
+    assert_eq!(second_delta_data["scope"]["mode"].as_str(), Some("delta"));
+    assert!(second_delta_data["scope"]["fallback_mode"].is_null());
+    assert!(
+        second_delta_data["snapshot"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Details")
+    );
+    assert!(
+        second_nodes
+            .iter()
+            .any(|node| node["name"].as_str() == Some("Details"))
+    );
+}
+
+#[test]
+#[ignore]
+fn test_dom_extraction_marks_sticky_header_controls_as_persistent_chrome() {
+    let Some(browser) = common::browser_or_skip() else {
+        return;
+    };
+    let session = browser.session();
+
+    let html = r#"
+        <html>
+        <head>
+            <style>
+                body { margin: 0; }
+                header {
+                    position: sticky;
+                    top: 0;
+                    background: white;
+                    border-bottom: 1px solid #ddd;
+                    padding: 12px;
+                }
+                main { padding: 24px; }
+            </style>
+        </head>
+        <body>
+            <header>
+                <button id="header-action">Header action</button>
+            </header>
+            <main>
+                <button id="local-action">Local action</button>
+            </main>
+        </body>
+        </html>
+    "#;
+
+    common::navigate_html(session, html).expect("Failed to navigate");
+
+    let dom = session
+        .extract_dom()
+        .expect("DOM extraction should succeed");
+    let header_cursor = dom
+        .cursor_for_selector("#header-action")
+        .expect("header action cursor should exist");
+    let local_cursor = dom
+        .cursor_for_selector("#local-action")
+        .expect("local action cursor should exist");
+
+    let header_node = dom
+        .root
+        .find_by_index(header_cursor.index)
+        .expect("header action node should exist");
+    let local_node = dom
+        .root
+        .find_by_index(local_cursor.index)
+        .expect("local action node should exist");
+
+    assert!(header_node.box_info.persistent_chrome);
+    assert_eq!(
+        header_node.box_info.persistent_position.as_deref(),
+        Some("sticky")
+    );
+    assert_eq!(header_node.box_info.persistent_edge.as_deref(), Some("top"));
+
+    assert!(!local_node.box_info.persistent_chrome);
+}
+
+#[test]
+#[ignore]
+fn test_snapshot_viewport_mode_demotes_sticky_header_chrome_after_deep_scroll() {
+    use chromewright::tools::{SnapshotParams, Tool, ToolContext, snapshot::SnapshotTool};
+
+    let Some(browser) = common::browser_or_skip() else {
+        return;
+    };
+    let session = browser.session();
+
+    let html = r#"
+        <html>
+        <head>
+            <style>
+                body { margin: 0; }
+                header {
+                    position: sticky;
+                    top: 0;
+                    background: white;
+                    border-bottom: 1px solid #ddd;
+                    padding: 12px;
+                }
+                main { padding: 24px; }
+                .spacer { height: 2200px; }
+            </style>
+        </head>
+        <body>
+            <header>
+                <button id="header-action">Header action</button>
+            </header>
+            <main>
+                <div class="spacer"></div>
+                <section>
+                    <h2>Local section</h2>
+                    <button id="local-action">Local action</button>
+                </section>
+            </main>
+        </body>
+        </html>
+    "#;
+
+    common::navigate_html(session, html).expect("Failed to navigate");
+    common::evaluate(
+        session,
+        "window.scrollTo(0, document.body.scrollHeight); true",
+    )
+    .expect("scroll should succeed");
+
+    let tool = SnapshotTool;
+    let mut context = ToolContext::new(session);
+    let result = tool
+        .execute_typed(SnapshotParams::default(), &mut context)
+        .expect("viewport snapshot should succeed");
+
+    assert!(result.success);
+    let data = result.data.expect("viewport snapshot should include data");
+    let nodes = data["nodes"]
+        .as_array()
+        .expect("viewport snapshot should expose nodes");
+    let names = nodes
+        .iter()
+        .filter_map(|node| node["name"].as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(data["scope"]["mode"].as_str(), Some("viewport"));
+    assert!(data["scope"]["locality_fallback_reason"].is_null());
+    assert_eq!(names, vec!["Local action"]);
+    assert!(
+        data["snapshot"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Local section")
+    );
+    assert!(
+        !data["snapshot"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Header action")
     );
 }

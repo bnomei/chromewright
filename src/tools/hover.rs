@@ -1,20 +1,24 @@
 use crate::dom::{Cursor, NodeRef};
 use crate::error::{BrowserError, Result};
 use crate::tools::{
-    DocumentEnvelope, TargetEnvelope, TargetResolution, Tool, ToolContext, ToolResult,
+    TargetResolution, Tool, ToolContext, ToolResult,
     actionability::ActionabilityPredicate,
     browser_kernel::render_browser_kernel_script,
+    core::PublicTarget,
+    core::TargetedActionResult,
     services::interaction::{
-        ActionabilityWaitState, DEFAULT_ACTIONABILITY_TIMEOUT_MS, TargetStatus,
-        build_actionability_failure, build_interaction_failure, build_interaction_handoff,
-        decode_action_result, resolve_interaction_target, wait_for_actionability,
+        ActionabilityWaitState, DEFAULT_ACTIONABILITY_TIMEOUT_MS, build_actionability_failure,
+        build_interaction_failure, build_interaction_handoff, decode_action_result,
+        resolve_interaction_target, wait_for_actionability,
     },
 };
-use schemars::JsonSchema;
+use schemars::{JsonSchema, Schema, SchemaGenerator};
+use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 
 /// Parameters for the hover tool
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize)]
 pub struct HoverParams {
     /// CSS selector (use either this or index, not both)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -33,6 +37,44 @@ pub struct HoverParams {
     pub cursor: Option<Cursor>,
 }
 
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct StrictHoverParams {
+    /// Target to hover.
+    pub target: PublicTarget,
+}
+
+impl From<StrictHoverParams> for HoverParams {
+    fn from(params: StrictHoverParams) -> Self {
+        let (selector, cursor) = params.target.into_selector_or_cursor();
+        Self {
+            selector,
+            index: None,
+            node_ref: None,
+            cursor,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for HoverParams {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        StrictHoverParams::deserialize(deserializer).map(Into::into)
+    }
+}
+
+impl JsonSchema for HoverParams {
+    fn schema_name() -> Cow<'static, str> {
+        "HoverParams".into()
+    }
+
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        StrictHoverParams::json_schema(generator)
+    }
+}
+
 /// Tool for hovering over elements
 #[derive(Default)]
 pub struct HoverTool;
@@ -40,7 +82,6 @@ pub struct HoverTool;
 const HOVER_JS: &str = include_str!("hover.js");
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
 pub struct HoverElement {
     pub tag_name: String,
     pub id: String,
@@ -50,12 +91,7 @@ pub struct HoverElement {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct HoverOutput {
     #[serde(flatten)]
-    pub envelope: DocumentEnvelope,
-    pub action: String,
-    pub target_before: TargetEnvelope,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub target_after: Option<TargetEnvelope>,
-    pub target_status: TargetStatus,
+    pub result: TargetedActionResult,
     pub element: HoverElement,
 }
 
@@ -144,11 +180,13 @@ impl Tool for HoverTool {
             HoverParseResult::Success(element) => {
                 let handoff = build_interaction_handoff(context, &target)?;
                 Ok(context.finish(ToolResult::success_with(HoverOutput {
-                    envelope: handoff.envelope,
-                    action: "hover".to_string(),
-                    target_before: handoff.target_before,
-                    target_after: handoff.target_after,
-                    target_status: handoff.target_status,
+                    result: TargetedActionResult::new(
+                        "hover",
+                        handoff.document,
+                        handoff.target_before,
+                        handoff.target_after,
+                        handoff.target_status,
+                    ),
                     element,
                 })))
             }
@@ -176,10 +214,25 @@ enum HoverParseResult {
     Failure { code: String, error: String },
 }
 
+#[derive(Debug, Deserialize)]
+struct RawHoverResult {
+    success: bool,
+    #[serde(default)]
+    code: Option<String>,
+    #[serde(default)]
+    error: Option<String>,
+    #[serde(default)]
+    tag_name: Option<String>,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    class_name: Option<String>,
+}
+
 fn parse_hover_result(
     value: Option<serde_json::Value>,
 ) -> std::result::Result<HoverParseResult, String> {
-    let result_json = decode_action_result(
+    let mut result_json = decode_action_result(
         value,
         serde_json::json!({
             "success": false,
@@ -188,37 +241,47 @@ fn parse_hover_result(
         }),
     )
     .map_err(|error| format!("Failed to parse hover result: {}", error))?;
+    promote_legacy_hover_fields(&mut result_json);
+    let result: RawHoverResult = serde_json::from_value(result_json)
+        .map_err(|error| format!("Failed to parse hover result: {}", error))?;
 
-    if result_json["success"].as_bool() == Some(true) {
+    if result.success {
         Ok(HoverParseResult::Success(HoverElement {
-            tag_name: required_hover_string_field(&result_json, "tagName")?.to_string(),
-            id: required_hover_string_field(&result_json, "id")?.to_string(),
-            class_name: required_hover_string_field(&result_json, "className")?.to_string(),
+            tag_name: required_hover_value(result.tag_name, "tag_name")?,
+            id: required_hover_value(result.id, "id")?,
+            class_name: required_hover_value(result.class_name, "class_name")?,
         }))
     } else {
         Ok(HoverParseResult::Failure {
-            code: result_json["code"]
-                .as_str()
-                .unwrap_or("target_detached")
-                .to_string(),
-            error: result_json["error"]
-                .as_str()
-                .unwrap_or("Hover failed")
-                .to_string(),
+            code: result.code.unwrap_or_else(|| "target_detached".to_string()),
+            error: result.error.unwrap_or_else(|| "Hover failed".to_string()),
         })
     }
 }
 
-fn required_hover_string_field<'a>(
-    result_json: &'a serde_json::Value,
+fn promote_legacy_hover_fields(result_json: &mut serde_json::Value) {
+    let Some(object) = result_json.as_object_mut() else {
+        return;
+    };
+
+    for (legacy, normalized) in [("tagName", "tag_name"), ("className", "class_name")] {
+        if object.contains_key(normalized) {
+            continue;
+        }
+
+        if let Some(value) = object.remove(legacy) {
+            object.insert(normalized.to_string(), value);
+        }
+    }
+}
+
+fn required_hover_value(
+    value: Option<String>,
     field: &'static str,
-) -> std::result::Result<&'a str, String> {
-    result_json
-        .get(field)
-        .and_then(|value| value.as_str())
-        .ok_or_else(|| {
-            format!("Hover returned an incomplete success payload: missing string field '{field}'")
-        })
+) -> std::result::Result<String, String> {
+    value.ok_or_else(|| {
+        format!("Hover returned an incomplete success payload: missing string field '{field}'")
+    })
 }
 
 fn hover_actionability_predicates() -> &'static [ActionabilityPredicate] {
@@ -238,7 +301,9 @@ mod tests {
     use crate::browser::backend::{ScriptEvaluation, SessionBackend, TabDescriptor};
     use crate::dom::{AriaChild, AriaNode, DocumentMetadata, DomTree};
     use crate::tools::{OPERATION_METRICS_METADATA_KEY, Tool, ToolContext};
+    use schemars::schema_for;
     use serde_json::Value;
+    use serde_json::json;
     use std::time::Duration;
 
     struct InvalidHoverPayloadBackend;
@@ -320,7 +385,7 @@ mod tests {
                         serde_json::json!({
                             "success": true,
                             "id": "fake-target",
-                            "className": "fake",
+                            "class_name": "fake",
                         })
                         .to_string(),
                     )),
@@ -341,7 +406,11 @@ mod tests {
         }
 
         fn list_tabs(&self) -> crate::error::Result<Vec<TabDescriptor>> {
-            unreachable!("list_tabs is not used in this test")
+            Ok(vec![TabDescriptor {
+                id: "tab-1".to_string(),
+                title: "Test Tab".to_string(),
+                url: "about:blank".to_string(),
+            }])
         }
 
         fn active_tab(&self) -> crate::error::Result<TabDescriptor> {
@@ -366,9 +435,43 @@ mod tests {
     }
 
     #[test]
+    fn test_hover_params_deserializes_strict_target_and_rejects_legacy_fields() {
+        let params: HoverParams = serde_json::from_value(json!({
+            "target": {
+                "kind": "selector",
+                "selector": "#hover-btn"
+            }
+        }))
+        .expect("strict hover target should deserialize");
+        assert_eq!(params.selector.as_deref(), Some("#hover-btn"));
+        assert_eq!(params.index, None);
+        assert_eq!(params.node_ref, None);
+        assert_eq!(params.cursor, None);
+
+        let error = serde_json::from_value::<HoverParams>(json!({
+            "selector": "#hover-btn"
+        }))
+        .expect_err("legacy selector field should be rejected");
+        assert!(error.to_string().contains("unknown field `selector`"));
+
+        let schema = schema_for!(HoverParams);
+        let schema_json = serde_json::to_value(&schema).expect("schema should serialize");
+        let properties = schema_json
+            .get("properties")
+            .and_then(|value| value.as_object())
+            .expect("hover params schema should expose properties");
+        assert!(properties.contains_key("target"));
+        assert!(!properties.contains_key("selector"));
+        assert!(!properties.contains_key("index"));
+        assert!(!properties.contains_key("node_ref"));
+        assert!(!properties.contains_key("cursor"));
+    }
+
+    #[test]
     fn test_parse_hover_result_success() {
         let result = parse_hover_result(Some(serde_json::Value::String(
-            r#"{"success":true,"tagName":"BUTTON","id":"save","className":"primary"}"#.to_string(),
+            r#"{"success":true,"tag_name":"BUTTON","id":"save","class_name":"primary"}"#
+                .to_string(),
         )))
         .expect("hover result should parse");
 
@@ -414,17 +517,17 @@ mod tests {
         let error = parse_hover_result(Some(serde_json::json!({
             "success": true,
             "id": "save",
-            "className": "primary"
+            "class_name": "primary"
         })))
         .expect_err("incomplete hover success payload should fail");
 
-        assert!(error.contains("missing string field 'tagName'"));
+        assert!(error.contains("missing string field 'tag_name'"));
     }
 
     #[test]
     fn test_hover_tool_returns_structured_failure_for_invalid_payload() {
         let session = BrowserSession::with_test_backend(InvalidHoverPayloadBackend);
-        let tool = HoverTool::default();
+        let tool = HoverTool;
         let mut context = ToolContext::new(&session);
 
         let result = tool
@@ -445,7 +548,7 @@ mod tests {
                 .error
                 .as_deref()
                 .unwrap_or_default()
-                .contains("missing string field 'tagName'")
+                .contains("missing string field 'tag_name'")
         );
         let data = result
             .data
