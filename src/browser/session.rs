@@ -15,12 +15,14 @@ use std::collections::{HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-mod cache;
+pub(crate) mod cache;
 mod history;
 mod tabs;
 
 pub use cache::ScreenshotArtifact;
-pub(crate) use cache::{MarkdownCacheEntry, SnapshotCacheEntry, SnapshotCacheScope};
+pub(crate) use cache::{MarkdownCacheEntry, SnapshotCacheEntry};
+#[cfg(test)]
+pub(crate) use cache::SnapshotCacheScope;
 
 /// Browser session that manages a Chrome/Chromium instance
 pub struct BrowserSession {
@@ -573,7 +575,7 @@ mod tests {
             .expect("new_tab should execute");
         assert!(new_tab.success);
         let new_tab_data = new_tab.data.expect("new_tab should include data");
-        assert_eq!(new_tab_data["tab_id"].as_str(), Some("tab-2"));
+        assert_eq!(new_tab_data["action"].as_str(), Some("new_tab"));
         assert_eq!(new_tab_data["tab"]["tab_id"].as_str(), Some("tab-2"));
         assert_eq!(new_tab_data["active_tab"]["tab_id"].as_str(), Some("tab-2"));
 
@@ -582,35 +584,38 @@ mod tests {
             .expect("tab_list should execute");
         let tab_list_data = tab_list.data.expect("tab_list should include data");
         assert_eq!(tab_list_data["count"].as_u64(), Some(2));
-        assert_eq!(
-            tab_list_data["tab_list"][1]["tab_id"].as_str(),
-            Some("tab-2")
-        );
+        assert_eq!(tab_list_data["tabs"][1]["tab_id"].as_str(), Some("tab-2"));
         assert_eq!(
             tab_list_data["active_tab"]["tab_id"].as_str(),
             Some("tab-2")
         );
         assert_eq!(
-            tab_list_data["tab_list"][1]["url"].as_str(),
+            tab_list_data["tabs"][1]["url"].as_str(),
             Some("https://second.example")
         );
-        assert_eq!(tab_list_data["tab_list"][1]["active"].as_bool(), Some(true));
+        assert_eq!(tab_list_data["tabs"][1]["active"].as_bool(), Some(true));
 
         let switched = session
-            .execute_tool("switch_tab", json!({ "index": 0 }))
+            .execute_tool("switch_tab", json!({ "tab_id": "tab-1" }))
             .expect("switch_tab should execute");
         let switched_data = switched.data.expect("switch_tab should include data");
-        assert_eq!(switched_data["index"].as_u64(), Some(0));
+        assert_eq!(switched_data["tab"]["index"].as_u64(), Some(0));
+        assert_eq!(
+            switched_data["active_tab"]["tab_id"].as_str(),
+            Some("tab-1")
+        );
 
         let closed = session
             .execute_tool("close_tab", json!({}))
             .expect("close_tab should execute");
         let closed_data = closed.data.expect("close_tab should include data");
-        assert_eq!(closed_data["index"].as_u64(), Some(0));
-        assert_eq!(closed_data["tab_id"].as_str(), Some("tab-1"));
+        assert_eq!(closed_data["closed_tab"]["index"].as_u64(), Some(0));
         assert_eq!(closed_data["closed_tab"]["tab_id"].as_str(), Some("tab-1"));
         assert_eq!(closed_data["active_tab"]["tab_id"].as_str(), Some("tab-2"));
-        assert_eq!(closed_data["url"].as_str(), Some("about:blank"));
+        assert_eq!(
+            closed_data["closed_tab"]["url"].as_str(),
+            Some("about:blank")
+        );
 
         let remaining = session
             .execute_tool("tab_list", json!({}))
@@ -618,13 +623,10 @@ mod tests {
         let remaining_data = remaining.data.expect("tab_list should include data");
         assert_eq!(remaining_data["count"].as_u64(), Some(1));
         assert_eq!(
-            remaining_data["tab_list"][0]["url"].as_str(),
+            remaining_data["tabs"][0]["url"].as_str(),
             Some("https://second.example")
         );
-        assert_eq!(
-            remaining_data["tab_list"][0]["active"].as_bool(),
-            Some(true)
-        );
+        assert_eq!(remaining_data["tabs"][0]["active"].as_bool(), Some(true));
     }
 
     #[test]
@@ -639,12 +641,12 @@ mod tests {
         let data = result
             .data
             .expect("invalid parameter failure should include details");
-        assert_eq!(data["code"].as_str(), Some("invalid_target_request"));
+        assert_eq!(data["code"].as_str(), Some("invalid_argument"));
         assert!(
             data["error"]
                 .as_str()
                 .unwrap_or_default()
-                .contains("Provide exactly one of index or tab_id")
+                .contains("tab_id")
         );
     }
 
@@ -664,7 +666,7 @@ mod tests {
         assert!(!result.success);
         let data = result.data.expect("close failure should include details");
         assert_eq!(data["code"].as_str(), Some("tool_execution_failed"));
-        assert_eq!(data["tool"].as_str(), Some("close"));
+        assert_eq!(data["details"]["tool"].as_str(), Some("close"));
         assert!(
             data["error"]
                 .as_str()

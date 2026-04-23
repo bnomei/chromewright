@@ -210,20 +210,25 @@ pub(crate) struct ScreenshotCapture {
     pub bytes: Vec<u8>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ScreenshotImageMetrics {
+    css_width: f64,
+    css_height: f64,
+    device_pixel_ratio: f64,
+}
+
 impl ScreenshotCapture {
     fn from_png_bytes(
         mode: ScreenshotMode,
         scale: ScreenshotScale,
         tab: TabDescriptor,
         clip: Option<ScreenshotClip>,
-        css_width: f64,
-        css_height: f64,
-        device_pixel_ratio: f64,
+        metrics: ScreenshotImageMetrics,
         bytes: Vec<u8>,
     ) -> Result<Self> {
         let (width, height) = png_dimensions(&bytes)?;
-        let css_width = sanitize_css_dimension(css_width, width);
-        let css_height = sanitize_css_dimension(css_height, height);
+        let css_width = sanitize_css_dimension(metrics.css_width, width);
+        let css_height = sanitize_css_dimension(metrics.css_height, height);
         let pixel_scale = infer_pixel_scale(width, height, css_width, css_height);
         Ok(Self {
             mode,
@@ -236,7 +241,7 @@ impl ScreenshotCapture {
             height,
             css_width,
             css_height,
-            device_pixel_ratio: sanitize_device_pixel_ratio(device_pixel_ratio),
+            device_pixel_ratio: sanitize_device_pixel_ratio(metrics.device_pixel_ratio),
             pixel_scale,
             clip,
             bytes,
@@ -484,9 +489,11 @@ pub(crate) trait SessionBackend: Send + Sync {
             request.scale,
             tab,
             None,
-            1.0,
-            1.0,
-            1.0,
+            ScreenshotImageMetrics {
+                css_width: 1.0,
+                css_height: 1.0,
+                device_pixel_ratio: 1.0,
+            },
             bytes,
         )
     }
@@ -1037,9 +1044,11 @@ impl SessionBackend for ChromeSessionBackend {
                 request.scale,
                 descriptor_for_tab(tab),
                 resolved_clip,
-                css_width,
-                css_height,
-                metrics.device_pixel_ratio,
+                ScreenshotImageMetrics {
+                    css_width,
+                    css_height,
+                    device_pixel_ratio: metrics.device_pixel_ratio,
+                },
                 bytes,
             )
         };

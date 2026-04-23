@@ -473,7 +473,7 @@ mod tests {
             data["recovery"]["suggested_tool"].as_str(),
             Some("snapshot")
         );
-        let missing_fields = data["missing_fields"]
+        let missing_fields = data["details"]["missing_fields"]
             .as_array()
             .expect("missing_fields should be present");
         assert!(

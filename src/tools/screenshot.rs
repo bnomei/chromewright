@@ -700,7 +700,7 @@ mod tests {
 
         assert_eq!(
             png_dimensions(&bytes).expect("png dimensions should parse"),
-            (1, 1)
+            (1600, 1200)
         );
     }
 

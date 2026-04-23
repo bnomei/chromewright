@@ -1,4 +1,4 @@
-use crate::browser::MarkdownCacheEntry;
+use crate::browser::{MarkdownCacheEntry, MarkdownCacheMetadata};
 use crate::error::{BrowserError, Result};
 use crate::tools::html_to_markdown::convert_html_to_markdown;
 use crate::tools::markdown::{GetMarkdownOutput, GetMarkdownParams};
@@ -48,13 +48,15 @@ pub(crate) fn execute_get_markdown(
     }
 
     let entry = Arc::new(MarkdownCacheEntry::new(
-        document.document_id.clone(),
-        document.revision.clone(),
-        extraction_result.title,
-        extraction_result.url,
-        extraction_result.byline,
-        extraction_result.excerpt,
-        extraction_result.site_name,
+        MarkdownCacheMetadata {
+            document_id: document.document_id.clone(),
+            revision: document.revision.clone(),
+            title: extraction_result.title,
+            url: extraction_result.url,
+            byline: extraction_result.byline,
+            excerpt: extraction_result.excerpt,
+            site_name: extraction_result.site_name,
+        },
         Arc::<str>::from(convert_html_to_markdown(&extraction_result.content)),
     ));
     context.session.store_markdown_cache(Arc::clone(&entry))?;

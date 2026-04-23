@@ -42,6 +42,17 @@ impl MarkdownPaginationMetadata {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct MarkdownCacheMetadata {
+    pub document_id: String,
+    pub revision: String,
+    pub title: String,
+    pub url: String,
+    pub byline: String,
+    pub excerpt: String,
+    pub site_name: String,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct MarkdownCacheEntry {
     pub document_id: String,
     pub revision: String,
@@ -55,24 +66,15 @@ pub(crate) struct MarkdownCacheEntry {
 }
 
 impl MarkdownCacheEntry {
-    pub(crate) fn new(
-        document_id: String,
-        revision: String,
-        title: String,
-        url: String,
-        byline: String,
-        excerpt: String,
-        site_name: String,
-        full_markdown: Arc<str>,
-    ) -> Self {
+    pub(crate) fn new(metadata: MarkdownCacheMetadata, full_markdown: Arc<str>) -> Self {
         Self {
-            document_id,
-            revision,
-            title,
-            url,
-            byline,
-            excerpt,
-            site_name,
+            document_id: metadata.document_id,
+            revision: metadata.revision,
+            title: metadata.title,
+            url: metadata.url,
+            byline: metadata.byline,
+            excerpt: metadata.excerpt,
+            site_name: metadata.site_name,
             pagination: MarkdownPaginationMetadata::build(&full_markdown),
             full_markdown,
         }

@@ -92,18 +92,20 @@ impl Tool for GetMarkdownTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::browser::MarkdownCacheEntry;
+    use crate::browser::{MarkdownCacheEntry, MarkdownCacheMetadata};
     use std::sync::Arc;
 
     fn sample_entry(full_markdown: &str) -> MarkdownCacheEntry {
         MarkdownCacheEntry::new(
-            "doc-1".to_string(),
-            "rev-1".to_string(),
-            "Example Title".to_string(),
-            "https://example.com".to_string(),
-            "Example Author".to_string(),
-            "Example excerpt".to_string(),
-            "Example Site".to_string(),
+            MarkdownCacheMetadata {
+                document_id: "doc-1".to_string(),
+                revision: "rev-1".to_string(),
+                title: "Example Title".to_string(),
+                url: "https://example.com".to_string(),
+                byline: "Example Author".to_string(),
+                excerpt: "Example excerpt".to_string(),
+                site_name: "Example Site".to_string(),
+            },
             Arc::<str>::from(full_markdown),
         )
     }

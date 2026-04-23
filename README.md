@@ -28,6 +28,8 @@ Install the binary from crates.io:
 cargo install chromewright
 ```
 
+Building from source or installing with Cargo requires Rust 1.88 or newer.
+
 ### Homebrew
 
 ```bash

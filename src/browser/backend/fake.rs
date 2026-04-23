@@ -1,6 +1,6 @@
 use super::{
-    ScreenshotCapture, ScreenshotRequest, ScreenshotScale, ScriptEvaluation, SessionBackend,
-    TabDescriptor,
+    ScreenshotCapture, ScreenshotImageMetrics, ScreenshotRequest, ScreenshotScale,
+    ScriptEvaluation, SessionBackend, TabDescriptor,
 };
 use crate::dom::{AriaChild, AriaNode, DocumentMetadata, DomTree};
 use crate::error::{BrowserError, Result};
@@ -654,9 +654,11 @@ impl SessionBackend for FakeSessionBackend {
             request.scale,
             tab,
             request.clip.clone(),
-            css_width,
-            css_height,
-            FAKE_SCREENSHOT_DEVICE_PIXEL_RATIO,
+            ScreenshotImageMetrics {
+                css_width,
+                css_height,
+                device_pixel_ratio: FAKE_SCREENSHOT_DEVICE_PIXEL_RATIO,
+            },
             bytes,
         )
     }
