@@ -47,16 +47,16 @@ pub(crate) fn execute_get_markdown(
         });
     }
 
-    let entry = Arc::new(MarkdownCacheEntry {
-        document_id: document.document_id.clone(),
-        revision: document.revision.clone(),
-        title: extraction_result.title,
-        url: extraction_result.url,
-        byline: extraction_result.byline,
-        excerpt: extraction_result.excerpt,
-        site_name: extraction_result.site_name,
-        full_markdown: Arc::<str>::from(convert_html_to_markdown(&extraction_result.content)),
-    });
+    let entry = Arc::new(MarkdownCacheEntry::new(
+        document.document_id.clone(),
+        document.revision.clone(),
+        extraction_result.title,
+        extraction_result.url,
+        extraction_result.byline,
+        extraction_result.excerpt,
+        extraction_result.site_name,
+        Arc::<str>::from(convert_html_to_markdown(&extraction_result.content)),
+    ));
     context.session.store_markdown_cache(Arc::clone(&entry))?;
 
     let mut output = paginate_markdown(entry.as_ref(), &params)?;
@@ -70,7 +70,7 @@ pub(crate) fn paginate_markdown(
 ) -> Result<GetMarkdownOutput> {
     params.validate()?;
 
-    let total_chars = entry.full_markdown.chars().count();
+    let total_chars = entry.pagination_total_chars();
     let total_pages = if entry.full_markdown.is_empty() {
         1
     } else {
@@ -80,8 +80,8 @@ pub(crate) fn paginate_markdown(
     let current_page = params.page.clamp(1, total_pages.max(1));
     let start_char = (current_page - 1) * params.page_size;
     let end_char = (start_char + params.page_size).min(total_chars);
-    let start_idx = byte_index_for_char_offset(&entry.full_markdown, start_char);
-    let end_idx = byte_index_for_char_offset(&entry.full_markdown, end_char);
+    let start_idx = byte_index_for_char_offset(entry, start_char);
+    let end_idx = byte_index_for_char_offset(entry, end_char);
 
     let mut page_content = if start_idx < entry.full_markdown.len() {
         entry.full_markdown[start_idx..end_idx].to_string()
@@ -134,16 +134,30 @@ pub(crate) fn paginate_markdown(
     })
 }
 
-fn byte_index_for_char_offset(content: &str, char_offset: usize) -> usize {
+fn byte_index_for_char_offset(entry: &MarkdownCacheEntry, char_offset: usize) -> usize {
+    let content = entry.full_markdown.as_ref();
+
     if char_offset == 0 {
         return 0;
     }
 
-    content
-        .char_indices()
-        .nth(char_offset)
-        .map(|(index, _)| index)
-        .unwrap_or(content.len())
+    if char_offset >= entry.pagination_total_chars() {
+        return content.len();
+    }
+
+    let (checkpoint_char_offset, checkpoint_byte_offset) = entry.pagination_checkpoint(char_offset);
+    let local_char_offset = char_offset - checkpoint_char_offset;
+
+    if local_char_offset == 0 {
+        return checkpoint_byte_offset;
+    }
+
+    checkpoint_byte_offset
+        + content[checkpoint_byte_offset..]
+            .char_indices()
+            .nth(local_char_offset)
+            .map(|(index, _)| index)
+            .unwrap_or(content.len() - checkpoint_byte_offset)
 }
 
 fn markdown_extraction_script() -> &'static str {

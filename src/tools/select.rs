@@ -16,7 +16,11 @@ use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
+use std::sync::OnceLock;
 
+const SELECT_JS: &str = include_str!("select.js");
+static SELECT_SHELL: OnceLock<crate::tools::browser_kernel::BrowserKernelTemplateShell> =
+    OnceLock::new();
 /// Parameters for the select tool
 #[derive(Debug, Clone, Serialize)]
 pub struct SelectParams {
@@ -84,8 +88,6 @@ impl JsonSchema for SelectParams {
 /// Tool for selecting dropdown options
 #[derive(Default)]
 pub struct SelectTool;
-
-const SELECT_JS: &str = include_str!("select.js");
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SelectOutput {
@@ -192,7 +194,7 @@ impl Tool for SelectTool {
 }
 
 fn build_select_js(config: &serde_json::Value) -> String {
-    render_browser_kernel_script(SELECT_JS, "__SELECT_CONFIG__", config)
+    render_browser_kernel_script(&SELECT_SHELL, SELECT_JS, "__SELECT_CONFIG__", config)
 }
 
 enum SelectParseResult {
@@ -269,6 +271,19 @@ mod tests {
                 "kind": "selector",
                 "selector": "#country-select"
             },
+            "value": "us"
+        });
+
+        let params: SelectParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.selector, Some("#country-select".to_string()));
+        assert_eq!(params.index, None);
+        assert_eq!(params.value, "us");
+    }
+
+    #[test]
+    fn test_select_params_deserializes_plain_string_target() {
+        let json = serde_json::json!({
+            "target": "#country-select",
             "value": "us"
         });
 

@@ -13,9 +13,13 @@ use crate::tools::{
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 const SCROLL_TARGET_INTO_VIEW_TEMPLATE_JS: &str = include_str!("../scroll_target_into_view.js");
+static SCROLL_TARGET_INTO_VIEW_SHELL: OnceLock<
+    crate::tools::browser_kernel::BrowserKernelTemplateShell,
+> = OnceLock::new();
 const SELECTOR_IDENTITY_TEMPLATE_JS: &str = r#"
 (() => {
   const config = __SELECTOR_IDENTITY_CONFIG__;
@@ -93,6 +97,8 @@ const SELECTOR_IDENTITY_TEMPLATE_JS: &str = r#"
   });
 })()
 "#;
+static SELECTOR_IDENTITY_SHELL: OnceLock<crate::tools::browser_kernel::BrowserKernelTemplateShell> =
+    OnceLock::new();
 pub(crate) const DEFAULT_ACTIONABILITY_TIMEOUT_MS: u64 = 5_000;
 const ACTIONABILITY_POLL_INTERVAL_MS: u64 = 50;
 
@@ -534,6 +540,7 @@ fn probe_selector_identity(
 
 fn build_scroll_target_into_view_js(config: &serde_json::Value) -> String {
     render_browser_kernel_script(
+        &SCROLL_TARGET_INTO_VIEW_SHELL,
         SCROLL_TARGET_INTO_VIEW_TEMPLATE_JS,
         "__SCROLL_TARGET_CONFIG__",
         config,
@@ -542,6 +549,7 @@ fn build_scroll_target_into_view_js(config: &serde_json::Value) -> String {
 
 fn build_selector_identity_js(config: &serde_json::Value) -> String {
     render_browser_kernel_script(
+        &SELECTOR_IDENTITY_SHELL,
         SELECTOR_IDENTITY_TEMPLATE_JS,
         "__SELECTOR_IDENTITY_CONFIG__",
         config,

@@ -1,6 +1,9 @@
 use crate::browser::backend::{ATTACH_PAGE_TARGET_LOST_CODE, AttachSessionDegradedDetails};
 use crate::browser::{BrowserSession, SnapshotCacheEntry, SnapshotCacheScope};
-use crate::dom::{AriaChild, AriaNode, Cursor, DocumentMetadata, DomTree, NodeRef, SnapshotNode};
+use crate::dom::{
+    AriaChild, AriaNode, Cursor, DocumentMetadata, DomTree, NodeRef, SnapshotNode,
+    yaml_escape_key_if_needed, yaml_escape_value_if_needed,
+};
 use crate::error::BrowserError;
 use crate::error::Result;
 use crate::tools::snapshot::{RenderMode, SnapshotMode, render_aria_tree};
@@ -9,7 +12,10 @@ use crate::tools::{
     markdown, navigate, new_tab, press_key, read_links, screenshot, scroll, select, snapshot,
     switch_tab, tab_list, wait,
 };
+use schemars::{JsonSchema, Schema, SchemaGenerator};
+use serde::de::Deserializer;
 use serde_json::Value;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
@@ -26,7 +32,8 @@ pub(crate) struct OperationMetrics {
     pub snapshot_render_micros: u64,
     pub handoff_rebuilds: u64,
     pub handoff_rebuild_micros: u64,
-    pub output_bytes: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_bytes: Option<usize>,
 }
 
 impl OperationMetrics {
@@ -39,7 +46,7 @@ impl OperationMetrics {
             && self.snapshot_render_micros == 0
             && self.handoff_rebuilds == 0
             && self.handoff_rebuild_micros == 0
-            && self.output_bytes == 0
+            && self.output_bytes.is_none()
     }
 }
 
@@ -128,17 +135,10 @@ impl<'a> ToolContext<'a> {
     }
 
     pub(crate) fn finish(&self, mut result: ToolResult) -> ToolResult {
-        let mut metrics = self.metrics.clone();
-        metrics.output_bytes = result
-            .data
-            .as_ref()
-            .and_then(|data| serde_json::to_vec(data).ok())
-            .map_or(0, |bytes| bytes.len());
-
-        if !metrics.is_empty() {
+        if !self.metrics.is_empty() {
             result.metadata.insert(
                 OPERATION_METRICS_METADATA_KEY.to_string(),
-                serde_json::to_value(metrics).unwrap_or_default(),
+                serde_json::to_value(&self.metrics).unwrap_or_default(),
             );
         }
 
@@ -307,15 +307,54 @@ impl TabSummary {
     }
 }
 
-#[derive(
-    Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema, PartialEq, Eq,
-)]
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PublicTarget {
     /// Resolve the target from a selector in the current document.
     Selector { selector: String },
     /// Reuse a revision-scoped cursor from `snapshot` or `inspect_node`.
     Cursor { cursor: Cursor },
+}
+
+#[derive(Debug, Clone, serde::Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum TaggedPublicTarget {
+    Selector { selector: String },
+    Cursor { cursor: Cursor },
+}
+
+#[derive(Debug, Clone, serde::Deserialize, JsonSchema)]
+#[serde(untagged)]
+enum PublicTargetCompat {
+    SelectorString(String),
+    Tagged(TaggedPublicTarget),
+}
+
+impl<'de> serde::Deserialize<'de> for PublicTarget {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        match PublicTargetCompat::deserialize(deserializer)? {
+            PublicTargetCompat::SelectorString(selector) => Ok(Self::Selector { selector }),
+            PublicTargetCompat::Tagged(TaggedPublicTarget::Selector { selector }) => {
+                Ok(Self::Selector { selector })
+            }
+            PublicTargetCompat::Tagged(TaggedPublicTarget::Cursor { cursor }) => {
+                Ok(Self::Cursor { cursor })
+            }
+        }
+    }
+}
+
+impl JsonSchema for PublicTarget {
+    fn schema_name() -> Cow<'static, str> {
+        "PublicTarget".into()
+    }
+
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        PublicTargetCompat::json_schema(generator)
+    }
 }
 
 impl PublicTarget {
@@ -864,9 +903,11 @@ pub(crate) fn build_document_envelope(
 
             (
                 document,
-                options.include_snapshot.then_some(projection.snapshot),
+                options
+                    .include_snapshot
+                    .then(|| projection.snapshot.as_ref().to_string()),
                 if options.include_nodes {
-                    projection.nodes
+                    projection.nodes.iter().cloned().collect()
                 } else {
                     Vec::new()
                 },
@@ -912,14 +953,31 @@ struct SnapshotAnchorPolicy {
     allow_persistent_chrome: bool,
 }
 
-fn build_scoped_snapshot_root(root: &AriaNode, policy: SnapshotAnchorPolicy) -> AriaNode {
-    scoped_snapshot_node(root, policy, true).unwrap_or_else(AriaNode::fragment)
+#[derive(Debug)]
+enum ScopedSnapshotChild<'a> {
+    Text(&'a str),
+    Node(Box<ScopedSnapshotNode<'a>>),
+}
+
+#[derive(Debug)]
+struct ScopedSnapshotNode<'a> {
+    node: &'a AriaNode,
+    public_handle: bool,
+    children: Vec<ScopedSnapshotChild<'a>>,
+}
+
+fn build_scoped_snapshot_root<'a>(
+    root: &'a AriaNode,
+    policy: SnapshotAnchorPolicy,
+) -> ScopedSnapshotNode<'a> {
+    build_scoped_snapshot_node(root, policy, true)
+        .expect("snapshot root should always remain renderable")
 }
 
 #[derive(Debug, Clone)]
 struct SnapshotProjection {
-    snapshot: String,
-    nodes: Vec<SnapshotNode>,
+    snapshot: Arc<str>,
+    nodes: Arc<[SnapshotNode]>,
     scope: SnapshotScope,
     render_micros: u64,
 }
@@ -929,8 +987,16 @@ fn snapshot_projection(
     mode: SnapshotMode,
     global_interactive_count: Option<usize>,
 ) -> SnapshotProjection {
-    let (snapshot_root, locality_fallback_reason) = match mode {
-        SnapshotMode::Full => (dom.root.clone(), None),
+    let (snapshot, nodes, locality_fallback_reason, render_micros) = match mode {
+        SnapshotMode::Full => {
+            let started = Instant::now();
+            (
+                Arc::<str>::from(render_aria_tree(&dom.root, RenderMode::Ai, None)),
+                Arc::<[SnapshotNode]>::from(snapshot_nodes_from_root(dom, &dom.root)),
+                None,
+                duration_micros(started.elapsed()),
+            )
+        }
         SnapshotMode::Viewport | SnapshotMode::Delta => {
             let viewport_local = build_scoped_snapshot_root(
                 &dom.root,
@@ -939,7 +1005,7 @@ fn snapshot_projection(
                     allow_persistent_chrome: false,
                 },
             );
-            if !viewport_local.children.is_empty() {
+            let (snapshot_root, locality_fallback_reason) = if !viewport_local.children.is_empty() {
                 (viewport_local, None)
             } else {
                 let viewport_with_persistent = build_scoped_snapshot_root(
@@ -980,18 +1046,23 @@ fn snapshot_projection(
                         )
                     }
                 }
-            }
+            };
+
+            let started = Instant::now();
+            (
+                Arc::<str>::from(render_scoped_snapshot_root(&snapshot_root, RenderMode::Ai)),
+                Arc::<[SnapshotNode]>::from(snapshot_nodes_from_scoped_root(dom, &snapshot_root)),
+                locality_fallback_reason,
+                duration_micros(started.elapsed()),
+            )
         }
     };
 
-    let started = Instant::now();
-    let snapshot = render_aria_tree(&snapshot_root, RenderMode::Ai, None);
-    let render_micros = duration_micros(started.elapsed());
-    let nodes = snapshot_nodes_from_root(dom, &snapshot_root);
+    let returned_node_count = nodes.len();
 
     SnapshotProjection {
         snapshot,
-        nodes: nodes.clone(),
+        nodes,
         scope: SnapshotScope {
             mode,
             fallback_mode: None,
@@ -1003,7 +1074,7 @@ fn snapshot_projection(
                 .iter()
                 .filter(|frame| frame.status != "expanded")
                 .count(),
-            returned_node_count: nodes.len(),
+            returned_node_count,
             global_interactive_count,
         },
         render_micros,
@@ -1032,17 +1103,21 @@ fn delta_snapshot_projection(
     let mut projection = current_projection.clone();
     projection.scope.mode = SnapshotMode::Delta;
     projection.scope.fallback_mode = None;
-    projection.snapshot = delta_snapshot_text(base.snapshot.as_ref(), &current_projection.snapshot);
+    projection.snapshot = Arc::<str>::from(delta_snapshot_text(
+        base.snapshot.as_ref(),
+        current_projection.snapshot.as_ref(),
+    ));
 
     let mut nodes = delta_snapshot_nodes(&base.nodes, &current_projection.nodes);
-    if nodes.is_empty() && current_projection.snapshot != base.snapshot.as_ref() {
-        nodes = current_projection.nodes.clone();
+    if nodes.is_empty() && current_projection.snapshot.as_ref() != base.snapshot.as_ref() {
+        projection.nodes = Arc::clone(&current_projection.nodes);
+    } else {
+        projection.nodes = Arc::<[SnapshotNode]>::from(std::mem::take(&mut nodes));
     }
-    projection.nodes = nodes;
     projection.scope.returned_node_count = projection.nodes.len();
 
     if projection.snapshot.is_empty() {
-        projection.snapshot = current_projection.snapshot.clone();
+        projection.snapshot = Arc::clone(&current_projection.snapshot);
     }
 
     Ok((projection, Some(current_projection)))
@@ -1054,8 +1129,8 @@ fn snapshot_cache_entry_from_projection(
 ) -> SnapshotCacheEntry {
     SnapshotCacheEntry {
         document: document.clone(),
-        snapshot: Arc::<str>::from(projection.snapshot.clone()),
-        nodes: projection.nodes.clone(),
+        snapshot: Arc::clone(&projection.snapshot),
+        nodes: Arc::clone(&projection.nodes),
         scope: SnapshotCacheScope {
             mode: snapshot_mode_label(projection.scope.mode).to_string(),
             fallback_mode: projection
@@ -1115,13 +1190,12 @@ fn delta_snapshot_nodes(previous: &[SnapshotNode], current: &[SnapshotNode]) -> 
         .collect()
 }
 
-fn scoped_snapshot_node(
-    node: &AriaNode,
+fn build_scoped_snapshot_node<'a>(
+    node: &'a AriaNode,
     policy: SnapshotAnchorPolicy,
     is_root: bool,
-) -> Option<AriaNode> {
+) -> Option<ScopedSnapshotNode<'a>> {
     let is_anchor = node_is_snapshot_anchor(node, policy);
-    let mut cloned = node.clone();
     let mut scoped_children = Vec::new();
     let mut child_anchor_count = 0usize;
 
@@ -1129,45 +1203,45 @@ fn scoped_snapshot_node(
         match child {
             AriaChild::Text(text) => {
                 if is_anchor || is_root {
-                    scoped_children.push(AriaChild::Text(text.clone()));
+                    scoped_children.push(ScopedSnapshotChild::Text(text));
                 }
             }
             AriaChild::Node(child_node) => {
-                if let Some(scoped_child) = scoped_snapshot_node(child_node, policy, false) {
+                if let Some(scoped_child) = build_scoped_snapshot_node(child_node, policy, false) {
                     child_anchor_count += 1;
-                    scoped_children.push(AriaChild::Node(Box::new(scoped_child)));
+                    scoped_children.push(ScopedSnapshotChild::Node(Box::new(scoped_child)));
                 }
             }
         }
     }
 
-    let expose_handle = node.has_public_handle()
+    let public_handle = node.has_public_handle()
         && (node.carries_snapshot_state() || node_matches_policy(node, policy));
-
-    cloned.public_handle = expose_handle;
-    cloned.children = scoped_children;
 
     let keep = is_root || is_anchor || child_anchor_count > 0;
     if !keep {
         return None;
     }
 
-    let has_child_nodes = cloned
-        .children
+    let has_child_nodes = scoped_children
         .iter()
-        .any(|child| matches!(child, AriaChild::Node(_)));
-    let is_noise = cloned.role == "generic"
-        && cloned.name.is_empty()
-        && cloned.props.is_empty()
-        && !cloned.public_handle
-        && !cloned.carries_snapshot_state()
+        .any(|child| matches!(child, ScopedSnapshotChild::Node(_)));
+    let is_noise = node.role == "generic"
+        && node.name.is_empty()
+        && node.props.is_empty()
+        && !public_handle
+        && !node.carries_snapshot_state()
         && !has_child_nodes;
 
     if !is_root && is_noise {
         return None;
     }
 
-    Some(cloned)
+    Some(ScopedSnapshotNode {
+        node,
+        public_handle,
+        children: scoped_children,
+    })
 }
 
 fn node_matches_policy(node: &AriaNode, policy: SnapshotAnchorPolicy) -> bool {
@@ -1187,6 +1261,15 @@ fn node_is_snapshot_anchor(node: &AriaNode, policy: SnapshotAnchorPolicy) -> boo
 fn snapshot_nodes_from_root(dom: &DomTree, root: &AriaNode) -> Vec<SnapshotNode> {
     let mut nodes = Vec::new();
     collect_snapshot_nodes(dom, root, &mut nodes);
+    nodes
+}
+
+fn snapshot_nodes_from_scoped_root(
+    dom: &DomTree,
+    root: &ScopedSnapshotNode<'_>,
+) -> Vec<SnapshotNode> {
+    let mut nodes = Vec::new();
+    collect_scoped_snapshot_nodes(dom, root, &mut nodes);
     nodes
 }
 
@@ -1210,6 +1293,182 @@ fn collect_snapshot_nodes(dom: &DomTree, node: &AriaNode, nodes: &mut Vec<Snapsh
             collect_snapshot_nodes(dom, child_node, nodes);
         }
     }
+}
+
+fn collect_scoped_snapshot_nodes(
+    dom: &DomTree,
+    node: &ScopedSnapshotNode<'_>,
+    nodes: &mut Vec<SnapshotNode>,
+) {
+    if node.public_handle {
+        if let Some(index) = node.node.index {
+            if let Some(cursor) = dom.cursor_for_index(index) {
+                nodes.push(SnapshotNode {
+                    node_ref: cursor.node_ref.clone(),
+                    index: cursor.index,
+                    role: cursor.role.clone(),
+                    name: cursor.name.clone(),
+                    cursor,
+                });
+            }
+        }
+    }
+
+    for child in &node.children {
+        if let ScopedSnapshotChild::Node(child_node) = child {
+            collect_scoped_snapshot_nodes(dom, child_node, nodes);
+        }
+    }
+}
+
+fn render_scoped_snapshot_root(root: &ScopedSnapshotNode<'_>, mode: RenderMode) -> String {
+    let mut lines = Vec::new();
+    let render_cursor_pointer = matches!(mode, RenderMode::Ai);
+    let render_active = matches!(mode, RenderMode::Ai);
+
+    if root.node.role == "fragment" {
+        for child in &root.children {
+            match child {
+                ScopedSnapshotChild::Text(text) => visit_scoped_text(text, "", &mut lines),
+                ScopedSnapshotChild::Node(node) => {
+                    visit_scoped_node(node, "", render_cursor_pointer, render_active, &mut lines)
+                }
+            }
+        }
+    } else {
+        visit_scoped_node(root, "", render_cursor_pointer, render_active, &mut lines);
+    }
+
+    lines.join("\n")
+}
+
+fn visit_scoped_text(text: &str, indent: &str, lines: &mut Vec<String>) {
+    let escaped = yaml_escape_value_if_needed(text);
+    if !escaped.is_empty() {
+        lines.push(format!("{}- text: {}", indent, escaped));
+    }
+}
+
+fn visit_scoped_node(
+    node: &ScopedSnapshotNode<'_>,
+    indent: &str,
+    render_cursor_pointer: bool,
+    render_active: bool,
+    lines: &mut Vec<String>,
+) {
+    let key = create_scoped_snapshot_key(node, render_cursor_pointer, render_active);
+    let escaped_key = format!("{}- {}", indent, yaml_escape_key_if_needed(&key));
+
+    if node.children.is_empty() && node.node.props.is_empty() {
+        lines.push(escaped_key);
+        return;
+    }
+
+    if let Some(text) = scoped_single_inlined_text_child(node) {
+        lines.push(format!(
+            "{}: {}",
+            escaped_key,
+            yaml_escape_value_if_needed(text)
+        ));
+        return;
+    }
+
+    lines.push(format!("{}:", escaped_key));
+
+    for (name, value) in &node.node.props {
+        lines.push(format!(
+            "{}  - /{}: {}",
+            indent,
+            name,
+            yaml_escape_value_if_needed(value)
+        ));
+    }
+
+    let child_indent = format!("{}  ", indent);
+    let in_cursor_pointer =
+        node.public_handle && render_cursor_pointer && node.node.has_pointer_cursor();
+
+    for child in &node.children {
+        match child {
+            ScopedSnapshotChild::Text(text) => visit_scoped_text(text, &child_indent, lines),
+            ScopedSnapshotChild::Node(child_node) => visit_scoped_node(
+                child_node,
+                &child_indent,
+                render_cursor_pointer && !in_cursor_pointer,
+                render_active,
+                lines,
+            ),
+        }
+    }
+}
+
+fn create_scoped_snapshot_key(
+    node: &ScopedSnapshotNode<'_>,
+    render_cursor_pointer: bool,
+    render_active: bool,
+) -> String {
+    let aria_node = node.node;
+    let mut key = aria_node.role.clone();
+
+    if !aria_node.name.is_empty() && aria_node.name.len() <= 900 {
+        key.push(' ');
+        key.push_str(&format!("{:?}", aria_node.name));
+    }
+
+    if let Some(checked) = &aria_node.checked {
+        match checked {
+            crate::dom::element::AriaChecked::Bool(true) => key.push_str(" [checked]"),
+            crate::dom::element::AriaChecked::Bool(false) => {}
+            crate::dom::element::AriaChecked::Mixed(_) => key.push_str(" [checked=mixed]"),
+        }
+    }
+
+    if aria_node.disabled == Some(true) {
+        key.push_str(" [disabled]");
+    }
+
+    if aria_node.expanded == Some(true) {
+        key.push_str(" [expanded]");
+    }
+
+    if render_active && aria_node.active == Some(true) {
+        key.push_str(" [active]");
+    }
+
+    if let Some(level) = aria_node.level {
+        key.push_str(&format!(" [level={}]", level));
+    }
+
+    if let Some(pressed) = &aria_node.pressed {
+        match pressed {
+            crate::dom::element::AriaPressed::Bool(true) => key.push_str(" [pressed]"),
+            crate::dom::element::AriaPressed::Bool(false) => {}
+            crate::dom::element::AriaPressed::Mixed(_) => key.push_str(" [pressed=mixed]"),
+        }
+    }
+
+    if aria_node.selected == Some(true) {
+        key.push_str(" [selected]");
+    }
+
+    if let Some(index) = aria_node.index.filter(|_| node.public_handle) {
+        key.push_str(&format!(" [index={}]", index));
+
+        if render_cursor_pointer && aria_node.has_pointer_cursor() {
+            key.push_str(" [cursor=pointer]");
+        }
+    }
+
+    key
+}
+
+fn scoped_single_inlined_text_child<'a>(node: &'a ScopedSnapshotNode<'a>) -> Option<&'a str> {
+    if node.children.len() == 1 && node.node.props.is_empty() {
+        if let ScopedSnapshotChild::Text(text) = &node.children[0] {
+            return Some(text);
+        }
+    }
+    None
 }
 
 /// Trait for browser automation tools with associated parameter types
@@ -1429,6 +1688,8 @@ mod tests {
     use crate::browser::backend::FakeSessionBackend;
     use crate::browser::{SnapshotCacheEntry, SnapshotCacheScope};
     use crate::dom::{AriaChild, AriaNode, DomTree};
+    use schemars::schema_for;
+    use serde_json::json;
     use std::sync::Arc;
 
     fn sample_dom() -> DomTree {
@@ -1442,6 +1703,30 @@ mod tests {
         dom.document.revision = "main:1".to_string();
         dom.replace_selectors(vec![String::new(), "#submit".to_string()]);
         dom
+    }
+
+    #[test]
+    fn public_target_deserializes_plain_selector_string() {
+        let target: PublicTarget =
+            serde_json::from_value(json!("#submit")).expect("plain selector should deserialize");
+
+        assert_eq!(
+            target,
+            PublicTarget::Selector {
+                selector: "#submit".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn public_target_schema_mentions_string_and_cursor_variants() {
+        let schema = schema_for!(PublicTarget);
+        let schema_json = serde_json::to_string(&schema).expect("schema should serialize");
+
+        assert!(schema_json.contains("\"type\":\"string\""));
+        assert!(schema_json.contains("\"kind\""));
+        assert!(schema_json.contains("\"selector\""));
+        assert!(schema_json.contains("\"cursor\""));
     }
 
     fn viewport_dom() -> DomTree {
@@ -1757,7 +2042,7 @@ mod tests {
                     frames: Vec::new(),
                 },
                 snapshot: Arc::<str>::from("- heading \"Visible story\""),
-                nodes: Vec::new(),
+                nodes: Arc::<[SnapshotNode]>::from(Vec::new()),
                 scope: SnapshotCacheScope {
                     mode: "viewport".to_string(),
                     fallback_mode: None,

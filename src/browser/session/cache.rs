@@ -12,6 +12,34 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const SCREENSHOT_ARTIFACT_LIMIT: usize = 8;
 static SCREENSHOT_ARTIFACT_COUNTER: AtomicU64 = AtomicU64::new(1);
+const MARKDOWN_PAGINATION_CHECKPOINT_INTERVAL: usize = 4_096;
+
+#[derive(Debug, Clone)]
+struct MarkdownPaginationMetadata {
+    total_chars: usize,
+    checkpoint_interval: usize,
+    checkpoint_byte_offsets: Arc<[usize]>,
+}
+
+impl MarkdownPaginationMetadata {
+    fn build(content: &str) -> Self {
+        let mut checkpoint_byte_offsets = vec![0];
+        let mut total_chars = 0;
+
+        for (char_index, (byte_offset, _)) in content.char_indices().enumerate() {
+            if char_index > 0 && char_index % MARKDOWN_PAGINATION_CHECKPOINT_INTERVAL == 0 {
+                checkpoint_byte_offsets.push(byte_offset);
+            }
+            total_chars = char_index + 1;
+        }
+
+        Self {
+            total_chars,
+            checkpoint_interval: MARKDOWN_PAGINATION_CHECKPOINT_INTERVAL,
+            checkpoint_byte_offsets: checkpoint_byte_offsets.into(),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct MarkdownCacheEntry {
@@ -23,6 +51,48 @@ pub(crate) struct MarkdownCacheEntry {
     pub excerpt: String,
     pub site_name: String,
     pub full_markdown: Arc<str>,
+    pagination: MarkdownPaginationMetadata,
+}
+
+impl MarkdownCacheEntry {
+    pub(crate) fn new(
+        document_id: String,
+        revision: String,
+        title: String,
+        url: String,
+        byline: String,
+        excerpt: String,
+        site_name: String,
+        full_markdown: Arc<str>,
+    ) -> Self {
+        Self {
+            document_id,
+            revision,
+            title,
+            url,
+            byline,
+            excerpt,
+            site_name,
+            pagination: MarkdownPaginationMetadata::build(&full_markdown),
+            full_markdown,
+        }
+    }
+
+    pub(crate) fn pagination_total_chars(&self) -> usize {
+        self.pagination.total_chars
+    }
+
+    pub(crate) fn pagination_checkpoint(&self, char_offset: usize) -> (usize, usize) {
+        let checkpoint_index = (char_offset / self.pagination.checkpoint_interval).min(
+            self.pagination
+                .checkpoint_byte_offsets
+                .len()
+                .saturating_sub(1),
+        );
+        let checkpoint_char_offset = checkpoint_index * self.pagination.checkpoint_interval;
+        let checkpoint_byte_offset = self.pagination.checkpoint_byte_offsets[checkpoint_index];
+        (checkpoint_char_offset, checkpoint_byte_offset)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,7 +109,7 @@ pub(crate) struct SnapshotCacheScope {
 pub(crate) struct SnapshotCacheEntry {
     pub document: DocumentMetadata,
     pub snapshot: Arc<str>,
-    pub nodes: Vec<SnapshotNode>,
+    pub nodes: Arc<[SnapshotNode]>,
     pub scope: SnapshotCacheScope,
 }
 
@@ -297,7 +367,7 @@ mod tests {
         Arc::new(SnapshotCacheEntry {
             document: document.clone(),
             snapshot: Arc::<str>::from("button \"Save\""),
-            nodes: vec![SnapshotNode {
+            nodes: Arc::<[SnapshotNode]>::from(vec![SnapshotNode {
                 cursor: Cursor {
                     node_ref: NodeRef {
                         document_id: document.document_id.clone(),
@@ -317,7 +387,7 @@ mod tests {
                 index: 0,
                 role: "button".to_string(),
                 name: "Save".to_string(),
-            }],
+            }]),
             scope: SnapshotCacheScope {
                 mode: "viewport".to_string(),
                 fallback_mode: None,

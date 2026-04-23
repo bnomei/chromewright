@@ -146,8 +146,8 @@ The exact file name and field names vary by client. The important part is that t
 - attach mode connects to an existing Chrome or Chromium session and can see the tabs, cookies, and authenticated state already present in that profile
 - launch mode starts a dedicated browser session and tracks the tabs created under that session
 - in attach mode, `close` defaults to session-managed cleanup and `close_tab` requires `confirm_destructive = true` before closing an unmanaged active tab
-- the normal high-level tool surface reads and interacts through CDP only; it does not write to local files during ordinary MCP use
-- filesystem-bound screenshots are excluded from the default surface and remain explicit operator actions
+- most high-level tools read and interact through CDP only; `screenshot` is the bounded exception and stores a managed PNG artifact for the caller
+- `screenshot` is part of the default surface and uses `mode`, optional `tab_id`, optional `target`, and `region` instead of caller-chosen `path` or `confirm_unsafe`
 
 ## Use Cases
 
@@ -156,16 +156,19 @@ The exact file name and field names vary by client. The important part is that t
 Once Chromewright is running, the normal workflow is:
 
 1. Use `new_tab` or `tab_list` to establish an active tab. On a fresh session with no active tab, do not call `snapshot` first.
-2. Use `snapshot` to get document metadata plus actionable nodes. Its inline `[index=...]` markers only appear for nodes that still expose a public follow-up handle in that revision; they mirror the exposed `nodes` list rather than forming a separate durable handle family.
-3. Use `inspect_node` for targeted bounded reads, including selector-based inspection of non-actionable nodes such as headings, images, and overlays. Prefer `cursor` when one is available; otherwise a successful inspection may legitimately return `cursor = null` and a selector-only `target`.
-4. Use `click`, `input`, `select`, `hover`, `press_key`, `scroll`, `wait`, or the tab tools with `cursor` preferred for follow-up targeting inside a page and stable `tab_id` preferred for multi-tab flows.
-5. Refresh `snapshot` after revision-changing actions. `cursor` and `node_ref` are revision-scoped, so rereads are the normal recovery path.
+2. Use `snapshot` to get document metadata plus actionable nodes. `mode = "viewport"` is the default local reread, `mode = "delta"` reuses the prior session base when available, and `mode = "full"` keeps the exhaustive escape hatch. Inline `[index=...]` markers only appear for nodes that still expose a public follow-up handle in that returned scope.
+3. Use `inspect_node` for targeted bounded reads, including selector-based inspection of non-actionable nodes such as headings, images, and overlays. Prefer `cursor` when one is available; stale cursors may selector-rebound, and a successful inspection may still legitimately return `cursor = null` with a selector-only `target`.
+4. Use `screenshot` when you need a managed PNG artifact. `mode = "viewport"` is the default, `mode = "full_page"` captures the whole page, `mode = "element"` requires `target`, and `mode = "region"` requires `region`. `scale = "device"` preserves raw device pixels by default, while `scale = "css"` normalizes output dimensions to CSS pixels. Pass `tab_id` when the capture should target a specific tab without activating it first.
+5. Use `click`, `input`, `select`, `hover`, `press_key`, `scroll`, `wait`, or the tab tools with `cursor` preferred for follow-up targeting inside a page and stable `tab_id` preferred for multi-tab flows.
+6. Refresh `snapshot` after revision-changing actions. `cursor` and `node_ref` are revision-scoped, so rereads are the normal recovery path.
 
 ## Workflow Conventions
 
 - Fresh sessions: use `new_tab` or `tab_list` before `snapshot` if you do not already have an active tab.
-- Revision-scoped targets: `cursor` and `node_ref` belong to a specific document revision. After navigation or DOM-changing actions, rerun `snapshot` or fall back to selector-based recovery before precise follow-up work.
-- Snapshot inline handles: rendered `[index=...]` markers follow the same revision scope as the exposed actionable `nodes` and only advertise follow-up-capable nodes; use them as reread-local hints, not as durable cross-revision IDs.
+- Revision-scoped targets: `cursor` and `node_ref` belong to a specific document revision. After navigation or DOM-changing actions, rerun `snapshot`; stale `cursor` replay may selector-rebound, but treat rebound as a signal to reread before more precise chained work.
+- Snapshot modes: default `viewport` is the fast local reread, `delta` reports the changed local surface when a compatible prior base exists and falls back to `viewport` when it does not, and `full` keeps the exhaustive page-wide tree for deep inspection or regression work.
+- Viewport locality: `viewport` and `delta` now demote unchanged sticky/fixed header or footer chrome when stronger local anchors are present. If persistent chrome still wins because nothing stronger exists, `scope.locality_fallback_reason` explains that fallback.
+- Snapshot inline handles: rendered `[index=...]` markers follow the same revision scope as the exposed actionable `nodes` and only advertise follow-up-capable nodes in that returned scope; use them as reread-local hints, not as durable cross-revision IDs.
 - `target_status = same`: the tool still proved the same target, even if the post-action handle downgraded to selector-only because actionability disappeared.
 - `target_status = rebound`: the tool recovered after a revision change; `target_after` may downgrade to selector-only when the same element still exists but no longer has a verified actionable handle, so reread with `snapshot` before more precise chained work.
 - `target_status = detached`: the old target no longer exists, often after navigation; reacquire state from the new page before continuing.
@@ -175,7 +178,13 @@ Once Chromewright is running, the normal workflow is:
 
 Chromewright also carries a few small but important contract details:
 
-- `input` accepts `value` as a backward-compatible alias, while `text` remains the canonical field.
+- DOM-targeted tools take one public `target` object: `{ "kind": "selector", "selector": "..." }` or `{ "kind": "cursor", "cursor": ... }`.
+- Canonical target examples:
+  - `inspect_node`: `{ "target": { "kind": "selector", "selector": "h1" } }`
+  - `click`: `{ "target": { "kind": "cursor", "cursor": <snapshot cursor> } }`
+- `screenshot` is part of the default surface and uses `mode` plus optional `scale` instead of legacy `full_page = true`; successful calls return managed artifact metadata including `artifact_uri`, `artifact_path`, `mime_type`, `byte_count`, image dimensions, CSS dimensions, DPR metadata, `revealed_from_offscreen`, and optional `clip`.
+- `switch_tab` accepts stable `tab_id` only on the public MCP surface.
+- Structured tool-local failures use one top-level family: `code`, `error`, optional `document`, optional `target`, optional `recovery`, and optional `details`.
 - `extract` uses `code = element_not_found` for selector misses and reserves `code = invalid_extract_payload` for malformed extraction results.
 - `read_links` returns both the raw `href` attribute and an absolute `resolved_url`.
 
@@ -186,16 +195,19 @@ Companion references:
 
 ## Default Tool Surface
 
-The default Chromewright MCP server exposes the same 20 high-level tools:
+The default Chromewright MCP server exposes 21 high-level tools:
 
 - navigation: `navigate`, `go_back`, `go_forward`, `wait`
 - interaction: `click`, `input`, `select`, `hover`, `press_key`, `scroll`
 - tabs and lifecycle: `new_tab`, `tab_list`, `switch_tab`, `close_tab`, `close`
 - reading and inspection: `snapshot`, `inspect_node`, `get_markdown`, `extract`, `read_links`
+- managed artifacts: `screenshot`
 
-The default surface intentionally excludes the operator tools `evaluate` and `screenshot`.
+The default surface intentionally excludes the raw-JavaScript operator tool `evaluate`.
 
-High-level action tools return compact follow-up metadata by default. Use `snapshot` when you need the full YAML snapshot plus actionable-node list. For targeted reads, use `snapshot` to choose a node and reuse its `cursor`, then call `inspect_node`; when you need to inspect a non-actionable DOM node such as a heading or image, `inspect_node` also accepts selector-based reads with an optional `cursor`, and successful reads reconcile around the probed element even when the final `target` is selector-only. After revision-changing actions, rerun `snapshot` before more precise target reuse. Targetable tools still accept `selector`, `index`, and `node_ref`, but `cursor` is the preferred follow-up handle.
+High-level action tools return compact follow-up metadata by default. Use `snapshot` when you need the scoped YAML snapshot plus actionable-node list, with `viewport` as the default, `delta` for session-local changes, and `full` for exhaustive rereads. For targeted reads, use `snapshot` to choose a node and reuse its `cursor`, then call `inspect_node`; when you need to inspect a non-actionable DOM node such as a heading or image, `inspect_node` also accepts selector-based reads with an optional `cursor`, and stale cursor replay may selector-rebound before the final `target` settles. After revision-changing actions, rerun `snapshot` before more precise target reuse. Public DOM follow-up calls should use `target.kind = "cursor"` whenever a fresh cursor is available and fall back to `target.kind = "selector"` when only selector continuity remains.
+
+Use `screenshot` when you need a bounded visual artifact from the browser. The public contract is `mode` plus optional `scale`, `tab_id`, `target`, and `region`; callers do not provide `path`, `full_page`, or `confirm_unsafe`. Successful results include `artifact_uri`, `artifact_path`, `mime_type`, `byte_count`, `width`, `height`, `css_width`, `css_height`, `device_pixel_ratio`, `pixel_scale`, `revealed_from_offscreen`, and optional `clip`.
 
 Read-oriented tools are intentionally distinct: `get_markdown` is the broad reading tool, `extract` is for targeted text or HTML, and `read_links` is for link inventory and planning. For multi-tab work, prefer stable `tab_id` handles from `tab_list`, `new_tab`, `switch_tab`, and `close_tab` instead of relying only on tab indices.
 
@@ -220,10 +232,10 @@ cargo test --locked --all-features operation_metrics
 
 - Chromewright drives a real Chrome or Chromium instance through CDP. In attach mode, it sees the tabs, cookies, and authenticated state of the browser profile you give it.
 - Use a dedicated browser profile for agent work when you do not want automation attached to your personal session.
-- The default tool surface excludes raw JavaScript evaluation and filesystem-bound screenshots.
-- Once operator tools are registered, `evaluate` and `screenshot` still require `confirm_unsafe = true` per call.
+- The default tool surface excludes raw JavaScript evaluation; `screenshot` remains part of the bounded default surface and returns managed artifact metadata.
+- `screenshot` does not accept caller-chosen output paths or `confirm_unsafe`; use `mode = "full_page"` instead of a legacy `full_page = true` flag, and use `scale = "css"` only when you want CSS-pixel-normalized output instead of raw device pixels.
 - `navigate` and `new_tab` reject unsafe schemes such as `data:` and `file:` unless the caller passes `allow_unsafe = true`.
-- `cursor` and `node_ref` targets are revision-scoped. After a DOM-changing action, stale targets fail cleanly and should be refreshed from a new `snapshot`.
+- `cursor` and `node_ref` targets are revision-scoped. After a DOM-changing action, stale `cursor` replay may selector-rebound, but precise follow-up work should still be refreshed from a new `snapshot`.
 
 ## License
 

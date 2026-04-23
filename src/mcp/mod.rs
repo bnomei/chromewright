@@ -423,7 +423,10 @@ mod tests {
             ("new_tab", ["tab_list", "switch_tab"].as_slice()),
             ("tab_list", ["switch_tab"].as_slice()),
             ("switch_tab", ["tab_list", "snapshot"].as_slice()),
-            ("screenshot", ["managed", "target", "mode", "scale"].as_slice()),
+            (
+                "screenshot",
+                ["managed", "target", "mode", "scale"].as_slice(),
+            ),
         ];
 
         for (tool_name, keywords) in expectations {
@@ -533,7 +536,7 @@ mod tests {
     }
 
     #[test]
-    fn test_live_mcp_target_schemas_stay_object_typed_for_dom_tools() {
+    fn test_live_mcp_target_schemas_advertise_string_and_structured_target_forms() {
         let tools: HashMap<String, rmcp::model::Tool> = BrowserServer::from_session(
             BrowserSession::with_test_backend(FakeSessionBackend::new()),
         )
@@ -554,14 +557,12 @@ mod tests {
                 .get("target")
                 .unwrap_or_else(|| panic!("{tool_name} should advertise target"));
 
-            assert_ne!(
-                target.get("type").and_then(|value| value.as_str()),
-                Some("string"),
-                "{tool_name} target regressed to a string-shaped schema"
-            );
-
             let serialized =
                 serde_json::to_string(&schema).expect("schema should serialize for assertions");
+            assert!(
+                serialized.contains("\"type\":\"string\""),
+                "{tool_name} schema should advertise plain selector string targeting"
+            );
             assert!(
                 serialized.contains("\"kind\""),
                 "{tool_name} schema should advertise the target kind discriminator"
@@ -573,6 +574,13 @@ mod tests {
             assert!(
                 serialized.contains("\"cursor\""),
                 "{tool_name} schema should advertise cursor targeting"
+            );
+            assert!(
+                target.get("$ref").is_some()
+                    || target.get("oneOf").is_some()
+                    || target.get("anyOf").is_some()
+                    || target.get("any_of").is_some(),
+                "{tool_name} target should stay schema-driven rather than a bare scalar field"
             );
         }
     }

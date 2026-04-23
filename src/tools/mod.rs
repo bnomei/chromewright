@@ -128,8 +128,8 @@ mod tests {
             "poll iterations should be recorded"
         );
         assert!(
-            metrics["output_bytes"].as_u64().unwrap_or_default() > 0,
-            "serialized output size should be recorded"
+            !metrics.contains_key("output_bytes"),
+            "output_bytes should be omitted when exact sizing is not requested"
         );
     }
 
@@ -151,8 +151,8 @@ mod tests {
             "snapshot render timing should be recorded"
         );
         assert!(
-            metrics["output_bytes"].as_u64().unwrap_or_default() > 0,
-            "envelope output size should be recorded"
+            !metrics.contains_key("output_bytes"),
+            "output_bytes should be omitted when exact sizing is not requested"
         );
     }
 

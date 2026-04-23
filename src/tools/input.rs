@@ -16,8 +16,11 @@ use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
+use std::sync::OnceLock;
 
 const INPUT_JS: &str = include_str!("input.js");
+static INPUT_SHELL: OnceLock<crate::tools::browser_kernel::BrowserKernelTemplateShell> =
+    OnceLock::new();
 
 #[derive(Debug, Clone, Serialize)]
 pub struct InputParams {
@@ -212,7 +215,7 @@ impl Tool for InputTool {
 }
 
 fn build_input_js(config: &serde_json::Value) -> String {
-    render_browser_kernel_script(INPUT_JS, "__INPUT_CONFIG__", config)
+    render_browser_kernel_script(&INPUT_SHELL, INPUT_JS, "__INPUT_CONFIG__", config)
 }
 
 fn input_actionability_predicates() -> &'static [ActionabilityPredicate] {
@@ -257,6 +260,20 @@ mod tests {
             "clear": true,
         }))
         .expect("canonical text field should deserialize");
+
+        assert_eq!(params.selector.as_deref(), Some("#query"));
+        assert_eq!(params.text, "search");
+        assert!(params.clear);
+    }
+
+    #[test]
+    fn test_input_params_deserializes_plain_string_target() {
+        let params: InputParams = serde_json::from_value(json!({
+            "target": "#query",
+            "text": "search",
+            "clear": true,
+        }))
+        .expect("plain string selector target should deserialize");
 
         assert_eq!(params.selector.as_deref(), Some("#query"));
         assert_eq!(params.text, "search");

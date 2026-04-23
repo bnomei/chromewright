@@ -92,6 +92,24 @@ struct FrameBoundaryRecord {
     index: usize,
 }
 
+fn decode_browser_payload<T, F>(
+    value: serde_json::Value,
+    parse_error_context: &str,
+    decode: F,
+) -> Result<T>
+where
+    F: FnOnce(serde_json::Value) -> std::result::Result<T, serde_json::Error>,
+{
+    let normalized = match value {
+        serde_json::Value::String(json_str) => serde_json::from_str(&json_str)
+            .map_err(|e| BrowserError::DomParseFailed(format!("{}: {}", parse_error_context, e)))?,
+        structured => structured,
+    };
+
+    decode(normalized)
+        .map_err(|e| BrowserError::DomParseFailed(format!("{}: {}", parse_error_context, e)))
+}
+
 /// Snapshot extraction response from JavaScript
 #[derive(Debug, serde::Deserialize)]
 struct SnapshotResponse {
@@ -201,6 +219,12 @@ impl IndexedSnapshot {
 }
 
 impl DocumentMetadata {
+    fn decode_result_value(value: serde_json::Value) -> Result<Self> {
+        decode_browser_payload(value, "Failed to parse document metadata JSON", |value| {
+            serde_json::from_value(value)
+        })
+    }
+
     /// Read lightweight document metadata from the current tab without rebuilding the full DOM tree.
     pub fn from_tab(tab: &Arc<Tab>) -> Result<Self> {
         let result = tab
@@ -212,19 +236,13 @@ impl DocumentMetadata {
                 ))
             })?;
 
-        let json_value = result.value.ok_or_else(|| {
+        let result_value = result.value.ok_or_else(|| {
             BrowserError::DomParseFailed(
                 "No value returned from document metadata extraction".to_string(),
             )
         })?;
 
-        let json_str: String = serde_json::from_value(json_value).map_err(|e| {
-            BrowserError::DomParseFailed(format!("Failed to get metadata JSON string: {}", e))
-        })?;
-
-        serde_json::from_str(&json_str).map_err(|e| {
-            BrowserError::DomParseFailed(format!("Failed to parse document metadata JSON: {}", e))
-        })
+        Self::decode_result_value(result_value)
     }
 }
 
@@ -238,6 +256,21 @@ struct LegacySnapshotResponse {
 }
 
 impl DomTree {
+    fn decode_snapshot_result_value(value: serde_json::Value) -> Result<SnapshotResponse> {
+        decode_browser_payload(value, "Failed to parse snapshot JSON", |value| {
+            serde_json::from_value::<SnapshotResponse>(value.clone()).or_else(|_| {
+                serde_json::from_value::<LegacySnapshotResponse>(value).map(|legacy| {
+                    SnapshotResponse {
+                        document: DocumentMetadata::default(),
+                        root: legacy.root,
+                        selectors: legacy.selectors,
+                        _iframe_indices: legacy.iframe_indices,
+                    }
+                })
+            })
+        })
+    }
+
     fn apply_public_handle_flags(
         node: &mut AriaNode,
         selector_overrides: &BTreeMap<usize, String>,
@@ -347,35 +380,12 @@ impl DomTree {
             BrowserError::DomParseFailed(format!("Failed to execute DOM extraction script: {}", e))
         })?;
 
-        // Get the JSON string value
-        let json_value = result.value.ok_or_else(|| {
+        // Read the evaluated payload, which may already be structured or may remain a legacy JSON string.
+        let result_value = result.value.ok_or_else(|| {
             BrowserError::DomParseFailed("No value returned from DOM extraction".to_string())
         })?;
 
-        // The JavaScript returns a JSON string, so we need to parse it as a string first
-        let json_str: String = serde_json::from_value(json_value).map_err(|e| {
-            BrowserError::DomParseFailed(format!("Failed to get JSON string: {}", e))
-        })?;
-
-        // Then parse the JSON string into SnapshotResponse
-        let response: SnapshotResponse = match serde_json::from_str(&json_str) {
-            Ok(response) => response,
-            Err(_) => {
-                let legacy: LegacySnapshotResponse =
-                    serde_json::from_str(&json_str).map_err(|e| {
-                        BrowserError::DomParseFailed(format!(
-                            "Failed to parse snapshot JSON: {}",
-                            e
-                        ))
-                    })?;
-                SnapshotResponse {
-                    document: DocumentMetadata::default(),
-                    root: legacy.root,
-                    selectors: legacy.selectors,
-                    _iframe_indices: legacy.iframe_indices,
-                }
-            }
-        };
+        let response = Self::decode_snapshot_result_value(result_value)?;
 
         let SnapshotResponse {
             document,
@@ -556,6 +566,7 @@ impl DomTree {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn create_test_tree() -> AriaNode {
         let mut root = AriaNode::fragment();
@@ -577,6 +588,121 @@ mod tests {
         )));
 
         root
+    }
+
+    fn sample_document_metadata_json() -> serde_json::Value {
+        json!({
+            "document_id": "doc-1",
+            "revision": "rev-7",
+            "url": "https://example.com",
+            "title": "Example",
+            "ready_state": "complete",
+            "frames": [
+                {
+                    "index": 0,
+                    "status": "ready",
+                    "url": "https://example.com/frame",
+                    "document_id": "frame-doc",
+                    "revision": "frame-rev"
+                }
+            ]
+        })
+    }
+
+    fn sample_snapshot_response_json() -> serde_json::Value {
+        json!({
+            "document": sample_document_metadata_json(),
+            "root": {
+                "role": "button",
+                "name": "Click me",
+                "children": [],
+                "index": 0
+            },
+            "selectors": ["button.primary"],
+            "iframe_indices": []
+        })
+    }
+
+    fn sample_legacy_snapshot_response_json() -> serde_json::Value {
+        json!({
+            "root": {
+                "role": "button",
+                "name": "Click me",
+                "children": [],
+                "index": 0
+            },
+            "selectors": ["button.primary"],
+            "iframeIndices": [0]
+        })
+    }
+
+    #[test]
+    fn test_decode_document_metadata_from_structured_value() {
+        let metadata = DocumentMetadata::decode_result_value(sample_document_metadata_json())
+            .expect("structured metadata should decode");
+
+        assert_eq!(metadata.document_id, "doc-1");
+        assert_eq!(metadata.revision, "rev-7");
+        assert_eq!(metadata.frames.len(), 1);
+        assert_eq!(metadata.frames[0].status, "ready");
+    }
+
+    #[test]
+    fn test_decode_document_metadata_from_legacy_json_string() {
+        let metadata = DocumentMetadata::decode_result_value(serde_json::Value::String(
+            sample_document_metadata_json().to_string(),
+        ))
+        .expect("legacy metadata JSON string should decode");
+
+        assert_eq!(metadata.url, "https://example.com");
+        assert_eq!(metadata.title, "Example");
+        assert_eq!(metadata.ready_state, "complete");
+    }
+
+    #[test]
+    fn test_decode_snapshot_response_from_structured_value() {
+        let response = DomTree::decode_snapshot_result_value(sample_snapshot_response_json())
+            .expect("structured snapshot should decode");
+
+        assert_eq!(response.document.document_id, "doc-1");
+        assert_eq!(response.root.role, "button");
+        assert_eq!(response.root.name, "Click me");
+        assert_eq!(response.selectors, vec!["button.primary"]);
+    }
+
+    #[test]
+    fn test_decode_snapshot_response_from_legacy_json_string() {
+        let response = DomTree::decode_snapshot_result_value(serde_json::Value::String(
+            sample_legacy_snapshot_response_json().to_string(),
+        ))
+        .expect("legacy snapshot JSON string should decode");
+
+        assert_eq!(response.document, DocumentMetadata::default());
+        assert_eq!(response.root.role, "button");
+        assert_eq!(response.selectors, vec!["button.primary"]);
+    }
+
+    #[test]
+    fn test_decode_browser_payload_preserves_invalid_payload_failure() {
+        let error = DocumentMetadata::decode_result_value(serde_json::Value::String(
+            "{invalid-json".to_string(),
+        ))
+        .expect_err("invalid payload should fail");
+
+        let message = error.to_string();
+        assert!(message.contains("Failed to parse document metadata JSON"));
+    }
+
+    #[test]
+    fn test_document_metadata_script_returns_a_json_string_expression() {
+        let script = include_str!("document_metadata.js").trim_start();
+        assert!(script.starts_with("JSON.stringify(("));
+    }
+
+    #[test]
+    fn test_extract_dom_script_returns_a_json_string_expression() {
+        let script = include_str!("extract_dom.js");
+        assert!(script.contains("JSON.stringify((function()"));
     }
 
     #[test]

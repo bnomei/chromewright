@@ -4,6 +4,7 @@ use crate::dom::{DocumentMetadata, DomTree};
 use crate::error::{BrowserError, Result};
 use headless_chrome::protocol::cdp::Page;
 use headless_chrome::{Browser, Tab};
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::ffi::OsStr;
 use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
@@ -252,43 +253,52 @@ struct ScreenshotPageMetrics {
     device_pixel_ratio: f64,
 }
 
+fn screenshot_page_metrics_script() -> &'static str {
+    r#"JSON.stringify((() => {
+        const root = document.documentElement;
+        const body = document.body;
+        return {
+            inner_width: Number(window.innerWidth || (root ? root.clientWidth : 0) || 0),
+            inner_height: Number(window.innerHeight || (root ? root.clientHeight : 0) || 0),
+            scroll_width: Number(Math.max(
+                window.innerWidth || 0,
+                root ? root.scrollWidth : 0,
+                body ? body.scrollWidth : 0
+            )),
+            scroll_height: Number(Math.max(
+                window.innerHeight || 0,
+                root ? root.scrollHeight : 0,
+                body ? body.scrollHeight : 0
+            )),
+            device_pixel_ratio: Number(window.devicePixelRatio || 1)
+        };
+    })())"#
+}
+
+fn decode_browser_json_value<T>(value: Value, context: &str) -> Result<T>
+where
+    T: DeserializeOwned,
+{
+    match value {
+        Value::String(json) => serde_json::from_str(&json)
+            .map_err(|e| BrowserError::ScreenshotFailed(format!("{context}: {e}"))),
+        other => serde_json::from_value(other)
+            .map_err(|e| BrowserError::ScreenshotFailed(format!("{context}: {e}"))),
+    }
+}
+
 impl ScreenshotPageMetrics {
     fn evaluate(tab: &Arc<Tab>) -> Result<Self> {
         let evaluation = tab
-            .evaluate(
-                r#"(() => {
-                    const root = document.documentElement;
-                    const body = document.body;
-                    return {
-                        inner_width: Number(window.innerWidth || (root ? root.clientWidth : 0) || 0),
-                        inner_height: Number(window.innerHeight || (root ? root.clientHeight : 0) || 0),
-                        scroll_width: Number(Math.max(
-                            window.innerWidth || 0,
-                            root ? root.scrollWidth : 0,
-                            body ? body.scrollWidth : 0
-                        )),
-                        scroll_height: Number(Math.max(
-                            window.innerHeight || 0,
-                            root ? root.scrollHeight : 0,
-                            body ? body.scrollHeight : 0
-                        )),
-                        device_pixel_ratio: Number(window.devicePixelRatio || 1)
-                    };
-                })()"#,
-                false,
-            )
+            .evaluate(screenshot_page_metrics_script(), false)
             .map_err(|e| BrowserError::ScreenshotFailed(e.to_string()))?;
         let value = evaluation.value.ok_or_else(|| {
             BrowserError::ScreenshotFailed(
                 "Screenshot capture could not read page metrics".to_string(),
             )
         })?;
-        let metrics: Self = serde_json::from_value(value).map_err(|e| {
-            BrowserError::ScreenshotFailed(format!(
-                "Screenshot capture could not decode page metrics: {}",
-                e
-            ))
-        })?;
+        let metrics: Self =
+            decode_browser_json_value(value, "Screenshot capture could not decode page metrics")?;
 
         Ok(Self {
             inner_width: sanitize_length(metrics.inner_width, 1.0),
@@ -1250,6 +1260,51 @@ mod tests {
         BrowserError::EvaluationFailed(
             "Unable to make method calls because underlying connection is closed".to_string(),
         )
+    }
+
+    #[test]
+    fn screenshot_page_metrics_script_returns_a_json_string_expression() {
+        let script = screenshot_page_metrics_script().trim_start();
+        assert!(script.starts_with("JSON.stringify(("));
+        assert!(script.contains("device_pixel_ratio"));
+    }
+
+    #[test]
+    fn screenshot_page_metrics_decode_accepts_json_string_payloads() {
+        let metrics: ScreenshotPageMetrics = decode_browser_json_value(
+            serde_json::json!(
+                "{\"inner_width\":1016,\"inner_height\":568,\"scroll_width\":1016,\"scroll_height\":11915,\"device_pixel_ratio\":2}"
+            ),
+            "Screenshot capture could not decode page metrics",
+        )
+        .expect("json string payload should decode");
+
+        assert_eq!(metrics.inner_width, 1016.0);
+        assert_eq!(metrics.inner_height, 568.0);
+        assert_eq!(metrics.scroll_width, 1016.0);
+        assert_eq!(metrics.scroll_height, 11915.0);
+        assert_eq!(metrics.device_pixel_ratio, 2.0);
+    }
+
+    #[test]
+    fn screenshot_page_metrics_decode_preserves_object_payload_support() {
+        let metrics: ScreenshotPageMetrics = decode_browser_json_value(
+            serde_json::json!({
+                "inner_width": 800,
+                "inner_height": 600,
+                "scroll_width": 1200,
+                "scroll_height": 2400,
+                "device_pixel_ratio": 1.5
+            }),
+            "Screenshot capture could not decode page metrics",
+        )
+        .expect("object payload should decode");
+
+        assert_eq!(metrics.inner_width, 800.0);
+        assert_eq!(metrics.inner_height, 600.0);
+        assert_eq!(metrics.scroll_width, 1200.0);
+        assert_eq!(metrics.scroll_height, 2400.0);
+        assert_eq!(metrics.device_pixel_ratio, 1.5);
     }
 
     #[test]

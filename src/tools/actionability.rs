@@ -2,8 +2,12 @@ use crate::browser::BrowserSession;
 use crate::error::{BrowserError, Result};
 use crate::tools::browser_kernel::render_browser_kernel_script;
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
 
 const ACTIONABILITY_PROBE_TEMPLATE_JS: &str = include_str!("actionability_probe.js");
+static ACTIONABILITY_PROBE_SHELL: OnceLock<
+    crate::tools::browser_kernel::BrowserKernelTemplateShell,
+> = OnceLock::new();
 
 // T001 stages the broader interaction predicate set here so later tasks can
 // reuse the same probe without introducing a second readiness model.
@@ -111,6 +115,7 @@ pub(crate) fn build_actionability_probe_js(request: &ActionabilityRequest<'_>) -
     });
 
     render_browser_kernel_script(
+        &ACTIONABILITY_PROBE_SHELL,
         ACTIONABILITY_PROBE_TEMPLATE_JS,
         "__ACTIONABILITY_CONFIG__",
         &config,

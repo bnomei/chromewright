@@ -16,7 +16,11 @@ use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
+use std::sync::OnceLock;
 
+const HOVER_JS: &str = include_str!("hover.js");
+static HOVER_SHELL: OnceLock<crate::tools::browser_kernel::BrowserKernelTemplateShell> =
+    OnceLock::new();
 /// Parameters for the hover tool
 #[derive(Debug, Clone, Serialize)]
 pub struct HoverParams {
@@ -78,8 +82,6 @@ impl JsonSchema for HoverParams {
 /// Tool for hovering over elements
 #[derive(Default)]
 pub struct HoverTool;
-
-const HOVER_JS: &str = include_str!("hover.js");
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct HoverElement {
@@ -205,7 +207,7 @@ impl Tool for HoverTool {
 }
 
 fn build_hover_js(config: &serde_json::Value) -> String {
-    render_browser_kernel_script(HOVER_JS, "__HOVER_CONFIG__", config)
+    render_browser_kernel_script(&HOVER_SHELL, HOVER_JS, "__HOVER_CONFIG__", config)
 }
 
 #[derive(Debug)]
@@ -447,6 +449,15 @@ mod tests {
         assert_eq!(params.index, None);
         assert_eq!(params.node_ref, None);
         assert_eq!(params.cursor, None);
+
+        let plain_string_params: HoverParams = serde_json::from_value(json!({
+            "target": "#hover-btn"
+        }))
+        .expect("plain string selector target should deserialize");
+        assert_eq!(plain_string_params.selector.as_deref(), Some("#hover-btn"));
+        assert_eq!(plain_string_params.index, None);
+        assert_eq!(plain_string_params.node_ref, None);
+        assert_eq!(plain_string_params.cursor, None);
 
         let error = serde_json::from_value::<HoverParams>(json!({
             "selector": "#hover-btn"

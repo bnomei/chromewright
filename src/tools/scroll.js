@@ -8,12 +8,12 @@
 
   await new Promise((resolve) => setTimeout(resolve, 100));
 
-  const actualScroll = window.scrollY - beforeScrollY;
+  const actualScroll = Math.round(window.scrollY - beforeScrollY);
   const scrollHeight = Math.max(
     document.documentElement ? document.documentElement.scrollHeight : 0,
     document.body ? document.body.scrollHeight : 0
   );
-  const scrollTop = window.scrollY;
+  const scrollTop = Math.round(window.scrollY);
   const clientHeight =
     window.innerHeight ||
     (document.documentElement ? document.documentElement.clientHeight : 0);

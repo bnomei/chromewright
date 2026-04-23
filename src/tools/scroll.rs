@@ -5,6 +5,7 @@ use crate::tools::{
     build_document_envelope,
 };
 use schemars::JsonSchema;
+use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
 
 /// Parameters for the scroll tool
@@ -42,14 +43,48 @@ pub struct ScrollOutput {
 
 #[derive(Debug, Clone, Deserialize, Default)]
 struct RawScrollOutput {
-    #[serde(alias = "actualScroll")]
+    #[serde(alias = "actualScroll", deserialize_with = "deserialize_scroll_pixels")]
     actual_scroll: i64,
     #[serde(alias = "isAtBottom")]
     is_at_bottom: bool,
-    #[serde(alias = "scrollY")]
+    #[serde(alias = "scrollY", deserialize_with = "deserialize_scroll_pixels")]
     scroll_y: i64,
     #[serde(alias = "isAtTop")]
     is_at_top: bool,
+}
+
+fn deserialize_scroll_pixels<'de, D>(deserializer: D) -> std::result::Result<i64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    match value {
+        serde_json::Value::Number(number) => {
+            if let Some(value) = number.as_i64() {
+                return Ok(value);
+            }
+            if let Some(value) = number.as_u64() {
+                return i64::try_from(value).map_err(serde::de::Error::custom);
+            }
+            if let Some(value) = number.as_f64() {
+                if !value.is_finite() {
+                    return Err(serde::de::Error::custom("scroll metric must be finite"));
+                }
+                let rounded = value.round();
+                if rounded < i64::MIN as f64 || rounded > i64::MAX as f64 {
+                    return Err(serde::de::Error::custom("scroll metric is out of range"));
+                }
+                return Ok(rounded as i64);
+            }
+            Err(serde::de::Error::custom(
+                "unsupported numeric scroll metric",
+            ))
+        }
+        other => Err(serde::de::Error::custom(format!(
+            "expected numeric scroll metric, got {}",
+            value_kind(&other)
+        ))),
+    }
 }
 
 impl Tool for ScrollTool {
@@ -336,6 +371,28 @@ mod tests {
 
         assert!(error.0.contains("Failed to parse scroll result"));
         assert_eq!(error.1, "string");
+    }
+
+    #[test]
+    fn test_parse_scroll_output_rounds_fractional_metrics_from_string_payload() {
+        let output = build_scroll_output(
+            parse_raw_scroll_output(Some(serde_json::Value::String(
+                r#"{"actualScroll":-2389.5,"isAtBottom":false,"scrollY":24675.5,"isAtTop":false}"#
+                    .to_string(),
+            )))
+            .expect("fractional scroll payload should parse"),
+            empty_result(),
+        );
+
+        assert_eq!(output.scrolled, -2390);
+        assert_eq!(
+            output.viewport_after,
+            Some(ViewportAfter {
+                scroll_y: 24676,
+                is_at_top: false,
+                is_at_bottom: false,
+            })
+        );
     }
 
     #[test]

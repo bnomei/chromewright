@@ -103,7 +103,7 @@ mod tests {
             .store_snapshot_cache(Arc::new(SnapshotCacheEntry {
                 document,
                 snapshot: Arc::<str>::from("button \"Fake target\""),
-                nodes: Vec::new(),
+                nodes: Arc::<[crate::dom::SnapshotNode]>::from(Vec::new()),
                 scope: SnapshotCacheScope {
                     mode: "viewport".to_string(),
                     fallback_mode: None,
@@ -146,7 +146,7 @@ mod tests {
             .store_snapshot_cache(Arc::new(SnapshotCacheEntry {
                 document: current,
                 snapshot: Arc::<str>::from("button \"Fake target\""),
-                nodes: Vec::new(),
+                nodes: Arc::<[crate::dom::SnapshotNode]>::from(Vec::new()),
                 scope: SnapshotCacheScope {
                     mode: "viewport".to_string(),
                     fallback_mode: None,

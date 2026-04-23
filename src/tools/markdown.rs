@@ -96,16 +96,68 @@ mod tests {
     use std::sync::Arc;
 
     fn sample_entry(full_markdown: &str) -> MarkdownCacheEntry {
-        MarkdownCacheEntry {
-            document_id: "doc-1".to_string(),
-            revision: "rev-1".to_string(),
-            title: "Example Title".to_string(),
-            url: "https://example.com".to_string(),
-            byline: "Example Author".to_string(),
-            excerpt: "Example excerpt".to_string(),
-            site_name: "Example Site".to_string(),
-            full_markdown: Arc::<str>::from(full_markdown),
+        MarkdownCacheEntry::new(
+            "doc-1".to_string(),
+            "rev-1".to_string(),
+            "Example Title".to_string(),
+            "https://example.com".to_string(),
+            "Example Author".to_string(),
+            "Example excerpt".to_string(),
+            "Example Site".to_string(),
+            Arc::<str>::from(full_markdown),
+        )
+    }
+
+    fn sample_utf8_markdown(repetitions: usize) -> String {
+        "😀 cafe résumé λ漢字🚀naive ".repeat(repetitions)
+    }
+
+    fn expected_paginated_markdown(
+        title: &str,
+        content: &str,
+        page: usize,
+        page_size: usize,
+    ) -> String {
+        let total_chars = content.chars().count();
+        let total_pages = if content.is_empty() {
+            1
+        } else {
+            total_chars.div_ceil(page_size)
+        };
+        let current_page = page.clamp(1, total_pages.max(1));
+        let start_char = (current_page - 1) * page_size;
+        let end_char = (start_char + page_size).min(total_chars);
+
+        let page_body = content
+            .chars()
+            .skip(start_char)
+            .take(end_char - start_char)
+            .collect::<String>();
+
+        let mut expected = if current_page == 1 && !title.is_empty() {
+            format!("# {}\n\n{}", title, page_body)
+        } else {
+            page_body
+        };
+
+        if total_pages > 1 {
+            let footer = if current_page < total_pages {
+                format!(
+                    "\n\n---\n\n*Page {} of {}. There are {} more page(s) with additional content.*\n",
+                    current_page,
+                    total_pages,
+                    total_pages - current_page
+                )
+            } else {
+                format!(
+                    "\n\n---\n\n*Page {} of {}. This is the last page.*\n",
+                    current_page, total_pages
+                )
+            };
+            expected.push_str(&footer);
         }
+
+        expected
     }
 
     #[test]
@@ -205,5 +257,78 @@ mod tests {
         assert_eq!(output.total_pages, 2);
         assert!(output.markdown.starts_with("bc"));
         assert!(output.markdown.contains("This is the last page"));
+    }
+
+    #[test]
+    fn test_paginate_markdown_repeated_page_reads_return_same_output_for_cached_entry() {
+        let content = sample_utf8_markdown(300);
+        let entry = sample_entry(&content);
+        let params = GetMarkdownParams {
+            page: 2,
+            page_size: 73,
+        };
+
+        let first = paginate_markdown(&entry, &params).expect("first pagination should succeed");
+        let second = paginate_markdown(&entry, &params).expect("second pagination should succeed");
+        let expected =
+            expected_paginated_markdown(&entry.title, &content, params.page, params.page_size);
+        let expected_total_pages = content.chars().count().div_ceil(params.page_size);
+
+        assert_eq!(first.markdown, second.markdown);
+        assert_eq!(first.markdown, expected);
+        assert_eq!(first.current_page, 2);
+        assert_eq!(first.total_pages, expected_total_pages);
+        assert!(first.has_more_pages);
+        assert!(!first.markdown.starts_with("# Example Title"));
+        assert!(first.markdown.contains("Page 2 of"));
+        assert!(
+            first
+                .markdown
+                .contains("more page(s) with additional content")
+        );
+    }
+
+    #[test]
+    fn test_paginate_markdown_utf8_first_page_preserves_title_and_footer_contract() {
+        let content = sample_utf8_markdown(160);
+        let entry = sample_entry(&content);
+        let params = GetMarkdownParams {
+            page: 1,
+            page_size: 65,
+        };
+
+        let output = paginate_markdown(&entry, &params).expect("pagination should succeed");
+        let expected =
+            expected_paginated_markdown(&entry.title, &content, params.page, params.page_size);
+
+        assert_eq!(output.current_page, 1);
+        assert_eq!(output.markdown, expected);
+        assert!(output.markdown.starts_with("# Example Title\n\n"));
+        assert!(output.markdown.contains("Page 1 of"));
+        assert!(output.has_more_pages);
+    }
+
+    #[test]
+    fn test_paginate_markdown_utf8_mid_page_matches_expected_slice_exactly() {
+        let content = sample_utf8_markdown(220);
+        let entry = sample_entry(&content);
+        let params = GetMarkdownParams {
+            page: 3,
+            page_size: 64,
+        };
+
+        let output = paginate_markdown(&entry, &params).expect("pagination should succeed");
+        let expected =
+            expected_paginated_markdown(&entry.title, &content, params.page, params.page_size);
+        let expected_body = content
+            .chars()
+            .skip((params.page - 1) * params.page_size)
+            .take(params.page_size)
+            .collect::<String>();
+
+        assert_eq!(output.markdown, expected);
+        assert!(output.markdown.starts_with(&expected_body));
+        assert!(!output.markdown.starts_with("# Example Title"));
+        assert!(output.markdown.contains("Page 3 of"));
     }
 }

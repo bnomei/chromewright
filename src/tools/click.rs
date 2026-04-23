@@ -16,8 +16,11 @@ use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
+use std::sync::OnceLock;
 
 const CLICK_JS: &str = include_str!("click.js");
+static CLICK_SHELL: OnceLock<crate::tools::browser_kernel::BrowserKernelTemplateShell> =
+    OnceLock::new();
 
 /// Parameters for the click tool
 #[derive(Debug, Clone, Serialize)]
@@ -188,7 +191,7 @@ impl Tool for ClickTool {
 }
 
 fn build_click_js(config: &serde_json::Value) -> String {
-    render_browser_kernel_script(CLICK_JS, "__CLICK_CONFIG__", config)
+    render_browser_kernel_script(&CLICK_SHELL, CLICK_JS, "__CLICK_CONFIG__", config)
 }
 
 fn click_actionability_predicates() -> &'static [ActionabilityPredicate] {
@@ -264,6 +267,19 @@ mod tests {
             }
         }))
         .expect("strict selector target should deserialize");
+
+        assert_eq!(params.selector.as_deref(), Some("#save"));
+        assert_eq!(params.index, None);
+        assert_eq!(params.node_ref, None);
+        assert_eq!(params.cursor, None);
+    }
+
+    #[test]
+    fn test_click_params_deserializes_plain_string_target_selector() {
+        let params: ClickParams = serde_json::from_value(json!({
+            "target": "#save"
+        }))
+        .expect("plain string selector target should deserialize");
 
         assert_eq!(params.selector.as_deref(), Some("#save"));
         assert_eq!(params.index, None);

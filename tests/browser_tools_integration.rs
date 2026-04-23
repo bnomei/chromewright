@@ -1178,9 +1178,9 @@ fn test_scroll_tool_returns_compact_viewport_follow_up_state() {
 
     let actual_scroll_y = common::evaluate(session, "window.scrollY")
         .expect("window.scrollY should be readable")
-        .as_i64()
+        .as_f64()
         .expect("window.scrollY should be numeric");
-    assert_eq!(scroll_y, actual_scroll_y);
+    assert_eq!(scroll_y, actual_scroll_y.round() as i64);
 }
 
 #[test]
@@ -2033,10 +2033,10 @@ fn test_click_tool_offscreen_target_auto_scrolls_into_view() {
 
     let scroll_y = common::evaluate(session, "window.scrollY")
         .expect("window.scrollY should be readable")
-        .as_i64()
+        .as_f64()
         .expect("window.scrollY should be numeric");
     assert!(
-        scroll_y > 0,
+        scroll_y > 0.0,
         "click should scroll the offscreen target into view"
     );
 

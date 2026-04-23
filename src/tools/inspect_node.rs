@@ -9,8 +9,11 @@ use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::sync::OnceLock;
 
 const INSPECT_NODE_JS: &str = include_str!("inspect_node.js");
+static INSPECT_NODE_SHELL: OnceLock<crate::tools::browser_kernel::BrowserKernelTemplateShell> =
+    OnceLock::new();
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -263,7 +266,12 @@ impl Tool for InspectNodeTool {
 
 pub(crate) fn build_inspect_node_js(config: &serde_json::Value) -> String {
     use crate::tools::browser_kernel::render_browser_kernel_script;
-    render_browser_kernel_script(INSPECT_NODE_JS, "__INSPECT_CONFIG__", config)
+    render_browser_kernel_script(
+        &INSPECT_NODE_SHELL,
+        INSPECT_NODE_JS,
+        "__INSPECT_CONFIG__",
+        config,
+    )
 }
 
 pub(crate) fn decode_probe_payload(
@@ -369,6 +377,16 @@ mod tests {
         assert_eq!(params.cursor, None);
         assert_eq!(params.detail, InspectDetail::Full);
         assert_eq!(params.style_names, vec!["display".to_string()]);
+
+        let plain_string_params: InspectNodeParams = serde_json::from_value(json!({
+            "target": "#save",
+            "detail": "full",
+            "style_names": ["display"]
+        }))
+        .expect("plain string selector target should deserialize");
+        assert_eq!(plain_string_params.selector.as_deref(), Some("#save"));
+        assert_eq!(plain_string_params.detail, InspectDetail::Full);
+        assert_eq!(plain_string_params.style_names, vec!["display".to_string()]);
 
         let error = serde_json::from_value::<InspectNodeParams>(json!({
             "cursor": {
