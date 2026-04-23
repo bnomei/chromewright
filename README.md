@@ -190,11 +190,6 @@ Chromewright also carries a few small but important contract details:
 - `extract` uses `code = element_not_found` for selector misses and reserves `code = invalid_extract_payload` for malformed extraction results.
 - `read_links` returns both the raw `href` attribute and an absolute `resolved_url`.
 
-Companion references:
-
-- [Tool Handoff Contract](docs/tool-handoff-contract.md)
-- [Tool Description Index](docs/tool-description-index.md)
-
 ## Default Tool Surface
 
 The default Chromewright MCP server exposes 21 high-level tools:
