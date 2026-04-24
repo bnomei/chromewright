@@ -1,5 +1,7 @@
 use super::{BrowserSession, ClosedTabSummary, ManagedTabsCloseSummary, TabInfo};
-use crate::browser::backend::{AttachSessionDegradedDetails, TabDescriptor};
+use crate::browser::backend::TabDescriptor;
+#[cfg(test)]
+use crate::error::PageTargetLostDetails;
 use crate::error::{BrowserError, Result};
 
 impl BrowserSession {
@@ -8,9 +10,11 @@ impl BrowserSession {
         let active_id = match self.backend.active_tab() {
             Ok(tab) => Some(tab.id),
             Err(BrowserError::TabOperationFailed(reason))
-                if reason.contains("No active tab found")
-                    || AttachSessionDegradedDetails::decode(&reason).is_some() =>
+                if reason.contains("No active tab found") =>
             {
+                None
+            }
+            Err(BrowserError::PageTargetLost(details)) if details.is_attach_session_degraded() => {
                 None
             }
             Err(err) => return Err(err),
@@ -186,11 +190,13 @@ mod tests {
         }
 
         fn active_tab(&self) -> Result<TabDescriptor> {
-            Err(AttachSessionDegradedDetails::page_target_lost(
-                "active_tab",
-                "DOM-backed page access is degraded".to_string(),
-            )
-            .into_browser_error())
+            Err(BrowserError::PageTargetLost(
+                PageTargetLostDetails::attach_degraded(
+                    "active_tab",
+                    "DOM-backed page access is degraded".to_string(),
+                    "Run tab_list, then switch_tab to reacquire an active page target.",
+                ),
+            ))
         }
 
         fn open_tab(&self, _url: &str) -> Result<TabDescriptor> {

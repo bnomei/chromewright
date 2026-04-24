@@ -1,5 +1,76 @@
 use thiserror::Error;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PageTargetLostDetails {
+    pub operation: String,
+    pub detail: String,
+    pub recoverable: bool,
+    pub recovery_hint: Option<String>,
+}
+
+impl PageTargetLostDetails {
+    pub fn recoverable(operation: impl Into<String>, detail: impl Into<String>) -> Self {
+        Self {
+            operation: operation.into(),
+            detail: detail.into(),
+            recoverable: true,
+            recovery_hint: None,
+        }
+    }
+
+    pub fn attach_degraded(
+        operation: impl Into<String>,
+        detail: impl Into<String>,
+        recovery_hint: impl Into<String>,
+    ) -> Self {
+        Self {
+            operation: operation.into(),
+            detail: detail.into(),
+            recoverable: false,
+            recovery_hint: Some(recovery_hint.into()),
+        }
+    }
+
+    pub fn is_attach_session_degraded(&self) -> bool {
+        !self.recoverable && self.recovery_hint.is_some()
+    }
+}
+
+impl std::fmt::Display for PageTargetLostDetails {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "operation={} recoverable={} detail={}",
+            self.operation, self.recoverable, self.detail
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackendUnsupportedDetails {
+    pub capability: String,
+    pub operation: String,
+}
+
+impl BackendUnsupportedDetails {
+    pub fn new(capability: impl Into<String>, operation: impl Into<String>) -> Self {
+        Self {
+            capability: capability.into(),
+            operation: operation.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for BackendUnsupportedDetails {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "Browser backend does not support {} during {}",
+            self.capability, self.operation
+        )
+    }
+}
+
 /// Core error type for chromewright operations
 #[derive(Error, Debug)]
 pub enum BrowserError {
@@ -54,6 +125,14 @@ pub enum BrowserError {
     /// Tab operation failed
     #[error("Tab operation failed: {0}")]
     TabOperationFailed(String),
+
+    /// Browser page target was lost or degraded.
+    #[error("Page target lost: {0}")]
+    PageTargetLost(PageTargetLostDetails),
+
+    /// Backend does not support the requested capability.
+    #[error("Backend unsupported: {0}")]
+    BackendUnsupported(BackendUnsupportedDetails),
 
     /// Chrome/CDP error from headless_chrome crate
     #[error("Chrome error: {0}")]

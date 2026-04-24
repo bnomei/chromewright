@@ -1,11 +1,12 @@
-use crate::browser::backend::{ATTACH_PAGE_TARGET_LOST_CODE, AttachSessionDegradedDetails};
+use crate::browser::backend::{ATTACH_PAGE_TARGET_LOST_CODE, ATTACH_SESSION_PAGE_TARGET_LOSS_KIND};
 use crate::browser::{BrowserSession, SnapshotCacheEntry, SnapshotCacheScope, ViewportMetrics};
 use crate::dom::{
     AriaChild, AriaNode, Cursor, DocumentMetadata, DomTree, NodeRef, SnapshotNode,
     yaml_escape_key_if_needed, yaml_escape_value_if_needed,
 };
-use crate::error::BrowserError;
-use crate::error::Result;
+#[cfg(test)]
+use crate::error::BackendUnsupportedDetails;
+use crate::error::{BrowserError, PageTargetLostDetails, Result};
 use crate::tools::snapshot::{RenderMode, SnapshotMode, render_aria_tree};
 use crate::tools::{
     click, close, close_tab, evaluate, extract, go_back, go_forward, hover, input, inspect_node,
@@ -775,19 +776,19 @@ fn structured_failure(code: &str, error: String) -> ToolResult {
     structured_tool_failure(code, error, None, None, None, None)
 }
 
-fn attach_session_degraded_failure(details: AttachSessionDegradedDetails) -> ToolResult {
+fn attach_session_degraded_failure(details: PageTargetLostDetails) -> ToolResult {
     structured_tool_failure(
         ATTACH_PAGE_TARGET_LOST_CODE,
-        details.error.clone(),
+        details.detail.clone(),
         None,
         None,
         Some(serde_json::json!({
             "suggested_tool": "tab_list",
-            "hint": details.recovery_hint,
+            "hint": details.recovery_hint.clone().unwrap_or_default(),
         })),
         Some(serde_json::json!({
-            "kind": details.kind,
-            "operation": details.operation,
+            "kind": ATTACH_SESSION_PAGE_TARGET_LOSS_KIND,
+            "operation": details.operation.clone(),
             "session_origin": "connected",
         })),
     )
@@ -835,12 +836,37 @@ pub(crate) fn tool_result_from_browser_error(
         }
         BrowserError::DownloadFailed(reason) => Ok(structured_failure("download_failed", reason)),
         BrowserError::TabOperationFailed(reason) => {
-            if let Some(details) = AttachSessionDegradedDetails::decode(&reason) {
+            Ok(structured_failure("tab_operation_failed", reason))
+        }
+        BrowserError::PageTargetLost(details) => {
+            if details.is_attach_session_degraded() {
                 return Ok(attach_session_degraded_failure(details));
             }
 
-            Ok(structured_failure("tab_operation_failed", reason))
+            Ok(structured_tool_failure(
+                ATTACH_PAGE_TARGET_LOST_CODE,
+                details.detail.clone(),
+                None,
+                None,
+                None,
+                Some(serde_json::json!({
+                    "kind": ATTACH_SESSION_PAGE_TARGET_LOSS_KIND,
+                    "operation": details.operation,
+                    "recoverable": details.recoverable,
+                })),
+            ))
         }
+        BrowserError::BackendUnsupported(details) => Ok(structured_tool_failure(
+            "backend_unsupported",
+            details.to_string(),
+            None,
+            None,
+            None,
+            Some(serde_json::json!({
+                "capability": details.capability,
+                "operation": details.operation,
+            })),
+        )),
         BrowserError::JsonError(error) => Ok(structured_failure(
             "json_error",
             format!("JSON error: {}", error),
@@ -1875,11 +1901,11 @@ mod tests {
 
     #[test]
     fn tool_result_maps_attach_page_target_loss_to_structured_degraded_failure() {
-        let error = AttachSessionDegradedDetails::page_target_lost(
+        let error = BrowserError::PageTargetLost(PageTargetLostDetails::attach_degraded(
             "snapshot",
             "Attached browser session lost its active page target during snapshot.".to_string(),
-        )
-        .into_browser_error();
+            "Run tab_list, then switch_tab to reacquire an active page target.",
+        ));
 
         let result = tool_result_from_browser_error(error)
             .expect("degraded attach failures stay tool-local");
@@ -1905,6 +1931,28 @@ mod tests {
                 .unwrap_or_default()
                 .contains("tab_list")
         );
+    }
+
+    #[test]
+    fn tool_result_maps_backend_unsupported_to_structured_failure() {
+        let error = BrowserError::BackendUnsupported(BackendUnsupportedDetails::new(
+            "viewport_metrics",
+            "snapshot",
+        ));
+
+        let result = tool_result_from_browser_error(error)
+            .expect("unsupported backend capabilities stay tool-local");
+
+        assert!(!result.success);
+        let data = result
+            .data
+            .expect("structured failure data should be present");
+        assert_eq!(data["code"].as_str(), Some("backend_unsupported"));
+        assert_eq!(
+            data["details"]["capability"].as_str(),
+            Some("viewport_metrics")
+        );
+        assert_eq!(data["details"]["operation"].as_str(), Some("snapshot"));
     }
 
     #[test]

@@ -7,7 +7,7 @@ Move recovery decisions out of display strings so browser recovery policy can ev
 ## Distilled Discovery
 
 - `src/error.rs` centralizes `BrowserError`, but many variants carry plain `String` details.
-- `src/browser/backend.rs` has `AttachSessionDegradedDetails`, encoded reason prefixes, and `is_recoverable_page_target_loss` message matching.
+- `src/browser/backend.rs` had encoded attach-session degraded reason prefixes and recoverable page-target-loss message matching.
 - `src/tools/core/mod.rs` maps `BrowserError` to structured tool failures and has a dedicated attach-session degraded failure helper.
 - `src/mcp/mod.rs` preserves structured tool failures as `CallToolResult` and maps internal errors separately.
 - Current tests assert attach-degraded payloads and page-target-loss recovery behavior, but some paths still rely on reason text.
@@ -18,15 +18,15 @@ Add typed details near `BrowserError`:
 
 ```rust
 pub(crate) struct PageTargetLostDetails {
-    pub operation: &'static str,
+    pub operation: String,
     pub detail: String,
     pub recoverable: bool,
-    pub recovery_hint: Option<&'static str>,
+    pub recovery_hint: Option<String>,
 }
 
 pub(crate) struct BackendUnsupportedDetails {
-    pub capability: &'static str,
-    pub operation: &'static str,
+    pub capability: String,
+    pub operation: String,
 }
 ```
 
@@ -55,7 +55,7 @@ detail
 recovery_hint
 ```
 
-The source of those fields changes from encoded strings to typed data. Any new field must be covered by schema or payload tests.
+The source of those fields changes from encoded strings to typed data. Any new field must be covered by schema or payload tests. The former encoded attach-degraded string carrier is removed rather than retained as a compatibility field because it was never part of the public structured payload.
 
 ## Validation Plan
 
@@ -75,4 +75,3 @@ cargo check --locked
 - Changing CLI error display
 - Removing all upstream string classification immediately
 - Changing public MCP error semantics
-

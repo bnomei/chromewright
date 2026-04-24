@@ -1,7 +1,7 @@
 use crate::browser::config::CHROME_BROWSER_IDLE_TIMEOUT;
 use crate::browser::{ConnectionOptions, LaunchOptions};
 use crate::dom::{DocumentMetadata, DomTree};
-use crate::error::{BrowserError, Result};
+use crate::error::{BackendUnsupportedDetails, BrowserError, PageTargetLostDetails, Result};
 use headless_chrome::protocol::cdp::{Emulation, Page};
 use headless_chrome::{Browser, Tab};
 use serde::de::DeserializeOwned;
@@ -15,7 +15,6 @@ pub(crate) const DEBUG_PORT_START: u16 = 40_000;
 pub(crate) const DEBUG_PORT_END: u16 = 59_999;
 pub(crate) const ATTACH_PAGE_TARGET_LOST_CODE: &str = "attach_page_target_lost";
 pub(crate) const ATTACH_SESSION_PAGE_TARGET_LOSS_KIND: &str = "page_target_lost";
-const ATTACH_SESSION_DEGRADED_REASON_PREFIX: &str = "chromewright:attach-session-degraded:";
 const ATTACH_SESSION_RECOVERY_HINT: &str = "Run tab_list, then switch_tab to reacquire an active page target. If page actions still fail, reconnect the attach session and rerun snapshot.";
 pub(crate) const VIEWPORT_DIMENSION_MAX: u32 = 10_000_000;
 static DEBUG_PORT_COUNTER: AtomicU16 = AtomicU16::new(DEBUG_PORT_START);
@@ -597,41 +596,6 @@ pub(crate) struct ScriptEvaluation {
     pub type_name: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub(crate) struct AttachSessionDegradedDetails {
-    pub kind: String,
-    pub operation: String,
-    pub error: String,
-    pub recovery_hint: String,
-}
-
-impl AttachSessionDegradedDetails {
-    pub(crate) fn page_target_lost(operation: &str, error: impl Into<String>) -> Self {
-        Self {
-            kind: ATTACH_SESSION_PAGE_TARGET_LOSS_KIND.to_string(),
-            operation: operation.to_string(),
-            error: error.into(),
-            recovery_hint: ATTACH_SESSION_RECOVERY_HINT.to_string(),
-        }
-    }
-
-    pub(crate) fn encode_reason(&self) -> String {
-        match serde_json::to_string(self) {
-            Ok(payload) => format!("{ATTACH_SESSION_DEGRADED_REASON_PREFIX}{payload}"),
-            Err(_) => self.error.clone(),
-        }
-    }
-
-    pub(crate) fn decode(reason: &str) -> Option<Self> {
-        let payload = reason.strip_prefix(ATTACH_SESSION_DEGRADED_REASON_PREFIX)?;
-        serde_json::from_str(payload).ok()
-    }
-
-    pub(crate) fn into_browser_error(self) -> BrowserError {
-        BrowserError::TabOperationFailed(self.encode_reason())
-    }
-}
-
 pub(crate) trait SessionBackend: Send + Sync {
     fn navigate(&self, url: &str) -> Result<()>;
     fn wait_for_navigation(&self) -> Result<()>;
@@ -643,8 +607,8 @@ pub(crate) trait SessionBackend: Send + Sync {
             return self.extract_dom();
         }
 
-        Err(BrowserError::TabOperationFailed(
-            "This browser backend cannot extract DOM from a specific tab yet".to_string(),
+        Err(BrowserError::BackendUnsupported(
+            BackendUnsupportedDetails::new("extract_dom_for_tab", "extract_dom_for_tab"),
         ))
     }
     fn extract_dom_with_prefix(&self, prefix: &str) -> Result<DomTree>;
@@ -659,8 +623,8 @@ pub(crate) trait SessionBackend: Send + Sync {
             return self.evaluate(script, await_promise);
         }
 
-        Err(BrowserError::TabOperationFailed(
-            "This browser backend cannot evaluate JavaScript in a specific tab yet".to_string(),
+        Err(BrowserError::BackendUnsupported(
+            BackendUnsupportedDetails::new("evaluate_on_tab", "evaluate_on_tab"),
         ))
     }
     fn capture_screenshot(&self, full_page: bool) -> Result<Vec<u8>>;
@@ -670,14 +634,13 @@ pub(crate) trait SessionBackend: Send + Sync {
     ) -> Result<ScreenshotCapture> {
         request.validate()?;
         if request.tab_id.is_some() {
-            return Err(BrowserError::ScreenshotFailed(
-                "This browser backend cannot capture screenshots from a specific tab yet"
-                    .to_string(),
+            return Err(BrowserError::BackendUnsupported(
+                BackendUnsupportedDetails::new("screenshot_tab_targeting", "capture_screenshot"),
             ));
         }
         if request.clip.is_some() {
-            return Err(BrowserError::ScreenshotFailed(
-                "This browser backend cannot capture clipped screenshots yet".to_string(),
+            return Err(BrowserError::BackendUnsupported(
+                BackendUnsupportedDetails::new("screenshot_clip", "capture_screenshot"),
             ));
         }
 
@@ -697,24 +660,24 @@ pub(crate) trait SessionBackend: Send + Sync {
         )
     }
     fn viewport_metrics(&self, _tab_id: Option<&str>) -> Result<ViewportMetrics> {
-        Err(BrowserError::TabOperationFailed(
-            "This browser backend cannot read viewport metrics yet".to_string(),
+        Err(BrowserError::BackendUnsupported(
+            BackendUnsupportedDetails::new("viewport_metrics", "viewport_metrics"),
         ))
     }
     fn apply_viewport_emulation(
         &self,
         _request: &ViewportEmulationRequest,
     ) -> Result<ViewportOperationResult> {
-        Err(BrowserError::TabOperationFailed(
-            "This browser backend cannot apply viewport emulation yet".to_string(),
+        Err(BrowserError::BackendUnsupported(
+            BackendUnsupportedDetails::new("viewport_emulation", "apply_viewport_emulation"),
         ))
     }
     fn reset_viewport_emulation(
         &self,
         _request: &ViewportResetRequest,
     ) -> Result<ViewportOperationResult> {
-        Err(BrowserError::TabOperationFailed(
-            "This browser backend cannot reset viewport emulation yet".to_string(),
+        Err(BrowserError::BackendUnsupported(
+            BackendUnsupportedDetails::new("viewport_emulation", "reset_viewport_emulation"),
         ))
     }
     fn press_key(&self, key: &str) -> Result<()>;
@@ -980,7 +943,7 @@ impl ChromeSessionBackend {
             Ok(value) => Ok(value),
             Err(error) => {
                 if !self.attach_mode
-                    || !is_recoverable_page_target_loss(&error)
+                    || recoverable_page_target_loss_details(operation_name, &error).is_none()
                     || !self.browser_inventory_available()
                 {
                     Err(error)
@@ -988,7 +951,13 @@ impl ChromeSessionBackend {
                     match self.recover_active_tab_handle() {
                         Ok(recovered_tab) => match operation(&recovered_tab) {
                             Ok(value) => Ok(value),
-                            Err(retry_error) if is_recoverable_page_target_loss(&retry_error) => {
+                            Err(retry_error)
+                                if recoverable_page_target_loss_details(
+                                    operation_name,
+                                    &retry_error,
+                                )
+                                .is_some() =>
+                            {
                                 Err(attach_session_page_target_loss(
                                     operation_name,
                                     format!(
@@ -1014,9 +983,7 @@ impl ChromeSessionBackend {
 
         match &result {
             Ok(_) => self.mark_page_target_healthy(),
-            Err(BrowserError::TabOperationFailed(reason))
-                if AttachSessionDegradedDetails::decode(reason).is_some() =>
-            {
+            Err(BrowserError::PageTargetLost(details)) if details.is_attach_session_degraded() => {
                 self.mark_page_target_degraded();
             }
             Err(_) => {}
@@ -1048,7 +1015,7 @@ impl ChromeSessionBackend {
             Ok(value) => Ok(value),
             Err(error)
                 if self.attach_mode
-                    && is_recoverable_page_target_loss(&error)
+                    && recoverable_page_target_loss_details(operation_name, &error).is_some()
                     && self.browser_inventory_available() =>
             {
                 let recovered_tab = self.tab_handle_by_id(target_tab_id).map_err(|recovery_error| {
@@ -1064,7 +1031,10 @@ impl ChromeSessionBackend {
 
                 match operation(&recovered_tab) {
                     Ok(value) => Ok(value),
-                    Err(retry_error) if is_recoverable_page_target_loss(&retry_error) => {
+                    Err(retry_error)
+                        if recoverable_page_target_loss_details(operation_name, &retry_error)
+                            .is_some() =>
+                    {
                         Err(attach_session_page_target_loss(
                             operation_name,
                             format!(
@@ -1124,7 +1094,11 @@ impl ChromeSessionBackend {
 }
 
 fn attach_session_page_target_loss(operation_name: &str, detail: String) -> BrowserError {
-    AttachSessionDegradedDetails::page_target_lost(operation_name, detail).into_browser_error()
+    BrowserError::PageTargetLost(PageTargetLostDetails::attach_degraded(
+        operation_name,
+        detail,
+        ATTACH_SESSION_RECOVERY_HINT,
+    ))
 }
 
 fn browser_error_detail(error: &BrowserError) -> String {
@@ -1142,14 +1116,24 @@ fn browser_error_detail(error: &BrowserError) -> String {
         | BrowserError::DownloadFailed(reason)
         | BrowserError::TabOperationFailed(reason)
         | BrowserError::ChromeError(reason) => reason.clone(),
+        BrowserError::PageTargetLost(details) => details.detail.clone(),
+        BrowserError::BackendUnsupported(details) => details.to_string(),
         BrowserError::ToolExecutionFailed { reason, .. } => reason.clone(),
         BrowserError::JsonError(error) => error.to_string(),
         BrowserError::IoError(error) => error.to_string(),
     }
 }
 
-fn is_recoverable_page_target_loss(error: &BrowserError) -> bool {
-    let reason = browser_error_detail(error).to_ascii_lowercase();
+fn recoverable_page_target_loss_details(
+    operation_name: &str,
+    error: &BrowserError,
+) -> Option<PageTargetLostDetails> {
+    if let BrowserError::PageTargetLost(details) = error {
+        return details.recoverable.then(|| details.clone());
+    }
+
+    let reason = browser_error_detail(error);
+    let normalized = reason.to_ascii_lowercase();
 
     [
         "underlying connection is closed",
@@ -1159,7 +1143,13 @@ fn is_recoverable_page_target_loss(error: &BrowserError) -> bool {
         "target closed",
     ]
     .iter()
-    .any(|fragment| reason.contains(fragment))
+    .any(|fragment| normalized.contains(fragment))
+    .then(|| PageTargetLostDetails::recoverable(operation_name, reason))
+}
+
+#[cfg(test)]
+fn is_recoverable_page_target_loss(error: &BrowserError) -> bool {
+    recoverable_page_target_loss_details("unknown", error).is_some()
 }
 
 impl SessionBackend for ChromeSessionBackend {
@@ -1549,14 +1539,19 @@ mod tests {
         match operation() {
             Ok(value) => Ok(value),
             Err(error) => {
-                if !attach_mode || !is_recoverable_page_target_loss(&error) || !inventory_available
+                if !attach_mode
+                    || recoverable_page_target_loss_details(operation_name, &error).is_none()
+                    || !inventory_available
                 {
                     return Err(error);
                 }
 
                 match recover_and_retry() {
                     Ok(value) => Ok(value),
-                    Err(retry_error) if is_recoverable_page_target_loss(&retry_error) => {
+                    Err(retry_error)
+                        if recoverable_page_target_loss_details(operation_name, &retry_error)
+                            .is_some() =>
+                    {
                         Err(attach_session_page_target_loss(
                             operation_name,
                             format!(
@@ -1675,14 +1670,20 @@ mod tests {
 
         assert_eq!(attempts.get(), 2);
         assert_eq!(recoveries.get(), 1);
-        let BrowserError::TabOperationFailed(reason) = result else {
-            panic!("expected degraded attach-session tab error, got {result:?}");
+        let BrowserError::PageTargetLost(details) = result else {
+            panic!("expected degraded page-target-loss error, got {result:?}");
         };
-        let details = AttachSessionDegradedDetails::decode(&reason)
-            .expect("degraded attach-session error should be encoded");
-        assert_eq!(details.kind, ATTACH_SESSION_PAGE_TARGET_LOSS_KIND);
+        assert!(details.is_attach_session_degraded());
         assert_eq!(details.operation, "snapshot");
-        assert!(details.error.contains("One recovery attempt ran"));
+        assert!(!details.recoverable);
+        assert!(details.detail.contains("One recovery attempt ran"));
+        assert!(
+            details
+                .recovery_hint
+                .as_deref()
+                .unwrap_or_default()
+                .contains("tab_list")
+        );
     }
 
     #[test]
@@ -1712,16 +1713,17 @@ mod tests {
     }
 
     #[test]
-    fn attach_session_degraded_details_round_trip_through_reason_encoding() {
-        let details = AttachSessionDegradedDetails::page_target_lost(
-            "evaluate",
-            "Attached browser session lost its active page target".to_string(),
-        );
+    fn page_target_loss_classifier_builds_typed_recoverable_details() {
+        let details = recoverable_page_target_loss_details("evaluate", &closed_connection_error())
+            .expect("closed connection should classify as page-target loss");
 
-        let decoded = AttachSessionDegradedDetails::decode(&details.encode_reason())
-            .expect("encoded degraded-session details should round-trip");
-
-        assert_eq!(decoded, details);
+        assert_eq!(details.operation, "evaluate");
+        assert!(details.recoverable);
+        assert!(details.recovery_hint.is_none());
+        assert!(details.detail.contains("underlying connection is closed"));
+        assert!(is_recoverable_page_target_loss(
+            &BrowserError::PageTargetLost(details)
+        ));
     }
 
     #[test]

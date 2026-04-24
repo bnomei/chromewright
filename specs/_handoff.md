@@ -1,6 +1,6 @@
 # Program handoff
 
-Last updated: 2026-04-24T10:47:33Z
+Last updated: 2026-04-24T10:54:47Z
 
 ## Current focus
 - Implement all open active/planned spec tasks end to end, committing after each successful spec.
@@ -32,6 +32,9 @@ Last updated: 2026-04-24T10:47:33Z
 - `viewport-output-contract-alignment` committed as `99132c6`.
 - `viewport-metrics-backend-api` completed and ready for commit.
   - Evidence: `cargo test --lib viewport`; `cargo test --lib set_viewport`; `cargo test --lib build_document_envelope_viewport_mode_scopes_snapshot_handles`; `cargo test --lib test_snapshot_schema_exposes_mode_and_scope_contract`; `cargo check --locked`.
+- `viewport-metrics-backend-api` committed as `20994e4`.
+- `typed-browser-error-taxonomy` completed and ready for commit.
+  - Evidence: `cargo test --lib page_target`; `cargo test --lib structured_failure`; `cargo test --lib backend_unsupported`; `cargo test --lib attach_session`; `cargo test --lib mcp`; `cargo check --locked`.
 
 ## Notes
 - `snapshot` redesign remains out of scope; only `snapshot.scope.viewport` is in wave.
