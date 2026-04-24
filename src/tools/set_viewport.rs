@@ -119,7 +119,7 @@ impl Tool for SetViewportTool {
     }
 
     fn description(&self) -> &str {
-        "Simulate per-tab breakpoints. width/height or reset-only; orientation uses snake_case values; returns live viewport_metrics_after."
+        "Simulate breakpoints per tab; set width/height or reset; returns viewport_metrics_after."
     }
 
     fn execute_typed(
