@@ -1,6 +1,6 @@
 # Program handoff
 
-Last updated: 2026-04-24T10:37:56Z
+Last updated: 2026-04-24T10:40:57Z
 
 ## Current focus
 - Implement all open active/planned spec tasks end to end, committing after each successful spec.
@@ -25,6 +25,7 @@ Last updated: 2026-04-24T10:37:56Z
 ## Completed this cycle
 - `headless-chrome-cdp-contract-pin` completed and ready for commit.
 - `set-viewport-schema-constraints` completed and ready for commit.
+- `viewport-output-contract-alignment` completed and ready for commit.
 
 ## Notes
 - `snapshot` redesign remains out of scope; only `snapshot.scope.viewport` is in wave.

@@ -97,6 +97,8 @@ pub struct SetViewportOutput {
     pub reset: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub emulation: Option<ViewportEmulation>,
+    pub viewport_metrics_after: ViewportMetrics,
+    /// Compatibility alias for `viewport_metrics_after`.
     pub viewport_after: ViewportMetrics,
     pub message: String,
 }
@@ -115,7 +117,7 @@ impl Tool for SetViewportTool {
     }
 
     fn description(&self) -> &str {
-        "Simulate per-tab breakpoints. width/height or reset-only; returns live viewport_after."
+        "Simulate per-tab breakpoints. width/height or reset-only; returns live viewport_metrics_after."
     }
 
     fn execute_typed(
@@ -142,6 +144,7 @@ impl Tool for SetViewportTool {
             tab_id: operation.tab_id.clone(),
             reset,
             emulation: operation.emulation.clone(),
+            viewport_metrics_after: operation.viewport_after.clone(),
             viewport_after: operation.viewport_after.clone(),
             message: viewport_message(&operation, reset),
         })))
@@ -279,6 +282,19 @@ mod tests {
         assert_eq!(data["reset"].as_bool(), Some(false));
         assert_eq!(data["emulation"]["width"].as_u64(), Some(390));
         assert_eq!(data["emulation"]["height"].as_u64(), Some(844));
+        assert_eq!(data["viewport_metrics_after"], data["viewport_after"]);
+        assert_eq!(
+            data["viewport_metrics_after"]["width"].as_f64(),
+            Some(390.0)
+        );
+        assert_eq!(
+            data["viewport_metrics_after"]["height"].as_f64(),
+            Some(844.0)
+        );
+        assert_eq!(
+            data["viewport_metrics_after"]["device_pixel_ratio"].as_f64(),
+            Some(3.0)
+        );
         assert_eq!(data["viewport_after"]["width"].as_f64(), Some(390.0));
         assert_eq!(data["viewport_after"]["height"].as_f64(), Some(844.0));
         assert_eq!(
@@ -319,6 +335,7 @@ mod tests {
         let data = result.data.expect("reset should include data");
         assert_eq!(data["reset"].as_bool(), Some(true));
         assert!(data["emulation"].is_null());
+        assert_eq!(data["viewport_metrics_after"], data["viewport_after"]);
         assert_eq!(data["viewport_after"]["width"].as_f64(), Some(800.0));
         assert_eq!(data["viewport_after"]["height"].as_f64(), Some(600.0));
         assert_eq!(read_viewport_metrics(&session), (800.0, 600.0, 2.0));

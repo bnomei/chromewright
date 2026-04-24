@@ -429,7 +429,7 @@ mod tests {
             ),
             (
                 "set_viewport",
-                ["breakpoints", "reset", "viewport_after"].as_slice(),
+                ["breakpoints", "reset", "viewport_metrics_after"].as_slice(),
             ),
         ];
 
@@ -629,7 +629,7 @@ mod tests {
             .expect("set_viewport descriptor should exist");
 
         assert!(descriptor.description.contains("breakpoints"));
-        assert!(descriptor.description.contains("viewport_after"));
+        assert!(descriptor.description.contains("viewport_metrics_after"));
 
         let params = &descriptor.parameters_schema["properties"];
         assert!(params.get("width").is_some());
@@ -648,6 +648,7 @@ mod tests {
 
         let output = &descriptor.output_schema["properties"];
         assert!(output.get("tab_id").is_some());
+        assert!(output.get("viewport_metrics_after").is_some());
         assert!(output.get("viewport_after").is_some());
     }
 

@@ -256,8 +256,24 @@ mod tests {
         assert!(output.get("tab_id").is_some());
         assert!(output.get("reset").is_some());
         assert!(output.get("emulation").is_some());
+        assert!(output.get("viewport_metrics_after").is_some());
         assert!(output.get("viewport_after").is_some());
         assert!(output.get("message").is_some());
+    }
+
+    #[test]
+    fn test_scroll_schema_exposes_canonical_scroll_after_alias() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        let descriptor = session
+            .tool_registry()
+            .descriptors()
+            .into_iter()
+            .find(|tool| tool.name == "scroll")
+            .expect("scroll descriptor should exist");
+
+        let output = &descriptor.output_schema["properties"];
+        assert!(output.get("scroll_after").is_some());
+        assert!(output.get("viewport_after").is_some());
     }
 
     fn assert_schema_number(schema: &Value, key: &str, expected: f64) {

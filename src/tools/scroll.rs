@@ -38,6 +38,9 @@ pub struct ScrollOutput {
     pub is_at_bottom: bool,
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub scroll_after: Option<ViewportAfter>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Compatibility alias for `scroll_after`.
     pub viewport_after: Option<ViewportAfter>,
 }
 
@@ -96,7 +99,7 @@ impl Tool for ScrollTool {
     }
 
     fn description(&self) -> &str {
-        "Scroll the page. Returns viewport hints; snapshot only for broader rereads."
+        "Scroll the page. Returns scroll_after; snapshot only for broader rereads."
     }
 
     fn execute_typed(&self, params: ScrollParams, context: &mut ToolContext) -> Result<ToolResult> {
@@ -174,6 +177,7 @@ fn build_scroll_output(result_json: RawScrollOutput, result: DocumentActionResul
         scrolled: result_json.actual_scroll,
         is_at_bottom: result_json.is_at_bottom,
         message,
+        scroll_after: viewport_after.clone(),
         viewport_after,
     }
 }
@@ -402,6 +406,11 @@ mod tests {
             scrolled: 120,
             is_at_bottom: false,
             message: "Scrolled 120 pixels. Did not reach the bottom of the page.".to_string(),
+            scroll_after: Some(ViewportAfter {
+                scroll_y: 240,
+                is_at_top: false,
+                is_at_bottom: false,
+            }),
             viewport_after: Some(ViewportAfter {
                 scroll_y: 240,
                 is_at_top: false,
@@ -413,6 +422,8 @@ mod tests {
         assert_eq!(value["scrolled"], serde_json::json!(120));
         assert_eq!(value["is_at_bottom"], serde_json::json!(false));
         assert_eq!(value["action"], serde_json::json!("scroll"));
+        assert_eq!(value["scroll_after"], value["viewport_after"]);
+        assert_eq!(value["scroll_after"]["scroll_y"], serde_json::json!(240));
         assert_eq!(value["viewport_after"]["scroll_y"], serde_json::json!(240));
         assert_eq!(
             value["viewport_after"]["is_at_top"],
