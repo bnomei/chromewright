@@ -252,6 +252,12 @@ mod tests {
             "reset schema should document reset-only semantics: {}",
             params["reset"]
         );
+        assert!(
+            schema_contains_text(&params["orientation"], "portrait_primary")
+                && schema_contains_text(&params["orientation"], "landscape_primary"),
+            "orientation schema should document accepted snake_case values: {}",
+            params["orientation"]
+        );
 
         let output = &descriptor.output_schema["properties"];
         assert!(output.get("tab_id").is_some());

@@ -30,7 +30,8 @@ pub struct SetViewportParams {
     /// Enable touch emulation.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub touch: Option<bool>,
-    /// Optional screen orientation for the emulated viewport.
+    /// Optional screen orientation for the emulated viewport. Use snake_case values:
+    /// portrait_primary, portrait_secondary, landscape_primary, or landscape_secondary.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub orientation: Option<ViewportOrientation>,
     /// Optional stable tab identifier. Omit to target the active tab.
@@ -70,7 +71,8 @@ impl JsonSchema for SetViewportParams {
             /// Enable touch emulation.
             #[serde(skip_serializing_if = "Option::is_none")]
             touch: Option<bool>,
-            /// Optional screen orientation for the emulated viewport.
+            /// Optional screen orientation for the emulated viewport. Use snake_case values:
+            /// portrait_primary, portrait_secondary, landscape_primary, or landscape_secondary.
             #[serde(skip_serializing_if = "Option::is_none")]
             orientation: Option<ViewportOrientation>,
             /// Optional stable tab identifier. Omit to target the active tab.
@@ -117,7 +119,7 @@ impl Tool for SetViewportTool {
     }
 
     fn description(&self) -> &str {
-        "Simulate per-tab breakpoints. width/height or reset-only; returns live viewport_metrics_after."
+        "Simulate per-tab breakpoints. width/height or reset-only; orientation uses snake_case values; returns live viewport_metrics_after."
     }
 
     fn execute_typed(

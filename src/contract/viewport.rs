@@ -20,6 +20,8 @@ pub struct ViewportEmulation {
     Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
 )]
 #[serde(rename_all = "snake_case")]
+/// Screen orientation values accepted by viewport emulation. Serialized values are
+/// `portrait_primary`, `portrait_secondary`, `landscape_primary`, and `landscape_secondary`.
 pub enum ViewportOrientation {
     PortraitPrimary,
     PortraitSecondary,
