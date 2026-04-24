@@ -611,15 +611,6 @@ impl FakeSessionBackend {
 
         None
     }
-
-    fn scripted_result(
-        &self,
-        script: &str,
-        viewport: ViewportMetrics,
-        scroll_height: f64,
-    ) -> Option<Result<ScriptEvaluation>> {
-        self.scripted_result_with_url(script, None, viewport, scroll_height)
-    }
 }
 
 impl Default for FakeSessionBackend {
@@ -679,12 +670,17 @@ impl SessionBackend for FakeSessionBackend {
         let active_tab = Self::active_tab_from_state(&state)?;
         let viewport = Self::current_viewport_metrics(&state, &active_tab.id);
         let scroll_height = Self::current_scroll_height(&state, &active_tab.id);
-        self.scripted_result(script, viewport, scroll_height)
-            .unwrap_or_else(|| {
-                Err(BrowserError::EvaluationFailed(
-                    "Fake backend does not support this JavaScript payload yet".to_string(),
-                ))
-            })
+        self.scripted_result_with_url(
+            script,
+            Some(active_tab.url.as_str()),
+            viewport,
+            scroll_height,
+        )
+        .unwrap_or_else(|| {
+            Err(BrowserError::EvaluationFailed(
+                "Fake backend does not support this JavaScript payload yet".to_string(),
+            ))
+        })
     }
 
     fn evaluate_on_tab(

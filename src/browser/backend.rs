@@ -320,6 +320,57 @@ impl ScreenshotRequest {
     }
 }
 
+fn capture_screenshot_method(
+    request: &ScreenshotRequest,
+    clip: Option<Page::Viewport>,
+) -> Page::CaptureScreenshot {
+    Page::CaptureScreenshot {
+        format: Some(Page::CaptureScreenshotFormatOption::Png),
+        quality: None,
+        clip,
+        from_surface: Some(true),
+        capture_beyond_viewport: Some(request.mode.capture_beyond_viewport()),
+        optimize_for_speed: None,
+    }
+}
+
+fn set_device_metrics_override(
+    emulation: &ViewportEmulation,
+) -> Emulation::SetDeviceMetricsOverride {
+    Emulation::SetDeviceMetricsOverride {
+        width: emulation.width,
+        height: emulation.height,
+        device_scale_factor: emulation.device_scale_factor,
+        mobile: emulation.mobile,
+        scale: None,
+        screen_width: None,
+        screen_height: None,
+        position_x: None,
+        position_y: None,
+        dont_set_visible_size: None,
+        screen_orientation: emulation
+            .orientation
+            .map(ViewportOrientation::to_screen_orientation),
+        viewport: None,
+        display_feature: None,
+        device_posture: None,
+    }
+}
+
+fn clear_device_metrics_override() -> Emulation::ClearDeviceMetricsOverride {
+    Emulation::ClearDeviceMetricsOverride(None)
+}
+
+fn set_touch_emulation(
+    enabled: bool,
+    max_touch_points: Option<u32>,
+) -> Emulation::SetTouchEmulationEnabled {
+    Emulation::SetTouchEmulationEnabled {
+        enabled,
+        max_touch_points,
+    }
+}
+
 fn validate_optional_tab_id(tab_id: Option<&str>, label: &str) -> Result<()> {
     if let Some(tab_id) = tab_id
         && tab_id.trim().is_empty()
@@ -1199,14 +1250,7 @@ impl SessionBackend for ChromeSessionBackend {
                 clip.to_viewport(request.scale.viewport_scale(metrics.device_pixel_ratio))
             });
             let data = tab
-                .call_method(Page::CaptureScreenshot {
-                    format: Some(Page::CaptureScreenshotFormatOption::Png),
-                    quality: None,
-                    clip,
-                    from_surface: Some(true),
-                    capture_beyond_viewport: Some(request.mode.capture_beyond_viewport()),
-                    optimize_for_speed: None,
-                })
+                .call_method(capture_screenshot_method(request, clip))
                 .map_err(|e| BrowserError::ScreenshotFailed(e.to_string()))?
                 .data;
 
@@ -1241,31 +1285,16 @@ impl SessionBackend for ChromeSessionBackend {
         let emulation = request.normalized_emulation();
 
         let apply_to_tab = |tab: &Arc<Tab>| -> Result<ViewportOperationResult> {
-            tab.call_method(Emulation::SetDeviceMetricsOverride {
-                width: emulation.width,
-                height: emulation.height,
-                device_scale_factor: emulation.device_scale_factor,
-                mobile: emulation.mobile,
-                scale: None,
-                screen_width: None,
-                screen_height: None,
-                position_x: None,
-                position_y: None,
-                dont_set_visible_size: None,
-                screen_orientation: emulation
-                    .orientation
-                    .map(ViewportOrientation::to_screen_orientation),
-                viewport: None,
-                display_feature: None,
-                device_posture: None,
-            })
-            .map_err(|e| {
-                BrowserError::TabOperationFailed(format!("Failed to apply viewport emulation: {e}"))
-            })?;
-            tab.call_method(Emulation::SetTouchEmulationEnabled {
-                enabled: emulation.touch,
-                max_touch_points: emulation.touch.then_some(1),
-            })
+            tab.call_method(set_device_metrics_override(&emulation))
+                .map_err(|e| {
+                    BrowserError::TabOperationFailed(format!(
+                        "Failed to apply viewport emulation: {e}"
+                    ))
+                })?;
+            tab.call_method(set_touch_emulation(
+                emulation.touch,
+                emulation.touch.then_some(1),
+            ))
             .map_err(|e| {
                 BrowserError::TabOperationFailed(format!(
                     "Failed to configure touch emulation: {e}"
@@ -1294,19 +1323,18 @@ impl SessionBackend for ChromeSessionBackend {
         request.validate()?;
 
         let reset_tab = |tab: &Arc<Tab>| -> Result<ViewportOperationResult> {
-            tab.call_method(Emulation::ClearDeviceMetricsOverride(None))
+            tab.call_method(clear_device_metrics_override())
                 .map_err(|e| {
                     BrowserError::TabOperationFailed(format!(
                         "Failed to clear viewport emulation: {e}"
                     ))
                 })?;
-            tab.call_method(Emulation::SetTouchEmulationEnabled {
-                enabled: false,
-                max_touch_points: Some(0),
-            })
-            .map_err(|e| {
-                BrowserError::TabOperationFailed(format!("Failed to disable touch emulation: {e}"))
-            })?;
+            tab.call_method(set_touch_emulation(false, Some(0)))
+                .map_err(|e| {
+                    BrowserError::TabOperationFailed(format!(
+                        "Failed to disable touch emulation: {e}"
+                    ))
+                })?;
 
             Ok(ViewportOperationResult {
                 tab_id: tab_id(tab),

@@ -41,7 +41,7 @@ mcp-server = [
 ]
 
 [dependencies]
-headless_chrome = "1.0.18"
+headless_chrome = "=1.0.21"
 rmcp = "1.5"
 thiserror = "2.0"
 serde = { version = "1.0", features = ["derive"] }
