@@ -1,4 +1,5 @@
 use crate::browser::BrowserSession;
+pub use crate::contract::TargetStatus;
 use crate::dom::{Cursor, DocumentMetadata, DomTree, NodeRef};
 use crate::error::{BrowserError, Result};
 use crate::tools::core::structured_tool_failure;
@@ -11,8 +12,7 @@ use crate::tools::{
     browser_kernel::render_browser_kernel_script,
     duration_micros, resolve_target_with_cursor,
 };
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
@@ -101,15 +101,6 @@ static SELECTOR_IDENTITY_SHELL: OnceLock<crate::tools::browser_kernel::BrowserKe
     OnceLock::new();
 pub(crate) const DEFAULT_ACTIONABILITY_TIMEOUT_MS: u64 = 5_000;
 const ACTIONABILITY_POLL_INTERVAL_MS: u64 = 50;
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum TargetStatus {
-    Same,
-    Rebound,
-    Detached,
-    Unknown,
-}
 
 pub(crate) enum ActionabilityWaitState {
     Ready,

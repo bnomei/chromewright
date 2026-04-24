@@ -1,6 +1,5 @@
 use crate::browser::backend::{
     ChromeSessionBackend, ScreenshotCapture, ScreenshotRequest, ScriptEvaluation, SessionBackend,
-    ViewportEmulationRequest, ViewportMetrics, ViewportOperationResult, ViewportResetRequest,
 };
 #[cfg(test)]
 use crate::browser::backend::{
@@ -9,6 +8,9 @@ use crate::browser::backend::{
 #[cfg(test)]
 use crate::browser::config::CHROME_BROWSER_IDLE_TIMEOUT;
 use crate::browser::{ConnectionOptions, LaunchOptions};
+use crate::contract::{
+    ViewportEmulationRequest, ViewportMetrics, ViewportOperationResult, ViewportResetRequest,
+};
 use crate::dom::{DocumentMetadata, DomTree};
 use crate::error::{BrowserError, Result};
 use crate::tools::{ToolContext, ToolRegistry};
@@ -381,11 +383,11 @@ impl BrowserSession {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::browser::backend::{
-        ViewportEmulationRequest, ViewportOrientation, ViewportResetRequest,
-    };
     use crate::browser::launch_error_is_environmental;
     use crate::browser::{ScreenshotMode, ScreenshotRequest};
+    use crate::contract::{
+        ViewportEmulation, ViewportEmulationRequest, ViewportOrientation, ViewportResetRequest,
+    };
     use crate::dom::SnapshotNode;
     use serde_json::json;
     use std::ffi::OsStr;
@@ -622,7 +624,7 @@ mod tests {
         assert_eq!(result.viewport_after.device_pixel_ratio, 2.0);
         assert_eq!(
             result.emulation,
-            Some(crate::browser::backend::ViewportEmulation {
+            Some(ViewportEmulation {
                 width: 375,
                 height: 812,
                 device_scale_factor: 2.0,

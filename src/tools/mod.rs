@@ -34,6 +34,7 @@ mod utils;
 pub mod wait;
 
 // Re-export Params types for use by MCP layer
+pub use crate::contract::SnapshotMode;
 pub use click::ClickParams;
 pub use close::CloseParams;
 pub use close_tab::CloseTabParams;
@@ -53,7 +54,7 @@ pub use screenshot::{ScreenshotMode, ScreenshotParams, ScreenshotRegion};
 pub use scroll::ScrollParams;
 pub use select::SelectParams;
 pub use set_viewport::SetViewportParams;
-pub use snapshot::{SnapshotMode, SnapshotParams};
+pub use snapshot::SnapshotParams;
 pub use switch_tab::SwitchTabParams;
 pub use tab_list::TabListParams;
 pub use wait::WaitCondition;

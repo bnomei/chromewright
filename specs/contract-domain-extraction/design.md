@@ -26,9 +26,10 @@ src/contract/tool_result.rs
 
 Candidate first-wave moves:
 
-- `DocumentEnvelope`, `DocumentResult`, `DocumentActionResult`, `TargetedActionResult`, and `SnapshotScope`
+- `DocumentEnvelope`, `DocumentResult`, `DocumentActionResult`, `TargetedActionResult`, `SnapshotScope`, and `SnapshotMode`
 - `PublicTarget` plus tagged/compat target DTOs, without moving target-resolution behavior
-- `ViewportMetrics`, `ViewportOrientation`, `ViewportEmulation`, `ViewportEmulationRequest`, `ViewportResetRequest`, and `ViewportOperationResult` after the viewport specs stabilize schema and output names
+- `TargetStatus` because `TargetedActionResult` serializes it
+- `ViewportMetrics`, `ViewportOrientation`, `ViewportEmulation`, `ViewportEmulationRequest`, `ViewportResetRequest`, and `ViewportOperationResult` after the viewport specs stabilize schema and output names. Runtime validation and CDP conversion helpers stay in the browser backend.
 - `ToolResult` if the move does not pull in `ToolContext`, `Tool`, `DynTool`, or `ToolRegistry`
 
 Do not move in this spec:

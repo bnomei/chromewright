@@ -1,7 +1,10 @@
 use super::{
     ScreenshotCapture, ScreenshotImageMetrics, ScreenshotRequest, ScreenshotScale,
-    ScriptEvaluation, SessionBackend, TabDescriptor, ViewportEmulation, ViewportEmulationRequest,
-    ViewportMetrics, ViewportOperationResult, ViewportResetRequest,
+    ScriptEvaluation, SessionBackend, TabDescriptor,
+};
+use crate::contract::{
+    ViewportEmulation, ViewportEmulationRequest, ViewportMetrics, ViewportOperationResult,
+    ViewportResetRequest,
 };
 use crate::dom::{AriaChild, AriaNode, DocumentMetadata, DomTree};
 use crate::error::{BrowserError, Result};

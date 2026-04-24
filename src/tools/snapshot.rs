@@ -1,3 +1,4 @@
+pub use crate::contract::SnapshotMode;
 use crate::dom::{AriaChild, AriaNode, yaml_escape_key_if_needed, yaml_escape_value_if_needed};
 use crate::error::Result;
 use crate::tools::{
@@ -5,16 +6,6 @@ use crate::tools::{
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-
-/// Mode for the snapshot tool surface.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum SnapshotMode {
-    #[default]
-    Viewport,
-    Delta,
-    Full,
-}
 
 /// Parameters for the snapshot tool
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]

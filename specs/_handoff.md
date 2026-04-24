@@ -1,6 +1,6 @@
 # Program handoff
 
-Last updated: 2026-04-24T10:58:54Z
+Last updated: 2026-04-24T11:08:31Z
 
 ## Current focus
 - Implement all open active/planned spec tasks end to end, committing after each successful spec.
@@ -38,6 +38,9 @@ Last updated: 2026-04-24T10:58:54Z
 - `typed-browser-error-taxonomy` committed as `315e892`.
 - `mcp-blocking-execution-boundary` completed and ready for commit.
   - Evidence: `cargo check --locked --no-default-features`; `cargo check --locked --no-default-features --features mcp-handler`; `cargo check --locked --features mcp-server`; `cargo test --lib mcp`; `cargo test --bin chromewright`.
+- `mcp-blocking-execution-boundary` committed as `c747461`.
+- `contract-domain-extraction` completed and ready for commit.
+  - Evidence: `cargo check --locked --no-default-features`; `cargo check --locked --no-default-features --features mcp-handler`; `cargo check --locked`; `cargo test --lib test_set_viewport_schema_is_exported_via_mcp`; `cargo test --lib test_snapshot_schema_exposes_mode_and_scope_contract`; `cargo test --lib tool_registry`; `cargo test --lib public_target`; `cargo test --lib viewport`; `cargo test --lib set_viewport`.
 
 ## Notes
 - `snapshot` redesign remains out of scope; only `snapshot.scope.viewport` is in wave.

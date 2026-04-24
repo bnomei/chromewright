@@ -1,5 +1,10 @@
 use crate::browser::backend::{ATTACH_PAGE_TARGET_LOST_CODE, ATTACH_SESSION_PAGE_TARGET_LOSS_KIND};
-use crate::browser::{BrowserSession, SnapshotCacheEntry, SnapshotCacheScope, ViewportMetrics};
+use crate::browser::{BrowserSession, SnapshotCacheEntry, SnapshotCacheScope};
+use crate::contract::ViewportMetrics;
+pub use crate::contract::{
+    DocumentActionResult, DocumentEnvelope, DocumentResult, PublicTarget, SnapshotMode,
+    SnapshotScope, TargetEnvelope, TargetedActionResult, ToolResult,
+};
 use crate::dom::{
     AriaChild, AriaNode, Cursor, DocumentMetadata, DomTree, NodeRef, SnapshotNode,
     yaml_escape_key_if_needed, yaml_escape_value_if_needed,
@@ -7,16 +12,13 @@ use crate::dom::{
 #[cfg(test)]
 use crate::error::BackendUnsupportedDetails;
 use crate::error::{BrowserError, PageTargetLostDetails, Result};
-use crate::tools::snapshot::{RenderMode, SnapshotMode, render_aria_tree};
+use crate::tools::snapshot::{RenderMode, render_aria_tree};
 use crate::tools::{
     click, close, close_tab, evaluate, extract, go_back, go_forward, hover, input, inspect_node,
     markdown, navigate, new_tab, press_key, read_links, screenshot, scroll, select, set_viewport,
     snapshot, switch_tab, tab_list, wait,
 };
-use schemars::{JsonSchema, Schema, SchemaGenerator};
-use serde::de::Deserializer;
 use serde_json::Value;
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
@@ -147,97 +149,6 @@ impl<'a> ToolContext<'a> {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
-pub struct DocumentEnvelope {
-    pub document: DocumentMetadata,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub target: Option<TargetEnvelope>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub snapshot: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub nodes: Vec<SnapshotNode>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub scope: Option<SnapshotScope>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub global_interactive_count: Option<usize>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
-pub struct DocumentResult {
-    pub document: DocumentMetadata,
-}
-
-impl DocumentResult {
-    pub fn new(document: DocumentMetadata) -> Self {
-        Self { document }
-    }
-}
-
-impl From<DocumentEnvelope> for DocumentResult {
-    fn from(envelope: DocumentEnvelope) -> Self {
-        Self::new(envelope.document)
-    }
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
-pub struct DocumentActionResult {
-    #[serde(flatten)]
-    pub document_result: DocumentResult,
-    pub action: String,
-}
-
-impl DocumentActionResult {
-    pub fn new(action: impl Into<String>, document: DocumentMetadata) -> Self {
-        Self {
-            document_result: DocumentResult::new(document),
-            action: action.into(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
-pub struct TargetedActionResult {
-    #[serde(flatten)]
-    pub document_action_result: DocumentActionResult,
-    pub target_before: TargetEnvelope,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub target_after: Option<TargetEnvelope>,
-    pub target_status: crate::tools::services::interaction::TargetStatus,
-}
-
-impl TargetedActionResult {
-    pub fn new(
-        action: impl Into<String>,
-        document: DocumentMetadata,
-        target_before: TargetEnvelope,
-        target_after: Option<TargetEnvelope>,
-        target_status: crate::tools::services::interaction::TargetStatus,
-    ) -> Self {
-        Self {
-            document_action_result: DocumentActionResult::new(action, document),
-            target_before,
-            target_after,
-            target_status,
-        }
-    }
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema, PartialEq)]
-pub struct SnapshotScope {
-    pub mode: SnapshotMode,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub fallback_mode: Option<SnapshotMode>,
-    pub viewport_biased: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub locality_fallback_reason: Option<String>,
-    pub unavailable_frame_count: usize,
-    pub returned_node_count: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub global_interactive_count: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub viewport: Option<ViewportMetrics>,
-}
-
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct DocumentEnvelopeOptions {
     pub include_snapshot: bool,
@@ -268,23 +179,6 @@ impl DocumentEnvelopeOptions {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
-pub struct TargetEnvelope {
-    pub method: String,
-    #[serde(default = "default_target_resolution_status")]
-    pub resolution_status: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub recovered_from: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cursor: Option<Cursor>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub node_ref: Option<NodeRef>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub selector: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub index: Option<usize>,
-}
-
 #[derive(
     Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema, PartialEq, Eq,
 )]
@@ -304,65 +198,6 @@ impl TabSummary {
             active: tab.active,
             title: tab.title.clone(),
             url: tab.url.clone(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum PublicTarget {
-    /// Resolve the target from a selector in the current document.
-    Selector { selector: String },
-    /// Reuse a revision-scoped cursor from `snapshot` or `inspect_node`.
-    Cursor { cursor: Cursor },
-}
-
-#[derive(Debug, Clone, serde::Deserialize, JsonSchema)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-enum TaggedPublicTarget {
-    Selector { selector: String },
-    Cursor { cursor: Cursor },
-}
-
-#[derive(Debug, Clone, serde::Deserialize, JsonSchema)]
-#[serde(untagged)]
-enum PublicTargetCompat {
-    SelectorString(String),
-    Tagged(TaggedPublicTarget),
-}
-
-impl<'de> serde::Deserialize<'de> for PublicTarget {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        match PublicTargetCompat::deserialize(deserializer)? {
-            PublicTargetCompat::SelectorString(selector) => Ok(Self::Selector { selector }),
-            PublicTargetCompat::Tagged(TaggedPublicTarget::Selector { selector }) => {
-                Ok(Self::Selector { selector })
-            }
-            PublicTargetCompat::Tagged(TaggedPublicTarget::Cursor { cursor }) => {
-                Ok(Self::Cursor { cursor })
-            }
-        }
-    }
-}
-
-impl JsonSchema for PublicTarget {
-    fn schema_name() -> Cow<'static, str> {
-        "PublicTarget".into()
-    }
-
-    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
-        PublicTargetCompat::json_schema(generator)
-    }
-}
-
-impl PublicTarget {
-    pub(crate) fn into_selector_or_cursor(self) -> (Option<String>, Option<Cursor>) {
-        match self {
-            Self::Selector { selector } => (Some(selector), None),
-            Self::Cursor { cursor } => (None, Some(cursor)),
         }
     }
 }
@@ -643,73 +478,6 @@ pub(crate) fn resolve_target_with_cursor(
 
 pub(crate) fn actionable_cursor_for_selector(dom: &DomTree, selector: &str) -> Option<Cursor> {
     dom.cursor_for_selector(selector)
-}
-
-/// Result of tool execution
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct ToolResult {
-    /// Whether the tool execution was successful
-    pub success: bool,
-
-    /// Result data (JSON value)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub data: Option<Value>,
-
-    /// Error message if execution failed
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-
-    /// Additional metadata
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub metadata: HashMap<String, Value>,
-}
-
-impl ToolResult {
-    /// Create a successful result
-    pub fn success(data: Option<Value>) -> Self {
-        Self {
-            success: true,
-            data,
-            error: None,
-            metadata: HashMap::new(),
-        }
-    }
-
-    /// Create a successful result with data
-    pub fn success_with<T: serde::Serialize>(data: T) -> Self {
-        Self {
-            success: true,
-            data: serde_json::to_value(data).ok(),
-            error: None,
-            metadata: HashMap::new(),
-        }
-    }
-
-    /// Create a failure result
-    pub fn failure(error: impl Into<String>) -> Self {
-        Self {
-            success: false,
-            data: None,
-            error: Some(error.into()),
-            metadata: HashMap::new(),
-        }
-    }
-
-    /// Create a failure result with structured error data.
-    pub fn failure_with<T: serde::Serialize>(error: impl Into<String>, data: T) -> Self {
-        Self {
-            success: false,
-            data: serde_json::to_value(data).ok(),
-            error: Some(error.into()),
-            metadata: HashMap::new(),
-        }
-    }
-
-    /// Add metadata to the result
-    pub fn with_metadata(mut self, key: impl Into<String>, value: Value) -> Self {
-        self.metadata.insert(key.into(), value);
-        self
-    }
 }
 
 fn normalized_error_value(value: Value) -> Option<Value> {

@@ -7,6 +7,8 @@
 #[doc(hidden)]
 pub mod browser;
 #[doc(hidden)]
+pub mod contract;
+#[doc(hidden)]
 pub mod dom;
 #[doc(hidden)]
 pub mod error;

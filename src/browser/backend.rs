@@ -1,5 +1,9 @@
 use crate::browser::config::CHROME_BROWSER_IDLE_TIMEOUT;
 use crate::browser::{ConnectionOptions, LaunchOptions};
+use crate::contract::{
+    ViewportEmulation, ViewportEmulationRequest, ViewportMetrics, ViewportOperationResult,
+    ViewportOrientation, ViewportResetRequest,
+};
 use crate::dom::{DocumentMetadata, DomTree};
 use crate::error::{BackendUnsupportedDetails, BrowserError, PageTargetLostDetails, Result};
 use headless_chrome::protocol::cdp::{Emulation, Page};
@@ -147,17 +151,6 @@ impl ScreenshotClip {
     }
 }
 
-#[derive(
-    Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
-)]
-#[serde(rename_all = "snake_case")]
-pub enum ViewportOrientation {
-    PortraitPrimary,
-    PortraitSecondary,
-    LandscapePrimary,
-    LandscapeSecondary,
-}
-
 impl ViewportOrientation {
     fn to_screen_orientation(self) -> Emulation::ScreenOrientation {
         let (orientation, angle) = match self {
@@ -174,45 +167,7 @@ impl ViewportOrientation {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
-pub struct ViewportMetrics {
-    pub width: f64,
-    pub height: f64,
-    pub device_pixel_ratio: f64,
-}
-
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
-pub struct ViewportEmulation {
-    pub width: u32,
-    pub height: u32,
-    pub device_scale_factor: f64,
-    pub mobile: bool,
-    pub touch: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub orientation: Option<ViewportOrientation>,
-}
-
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ViewportEmulationRequest {
-    pub width: u32,
-    pub height: u32,
-    #[serde(default = "ViewportEmulationRequest::default_device_scale_factor")]
-    pub device_scale_factor: f64,
-    #[serde(default)]
-    pub mobile: bool,
-    #[serde(default)]
-    pub touch: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub orientation: Option<ViewportOrientation>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tab_id: Option<String>,
-}
-
 impl ViewportEmulationRequest {
-    const fn default_device_scale_factor() -> f64 {
-        1.0
-    }
-
     pub(crate) fn validate(&self) -> Result<()> {
         validate_optional_tab_id(self.tab_id.as_deref(), "viewport tab_id")?;
 
@@ -260,24 +215,10 @@ impl ViewportEmulationRequest {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
-pub struct ViewportResetRequest {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tab_id: Option<String>,
-}
-
 impl ViewportResetRequest {
     pub(crate) fn validate(&self) -> Result<()> {
         validate_optional_tab_id(self.tab_id.as_deref(), "viewport tab_id")
     }
-}
-
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ViewportOperationResult {
-    pub tab_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub emulation: Option<ViewportEmulation>,
-    pub viewport_after: ViewportMetrics,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Default)]
