@@ -8,7 +8,7 @@ use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
     model::{
         CallToolRequestParams, CallToolResult, ListToolsResult, PaginatedRequestParams,
-        ServerCapabilities, ServerInfo, Tool as McpTool,
+        ServerCapabilities, ServerInfo, Tool as McpTool, ToolAnnotations as McpToolAnnotations,
     },
     service::RequestContext,
 };
@@ -107,6 +107,7 @@ fn tool_descriptor_to_mcp(descriptor: ToolDescriptor) -> McpTool {
         description,
         parameters_schema,
         output_schema,
+        annotations,
     } = descriptor;
 
     let input_schema = match parameters_schema {
@@ -120,6 +121,13 @@ fn tool_descriptor_to_mcp(descriptor: ToolDescriptor) -> McpTool {
 
     let mut tool = McpTool::new(name, description, Arc::new(input_schema));
     tool.output_schema = output_schema;
+    tool.annotations = Some(McpToolAnnotations::from_raw(
+        None,
+        Some(annotations.read_only_hint),
+        Some(annotations.destructive_hint),
+        Some(annotations.idempotent_hint),
+        Some(annotations.open_world_hint),
+    ));
     tool
 }
 

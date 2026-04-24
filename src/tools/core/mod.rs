@@ -821,6 +821,59 @@ pub struct ToolDescriptor {
     pub description: String,
     pub parameters_schema: Value,
     pub output_schema: Value,
+    pub annotations: ToolSafetyAnnotations,
+}
+
+/// Safety hints advertised to MCP clients.
+///
+/// These are intentionally hints rather than enforcement. Runtime guardrails
+/// such as `confirm_destructive` and `confirm_unsafe` stay in the tools that
+/// need them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ToolSafetyAnnotations {
+    pub read_only_hint: bool,
+    pub destructive_hint: bool,
+    pub idempotent_hint: bool,
+    pub open_world_hint: bool,
+}
+
+impl ToolSafetyAnnotations {
+    const fn read_only() -> Self {
+        Self {
+            read_only_hint: true,
+            destructive_hint: false,
+            idempotent_hint: true,
+            open_world_hint: true,
+        }
+    }
+
+    const fn mutating(destructive_hint: bool, idempotent_hint: bool) -> Self {
+        Self {
+            read_only_hint: false,
+            destructive_hint,
+            idempotent_hint,
+            open_world_hint: true,
+        }
+    }
+}
+
+fn explicit_tool_safety_annotations(name: &str) -> Option<ToolSafetyAnnotations> {
+    match name {
+        "extract" | "get_markdown" | "inspect_node" | "read_links" | "screenshot" | "snapshot"
+        | "tab_list" | "wait" => Some(ToolSafetyAnnotations::read_only()),
+        "set_viewport" | "switch_tab" => Some(ToolSafetyAnnotations::mutating(false, true)),
+        "go_back" | "go_forward" | "hover" | "input" | "navigate" | "new_tab" | "scroll"
+        | "select" => Some(ToolSafetyAnnotations::mutating(false, false)),
+        "click" | "close" | "close_tab" | "evaluate" | "press_key" => {
+            Some(ToolSafetyAnnotations::mutating(true, false))
+        }
+        _ => None,
+    }
+}
+
+fn tool_safety_annotations(name: &str) -> ToolSafetyAnnotations {
+    explicit_tool_safety_annotations(name)
+        .unwrap_or_else(|| ToolSafetyAnnotations::mutating(true, false))
 }
 
 /// Tool registry for managing and accessing tools
@@ -926,6 +979,7 @@ impl ToolRegistry {
                 description: tool.description().to_string(),
                 parameters_schema: tool.parameters_schema(),
                 output_schema: tool.output_schema(),
+                annotations: tool_safety_annotations(tool.name()),
             })
             .collect();
         descriptors.sort_by(|left, right| left.name.cmp(&right.name));
@@ -967,6 +1021,7 @@ mod tests {
     use crate::dom::{AriaChild, AriaNode, DomTree, SnapshotNode};
     use schemars::schema_for;
     use serde_json::json;
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     fn sample_dom() -> DomTree {
@@ -980,6 +1035,46 @@ mod tests {
         dom.document.revision = "main:1".to_string();
         dom.replace_selectors(vec![String::new(), "#submit".to_string()]);
         dom
+    }
+
+    #[test]
+    fn registered_tool_names_have_explicit_safety_annotations() {
+        let missing: Vec<String> = ToolRegistry::with_all_tools()
+            .list_names()
+            .into_iter()
+            .filter(|name| explicit_tool_safety_annotations(name).is_none())
+            .collect();
+
+        assert!(
+            missing.is_empty(),
+            "registered tools missing explicit safety annotations: {missing:?}"
+        );
+    }
+
+    #[test]
+    fn tool_descriptors_include_safety_annotations() {
+        let descriptors: HashMap<String, ToolSafetyAnnotations> = ToolRegistry::with_all_tools()
+            .descriptors()
+            .into_iter()
+            .map(|descriptor| (descriptor.name, descriptor.annotations))
+            .collect();
+
+        assert_eq!(
+            descriptors.get("snapshot"),
+            Some(&ToolSafetyAnnotations::read_only())
+        );
+        assert_eq!(
+            descriptors.get("switch_tab"),
+            Some(&ToolSafetyAnnotations::mutating(false, true))
+        );
+        assert_eq!(
+            descriptors.get("close_tab"),
+            Some(&ToolSafetyAnnotations::mutating(true, false))
+        );
+        assert_eq!(
+            descriptors.get("evaluate"),
+            Some(&ToolSafetyAnnotations::mutating(true, false))
+        );
     }
 
     #[test]

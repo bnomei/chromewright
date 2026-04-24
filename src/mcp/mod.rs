@@ -334,6 +334,49 @@ mod tests {
     }
 
     #[test]
+    fn test_mcp_tools_advertise_safety_annotations() {
+        let mut session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        session.tool_registry_mut().register_operator_tools();
+        let tools: HashMap<String, rmcp::model::ToolAnnotations> =
+            BrowserServer::from_session(session)
+                .list_mcp_tools()
+                .into_iter()
+                .map(|tool| {
+                    (
+                        tool.name.to_string(),
+                        tool.annotations
+                            .expect("registered tools should advertise annotations"),
+                    )
+                })
+                .collect();
+
+        assert_mcp_annotations(&tools, "snapshot", true, false, true);
+        assert_mcp_annotations(&tools, "tab_list", true, false, true);
+        assert_mcp_annotations(&tools, "wait", true, false, true);
+        assert_mcp_annotations(&tools, "switch_tab", false, false, true);
+        assert_mcp_annotations(&tools, "navigate", false, false, false);
+        assert_mcp_annotations(&tools, "click", false, true, false);
+        assert_mcp_annotations(&tools, "evaluate", false, true, false);
+    }
+
+    fn assert_mcp_annotations(
+        tools: &HashMap<String, rmcp::model::ToolAnnotations>,
+        name: &str,
+        read_only: bool,
+        destructive: bool,
+        idempotent: bool,
+    ) {
+        let annotations = tools
+            .get(name)
+            .unwrap_or_else(|| panic!("missing tool annotations for {name}"));
+
+        assert_eq!(annotations.read_only_hint, Some(read_only), "{name}");
+        assert_eq!(annotations.destructive_hint, Some(destructive), "{name}");
+        assert_eq!(annotations.idempotent_hint, Some(idempotent), "{name}");
+        assert_eq!(annotations.open_world_hint, Some(true), "{name}");
+    }
+
+    #[test]
     fn test_live_mcp_input_schemas_match_registered_tool_descriptors() {
         let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
         let descriptor_schemas: HashMap<String, serde_json::Value> = session

@@ -65,7 +65,7 @@ pub(crate) mod core;
 pub use core::{
     DocumentActionResult, DocumentEnvelope, DocumentResult, DynTool, SnapshotScope, TabSummary,
     TargetEnvelope, TargetedActionResult, Tool, ToolContext, ToolDescriptor, ToolRegistry,
-    ToolResult,
+    ToolResult, ToolSafetyAnnotations,
 };
 #[allow(unused_imports)]
 pub(crate) use core::{
