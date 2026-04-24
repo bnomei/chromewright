@@ -1,6 +1,6 @@
 use crate::browser::backend::{
     ChromeSessionBackend, ScreenshotCapture, ScreenshotRequest, ScriptEvaluation, SessionBackend,
-    ViewportEmulationRequest, ViewportOperationResult, ViewportResetRequest,
+    ViewportEmulationRequest, ViewportMetrics, ViewportOperationResult, ViewportResetRequest,
 };
 #[cfg(test)]
 use crate::browser::backend::{
@@ -203,6 +203,10 @@ impl BrowserSession {
         await_promise: bool,
     ) -> Result<ScriptEvaluation> {
         self.backend.evaluate_on_tab(tab_id, script, await_promise)
+    }
+
+    pub(crate) fn viewport_metrics(&self, tab_id: Option<&str>) -> Result<ViewportMetrics> {
+        self.backend.viewport_metrics(tab_id)
     }
 
     #[cfg(test)]
@@ -420,53 +424,12 @@ mod tests {
             .expect("snapshot cache should store");
     }
 
-    fn read_viewport_metrics(
-        session: &BrowserSession,
-        tab_id: Option<&str>,
-    ) -> (f64, f64, f64, f64) {
-        let evaluation = match tab_id {
-            Some(tab_id) => session.evaluate_on_tab(
-                tab_id,
-                r#"(() => [
-                    window.innerWidth,
-                    window.innerHeight,
-                    window.devicePixelRatio || 1,
-                    Math.max(
-                        document.documentElement.scrollHeight,
-                        document.body ? document.body.scrollHeight : 0
-                    )
-                ])()"#,
-                false,
-            ),
-            None => session.evaluate(
-                r#"(() => [
-                    window.innerWidth,
-                    window.innerHeight,
-                    window.devicePixelRatio || 1,
-                    Math.max(
-                        document.documentElement.scrollHeight,
-                        document.body ? document.body.scrollHeight : 0
-                    )
-                ])()"#,
-                false,
-            ),
-        }
-        .expect("viewport metrics should be readable");
+    fn read_viewport_metrics(session: &BrowserSession, tab_id: Option<&str>) -> (f64, f64, f64) {
+        let metrics = session
+            .viewport_metrics(tab_id)
+            .expect("viewport metrics should be readable");
 
-        let metrics = evaluation
-            .value
-            .expect("viewport metrics should include a value");
-        let metrics = metrics
-            .as_array()
-            .expect("viewport metrics should return an array");
-        (
-            metrics[0].as_f64().expect("innerWidth should be numeric"),
-            metrics[1].as_f64().expect("innerHeight should be numeric"),
-            metrics[2]
-                .as_f64()
-                .expect("devicePixelRatio should be numeric"),
-            metrics[3].as_f64().expect("scrollHeight should be numeric"),
-        )
+        (metrics.width, metrics.height, metrics.device_pixel_ratio)
     }
 
     #[test]
@@ -682,10 +645,7 @@ mod tests {
             revision_before,
             "viewport-only changes should not advance the fake document revision"
         );
-        assert_eq!(
-            read_viewport_metrics(&session, None),
-            (375.0, 812.0, 2.0, 1800.0)
-        );
+        assert_eq!(read_viewport_metrics(&session, None), (375.0, 812.0, 2.0));
     }
 
     #[test]
@@ -723,11 +683,39 @@ mod tests {
         );
         assert_eq!(
             read_viewport_metrics(&session, Some(&result.tab_id)),
-            (640.0, 360.0, 1.5, 1800.0)
+            (640.0, 360.0, 1.5)
         );
         assert_eq!(
             read_viewport_metrics(&session, Some(&second_tab_id)),
-            (800.0, 600.0, 2.0, 1800.0)
+            (800.0, 600.0, 2.0)
+        );
+    }
+
+    #[test]
+    fn test_fake_backend_viewport_metrics_do_not_depend_on_script_matching() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+
+        session
+            .apply_viewport_emulation(ViewportEmulationRequest {
+                width: 500,
+                height: 400,
+                device_scale_factor: 1.25,
+                mobile: false,
+                touch: false,
+                orientation: None,
+                tab_id: None,
+            })
+            .expect("viewport emulation should succeed");
+
+        assert_eq!(read_viewport_metrics(&session, None), (500.0, 400.0, 1.25));
+
+        let evaluation = session.evaluate(
+            r#"(() => [window.innerWidth, window.innerHeight, window.devicePixelRatio || 1])()"#,
+            false,
+        );
+        assert!(
+            matches!(evaluation, Err(BrowserError::EvaluationFailed(_))),
+            "fake viewport metrics should be exposed by the typed backend method, not viewport JS string matching"
         );
     }
 
@@ -763,10 +751,7 @@ mod tests {
                 .expect("snapshot cache should be readable")
                 .is_none()
         );
-        assert_eq!(
-            read_viewport_metrics(&session, None),
-            (800.0, 600.0, 2.0, 1800.0)
-        );
+        assert_eq!(read_viewport_metrics(&session, None), (800.0, 600.0, 2.0));
     }
 
     #[test]
@@ -783,10 +768,7 @@ mod tests {
             tab_id: None,
         });
         assert!(matches!(oversize, Err(BrowserError::InvalidArgument(_))));
-        assert_eq!(
-            read_viewport_metrics(&session, None),
-            (800.0, 600.0, 2.0, 1800.0)
-        );
+        assert_eq!(read_viewport_metrics(&session, None), (800.0, 600.0, 2.0));
 
         let empty_tab_id = session.apply_viewport_emulation(ViewportEmulationRequest {
             width: 320,
@@ -801,10 +783,7 @@ mod tests {
             empty_tab_id,
             Err(BrowserError::InvalidArgument(_))
         ));
-        assert_eq!(
-            read_viewport_metrics(&session, None),
-            (800.0, 600.0, 2.0, 1800.0)
-        );
+        assert_eq!(read_viewport_metrics(&session, None), (800.0, 600.0, 2.0));
 
         let unknown_tab = session.apply_viewport_emulation(ViewportEmulationRequest {
             width: 320,
@@ -819,10 +798,7 @@ mod tests {
             unknown_tab,
             Err(BrowserError::TabOperationFailed(_))
         ));
-        assert_eq!(
-            read_viewport_metrics(&session, None),
-            (800.0, 600.0, 2.0, 1800.0)
-        );
+        assert_eq!(read_viewport_metrics(&session, None), (800.0, 600.0, 2.0));
     }
 
     #[test]

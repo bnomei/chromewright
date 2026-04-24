@@ -227,30 +227,11 @@ mod tests {
     use crate::browser::backend::FakeSessionBackend;
 
     fn read_viewport_metrics(session: &BrowserSession) -> (f64, f64, f64) {
-        let evaluation = session
-            .evaluate(
-                r#"(() => [
-                    window.innerWidth,
-                    window.innerHeight,
-                    window.devicePixelRatio || 1
-                ])()"#,
-                false,
-            )
+        let metrics = session
+            .viewport_metrics(None)
             .expect("viewport metrics should be readable");
-        let metrics = evaluation
-            .value
-            .expect("viewport metrics should include a value");
-        let metrics = metrics
-            .as_array()
-            .expect("viewport metrics should return an array");
 
-        (
-            metrics[0].as_f64().expect("innerWidth should be numeric"),
-            metrics[1].as_f64().expect("innerHeight should be numeric"),
-            metrics[2]
-                .as_f64()
-                .expect("devicePixelRatio should be numeric"),
-        )
+        (metrics.width, metrics.height, metrics.device_pixel_ratio)
     }
 
     #[test]

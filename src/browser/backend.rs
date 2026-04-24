@@ -696,6 +696,11 @@ pub(crate) trait SessionBackend: Send + Sync {
             bytes,
         )
     }
+    fn viewport_metrics(&self, _tab_id: Option<&str>) -> Result<ViewportMetrics> {
+        Err(BrowserError::TabOperationFailed(
+            "This browser backend cannot read viewport metrics yet".to_string(),
+        ))
+    }
     fn apply_viewport_emulation(
         &self,
         _request: &ViewportEmulationRequest,
@@ -1313,6 +1318,17 @@ impl SessionBackend for ChromeSessionBackend {
                 self.with_specific_tab_operation("apply_viewport_emulation", tab_id, apply_to_tab)
             }
             None => self.with_active_tab_operation("apply_viewport_emulation", apply_to_tab),
+        }
+    }
+
+    fn viewport_metrics(&self, tab_id: Option<&str>) -> Result<ViewportMetrics> {
+        match tab_id {
+            Some(tab_id) => self.with_specific_tab_operation("viewport_metrics", tab_id, |tab| {
+                self.measure_viewport_metrics(tab)
+            }),
+            None => self.with_active_tab_operation("viewport_metrics", |tab| {
+                self.measure_viewport_metrics(tab)
+            }),
         }
     }
 

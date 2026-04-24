@@ -295,41 +295,11 @@ impl FakeSessionBackend {
         })
     }
 
-    fn scripted_viewport_metrics(
-        script: &str,
-        viewport: ViewportMetrics,
-        scroll_height: f64,
-    ) -> Option<ScriptEvaluation> {
-        if script.contains("window.innerWidth")
-            && script.contains("window.innerHeight")
-            && script.contains("window.devicePixelRatio")
-        {
-            return Some(ScriptEvaluation {
-                value: Some(serde_json::json!([
-                    viewport.width,
-                    viewport.height,
-                    viewport.device_pixel_ratio,
-                    scroll_height
-                ])),
-                description: None,
-                type_name: Some("Array".to_string()),
-            });
-        }
-
-        None
-    }
-
     fn scripted_result_with_url(
         &self,
         script: &str,
         document_url: Option<&str>,
-        viewport: ViewportMetrics,
-        scroll_height: f64,
     ) -> Option<Result<ScriptEvaluation>> {
-        if let Some(result) = Self::scripted_viewport_metrics(script, viewport, scroll_height) {
-            return Some(Ok(result));
-        }
-
         if script.contains("document.readyState") {
             return Some(Ok(ScriptEvaluation {
                 value: Some(Value::String("complete".to_string())),
@@ -668,19 +638,12 @@ impl SessionBackend for FakeSessionBackend {
     fn evaluate(&self, script: &str, _await_promise: bool) -> Result<ScriptEvaluation> {
         let state = self.lock_state()?;
         let active_tab = Self::active_tab_from_state(&state)?;
-        let viewport = Self::current_viewport_metrics(&state, &active_tab.id);
-        let scroll_height = Self::current_scroll_height(&state, &active_tab.id);
-        self.scripted_result_with_url(
-            script,
-            Some(active_tab.url.as_str()),
-            viewport,
-            scroll_height,
-        )
-        .unwrap_or_else(|| {
-            Err(BrowserError::EvaluationFailed(
-                "Fake backend does not support this JavaScript payload yet".to_string(),
-            ))
-        })
+        self.scripted_result_with_url(script, Some(active_tab.url.as_str()))
+            .unwrap_or_else(|| {
+                Err(BrowserError::EvaluationFailed(
+                    "Fake backend does not support this JavaScript payload yet".to_string(),
+                ))
+            })
     }
 
     fn evaluate_on_tab(
@@ -691,9 +654,7 @@ impl SessionBackend for FakeSessionBackend {
     ) -> Result<ScriptEvaluation> {
         let state = self.lock_state()?;
         let tab = Self::tab_from_state(&state, tab_id)?;
-        let viewport = Self::current_viewport_metrics(&state, &tab.id);
-        let scroll_height = Self::current_scroll_height(&state, &tab.id);
-        self.scripted_result_with_url(script, Some(tab.url.as_str()), viewport, scroll_height)
+        self.scripted_result_with_url(script, Some(tab.url.as_str()))
             .unwrap_or_else(|| {
                 Err(BrowserError::EvaluationFailed(
                     "Fake backend does not support this JavaScript payload yet".to_string(),
@@ -734,6 +695,16 @@ impl SessionBackend for FakeSessionBackend {
             },
             bytes,
         )
+    }
+
+    fn viewport_metrics(&self, tab_id: Option<&str>) -> Result<ViewportMetrics> {
+        let state = self.lock_state()?;
+        let tab = match tab_id {
+            Some(tab_id) => Self::tab_from_state(&state, tab_id)?,
+            None => Self::active_tab_from_state(&state)?,
+        };
+
+        Ok(Self::current_viewport_metrics(&state, &tab.id))
     }
 
     fn apply_viewport_emulation(

@@ -865,31 +865,9 @@ pub(crate) fn normalize_tool_outcome(
     }
 }
 
-fn live_viewport_metrics(context: &mut ToolContext<'_>) -> Option<ViewportMetrics> {
+fn live_viewport_metrics(context: &mut ToolContext<'_>) -> Result<ViewportMetrics> {
     context.record_browser_evaluation();
-    let evaluation = context
-        .session
-        .evaluate(
-            r#"(() => [
-                window.innerWidth,
-                window.innerHeight,
-                window.devicePixelRatio || 1,
-                Math.max(
-                    document.documentElement.scrollHeight,
-                    document.body ? document.body.scrollHeight : 0
-                )
-            ])()"#,
-            false,
-        )
-        .ok()?;
-    let value = evaluation.value?;
-    let metrics = value.as_array()?;
-
-    Some(ViewportMetrics {
-        width: metrics.first()?.as_f64()?,
-        height: metrics.get(1)?.as_f64()?,
-        device_pixel_ratio: metrics.get(2)?.as_f64()?,
-    })
+    context.session.viewport_metrics(None)
 }
 
 pub(crate) fn build_document_envelope(
@@ -947,7 +925,7 @@ pub(crate) fn build_document_envelope(
         };
 
         if let Some(scope) = scope.as_mut() {
-            scope.viewport = live_viewport_metrics(context);
+            scope.viewport = Some(live_viewport_metrics(context)?);
         }
 
         if options.include_snapshot {

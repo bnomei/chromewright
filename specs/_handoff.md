@@ -1,6 +1,6 @@
 # Program handoff
 
-Last updated: 2026-04-24T10:40:57Z
+Last updated: 2026-04-24T10:47:33Z
 
 ## Current focus
 - Implement all open active/planned spec tasks end to end, committing after each successful spec.
@@ -19,13 +19,19 @@ Last updated: 2026-04-24T10:40:57Z
 - (none)
 
 ## Next ready tasks
-- `set-viewport-schema-constraints/T001` after backend scope is free.
-- `viewport-output-contract-alignment/T001-T002` after MCP/tool scopes are free.
+- `typed-browser-error-taxonomy/T001` after current browser scope is free.
+- `mcp-blocking-execution-boundary/T001` after current MCP-adjacent exploration returns.
+- `contract-domain-extraction/T001` after viewport metrics lands.
 
 ## Completed this cycle
 - `headless-chrome-cdp-contract-pin` completed and ready for commit.
 - `set-viewport-schema-constraints` completed and ready for commit.
 - `viewport-output-contract-alignment` completed and ready for commit.
+- `headless-chrome-cdp-contract-pin` committed as `9264c41`/`c690e1b` across plan + implementation.
+- `set-viewport-schema-constraints` committed as `68e2d57`.
+- `viewport-output-contract-alignment` committed as `99132c6`.
+- `viewport-metrics-backend-api` completed and ready for commit.
+  - Evidence: `cargo test --lib viewport`; `cargo test --lib set_viewport`; `cargo test --lib build_document_envelope_viewport_mode_scopes_snapshot_handles`; `cargo test --lib test_snapshot_schema_exposes_mode_and_scope_contract`; `cargo check --locked`.
 
 ## Notes
 - `snapshot` redesign remains out of scope; only `snapshot.scope.viewport` is in wave.
