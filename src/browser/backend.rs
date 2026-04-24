@@ -2,7 +2,7 @@ use crate::browser::config::CHROME_BROWSER_IDLE_TIMEOUT;
 use crate::browser::{ConnectionOptions, LaunchOptions};
 use crate::dom::{DocumentMetadata, DomTree};
 use crate::error::{BrowserError, Result};
-use headless_chrome::protocol::cdp::Page;
+use headless_chrome::protocol::cdp::{Emulation, Page};
 use headless_chrome::{Browser, Tab};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -17,6 +17,7 @@ pub(crate) const ATTACH_PAGE_TARGET_LOST_CODE: &str = "attach_page_target_lost";
 pub(crate) const ATTACH_SESSION_PAGE_TARGET_LOSS_KIND: &str = "page_target_lost";
 const ATTACH_SESSION_DEGRADED_REASON_PREFIX: &str = "chromewright:attach-session-degraded:";
 const ATTACH_SESSION_RECOVERY_HINT: &str = "Run tab_list, then switch_tab to reacquire an active page target. If page actions still fail, reconnect the attach session and rerun snapshot.";
+const VIEWPORT_DIMENSION_MAX: u32 = 10_000_000;
 static DEBUG_PORT_COUNTER: AtomicU16 = AtomicU16::new(DEBUG_PORT_START);
 
 fn session_close_result(total_tabs: usize, failures: Vec<String>) -> Result<()> {
@@ -147,6 +148,139 @@ impl ScreenshotClip {
     }
 }
 
+#[derive(
+    Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewportOrientation {
+    PortraitPrimary,
+    PortraitSecondary,
+    LandscapePrimary,
+    LandscapeSecondary,
+}
+
+impl ViewportOrientation {
+    fn to_screen_orientation(self) -> Emulation::ScreenOrientation {
+        let (orientation, angle) = match self {
+            Self::PortraitPrimary => (Emulation::ScreenOrientationType::PortraitPrimary, 0),
+            Self::PortraitSecondary => (Emulation::ScreenOrientationType::PortraitSecondary, 180),
+            Self::LandscapePrimary => (Emulation::ScreenOrientationType::LandscapePrimary, 90),
+            Self::LandscapeSecondary => (Emulation::ScreenOrientationType::LandscapeSecondary, 270),
+        };
+
+        Emulation::ScreenOrientation {
+            Type: orientation,
+            angle,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct ViewportMetrics {
+    pub width: f64,
+    pub height: f64,
+    pub device_pixel_ratio: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct ViewportEmulation {
+    pub width: u32,
+    pub height: u32,
+    pub device_scale_factor: f64,
+    pub mobile: bool,
+    pub touch: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orientation: Option<ViewportOrientation>,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ViewportEmulationRequest {
+    pub width: u32,
+    pub height: u32,
+    #[serde(default = "ViewportEmulationRequest::default_device_scale_factor")]
+    pub device_scale_factor: f64,
+    #[serde(default)]
+    pub mobile: bool,
+    #[serde(default)]
+    pub touch: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orientation: Option<ViewportOrientation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tab_id: Option<String>,
+}
+
+impl ViewportEmulationRequest {
+    const fn default_device_scale_factor() -> f64 {
+        1.0
+    }
+
+    pub(crate) fn validate(&self) -> Result<()> {
+        validate_optional_tab_id(self.tab_id.as_deref(), "viewport tab_id")?;
+
+        if self.width == 0 {
+            return Err(BrowserError::InvalidArgument(
+                "viewport width must be greater than zero".to_string(),
+            ));
+        }
+        if self.width > VIEWPORT_DIMENSION_MAX {
+            return Err(BrowserError::InvalidArgument(format!(
+                "viewport width must be less than or equal to {VIEWPORT_DIMENSION_MAX}"
+            )));
+        }
+
+        if self.height == 0 {
+            return Err(BrowserError::InvalidArgument(
+                "viewport height must be greater than zero".to_string(),
+            ));
+        }
+        if self.height > VIEWPORT_DIMENSION_MAX {
+            return Err(BrowserError::InvalidArgument(format!(
+                "viewport height must be less than or equal to {VIEWPORT_DIMENSION_MAX}"
+            )));
+        }
+
+        if !self.device_scale_factor.is_finite() || self.device_scale_factor <= 0.0 {
+            return Err(BrowserError::InvalidArgument(
+                "viewport device_scale_factor must be a finite number greater than zero"
+                    .to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn normalized_emulation(&self) -> ViewportEmulation {
+        ViewportEmulation {
+            width: self.width,
+            height: self.height,
+            device_scale_factor: self.device_scale_factor,
+            mobile: self.mobile,
+            touch: self.touch,
+            orientation: self.orientation,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+pub struct ViewportResetRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tab_id: Option<String>,
+}
+
+impl ViewportResetRequest {
+    pub(crate) fn validate(&self) -> Result<()> {
+        validate_optional_tab_id(self.tab_id.as_deref(), "viewport tab_id")
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ViewportOperationResult {
+    pub tab_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emulation: Option<ViewportEmulation>,
+    pub viewport_after: ViewportMetrics,
+}
+
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Default)]
 pub struct ScreenshotRequest {
     #[serde(default)]
@@ -170,13 +304,7 @@ impl ScreenshotRequest {
     }
 
     pub(crate) fn validate(&self) -> Result<()> {
-        if let Some(tab_id) = self.tab_id.as_deref()
-            && tab_id.trim().is_empty()
-        {
-            return Err(BrowserError::InvalidArgument(
-                "screenshot tab_id cannot be empty".to_string(),
-            ));
-        }
+        validate_optional_tab_id(self.tab_id.as_deref(), "screenshot tab_id")?;
 
         if let Some(clip) = self.clip.as_ref() {
             clip.validate()?;
@@ -190,6 +318,18 @@ impl ScreenshotRequest {
 
         Ok(())
     }
+}
+
+fn validate_optional_tab_id(tab_id: Option<&str>, label: &str) -> Result<()> {
+    if let Some(tab_id) = tab_id
+        && tab_id.trim().is_empty()
+    {
+        return Err(BrowserError::InvalidArgument(format!(
+            "{label} cannot be empty"
+        )));
+    }
+
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -346,6 +486,14 @@ impl ScreenshotPageMetrics {
             _ => None,
         }
     }
+
+    fn viewport_metrics(&self) -> ViewportMetrics {
+        ViewportMetrics {
+            width: self.inner_width,
+            height: self.inner_height,
+            device_pixel_ratio: self.device_pixel_ratio,
+        }
+    }
 }
 
 fn sanitize_device_pixel_ratio(device_pixel_ratio: f64) -> f64 {
@@ -496,6 +644,22 @@ pub(crate) trait SessionBackend: Send + Sync {
             },
             bytes,
         )
+    }
+    fn apply_viewport_emulation(
+        &self,
+        _request: &ViewportEmulationRequest,
+    ) -> Result<ViewportOperationResult> {
+        Err(BrowserError::TabOperationFailed(
+            "This browser backend cannot apply viewport emulation yet".to_string(),
+        ))
+    }
+    fn reset_viewport_emulation(
+        &self,
+        _request: &ViewportResetRequest,
+    ) -> Result<ViewportOperationResult> {
+        Err(BrowserError::TabOperationFailed(
+            "This browser backend cannot reset viewport emulation yet".to_string(),
+        ))
     }
     fn press_key(&self, key: &str) -> Result<()>;
     fn list_tabs(&self) -> Result<Vec<TabDescriptor>>;
@@ -893,6 +1057,14 @@ impl ChromeSessionBackend {
             std::thread::sleep(Duration::from_millis(50));
         }
     }
+
+    fn measure_viewport_metrics(&self, tab: &Arc<Tab>) -> Result<ViewportMetrics> {
+        ScreenshotPageMetrics::evaluate(tab)
+            .map(|metrics| metrics.viewport_metrics())
+            .map_err(|err| {
+                BrowserError::EvaluationFailed(format!("Failed to read viewport metrics: {err}"))
+            })
+    }
 }
 
 fn attach_session_page_target_loss(operation_name: &str, detail: String) -> BrowserError {
@@ -1058,6 +1230,96 @@ impl SessionBackend for ChromeSessionBackend {
                 self.with_specific_tab_operation("capture_screenshot", tab_id, capture_from_tab)
             }
             None => self.with_active_tab_operation("capture_screenshot", capture_from_tab),
+        }
+    }
+
+    fn apply_viewport_emulation(
+        &self,
+        request: &ViewportEmulationRequest,
+    ) -> Result<ViewportOperationResult> {
+        request.validate()?;
+        let emulation = request.normalized_emulation();
+
+        let apply_to_tab = |tab: &Arc<Tab>| -> Result<ViewportOperationResult> {
+            tab.call_method(Emulation::SetDeviceMetricsOverride {
+                width: emulation.width,
+                height: emulation.height,
+                device_scale_factor: emulation.device_scale_factor,
+                mobile: emulation.mobile,
+                scale: None,
+                screen_width: None,
+                screen_height: None,
+                position_x: None,
+                position_y: None,
+                dont_set_visible_size: None,
+                screen_orientation: emulation
+                    .orientation
+                    .map(ViewportOrientation::to_screen_orientation),
+                viewport: None,
+                display_feature: None,
+                device_posture: None,
+            })
+            .map_err(|e| {
+                BrowserError::TabOperationFailed(format!("Failed to apply viewport emulation: {e}"))
+            })?;
+            tab.call_method(Emulation::SetTouchEmulationEnabled {
+                enabled: emulation.touch,
+                max_touch_points: emulation.touch.then_some(1),
+            })
+            .map_err(|e| {
+                BrowserError::TabOperationFailed(format!(
+                    "Failed to configure touch emulation: {e}"
+                ))
+            })?;
+
+            Ok(ViewportOperationResult {
+                tab_id: tab_id(tab),
+                emulation: Some(emulation.clone()),
+                viewport_after: self.measure_viewport_metrics(tab)?,
+            })
+        };
+
+        match request.tab_id.as_deref() {
+            Some(tab_id) => {
+                self.with_specific_tab_operation("apply_viewport_emulation", tab_id, apply_to_tab)
+            }
+            None => self.with_active_tab_operation("apply_viewport_emulation", apply_to_tab),
+        }
+    }
+
+    fn reset_viewport_emulation(
+        &self,
+        request: &ViewportResetRequest,
+    ) -> Result<ViewportOperationResult> {
+        request.validate()?;
+
+        let reset_tab = |tab: &Arc<Tab>| -> Result<ViewportOperationResult> {
+            tab.call_method(Emulation::ClearDeviceMetricsOverride(None))
+                .map_err(|e| {
+                    BrowserError::TabOperationFailed(format!(
+                        "Failed to clear viewport emulation: {e}"
+                    ))
+                })?;
+            tab.call_method(Emulation::SetTouchEmulationEnabled {
+                enabled: false,
+                max_touch_points: Some(0),
+            })
+            .map_err(|e| {
+                BrowserError::TabOperationFailed(format!("Failed to disable touch emulation: {e}"))
+            })?;
+
+            Ok(ViewportOperationResult {
+                tab_id: tab_id(tab),
+                emulation: None,
+                viewport_after: self.measure_viewport_metrics(tab)?,
+            })
+        };
+
+        match request.tab_id.as_deref() {
+            Some(tab_id) => {
+                self.with_specific_tab_operation("reset_viewport_emulation", tab_id, reset_tab)
+            }
+            None => self.with_active_tab_operation("reset_viewport_emulation", reset_tab),
         }
     }
 

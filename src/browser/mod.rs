@@ -7,7 +7,11 @@ pub(crate) mod backend;
 mod config;
 mod session;
 
-pub use backend::{ScreenshotClip, ScreenshotFormat, ScreenshotMode, ScreenshotRequest};
+pub use backend::{
+    ScreenshotClip, ScreenshotFormat, ScreenshotMode, ScreenshotRequest, ViewportEmulation,
+    ViewportEmulationRequest, ViewportMetrics, ViewportOperationResult, ViewportOrientation,
+    ViewportResetRequest,
+};
 pub use config::{ConnectionOptions, LaunchOptions};
 #[cfg(test)]
 pub(crate) use session::SessionOrigin;

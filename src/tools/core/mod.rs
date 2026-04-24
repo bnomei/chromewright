@@ -1,5 +1,5 @@
 use crate::browser::backend::{ATTACH_PAGE_TARGET_LOST_CODE, AttachSessionDegradedDetails};
-use crate::browser::{BrowserSession, SnapshotCacheEntry, SnapshotCacheScope};
+use crate::browser::{BrowserSession, SnapshotCacheEntry, SnapshotCacheScope, ViewportMetrics};
 use crate::dom::{
     AriaChild, AriaNode, Cursor, DocumentMetadata, DomTree, NodeRef, SnapshotNode,
     yaml_escape_key_if_needed, yaml_escape_value_if_needed,
@@ -9,8 +9,8 @@ use crate::error::Result;
 use crate::tools::snapshot::{RenderMode, SnapshotMode, render_aria_tree};
 use crate::tools::{
     click, close, close_tab, evaluate, extract, go_back, go_forward, hover, input, inspect_node,
-    markdown, navigate, new_tab, press_key, read_links, screenshot, scroll, select, snapshot,
-    switch_tab, tab_list, wait,
+    markdown, navigate, new_tab, press_key, read_links, screenshot, scroll, select, set_viewport,
+    snapshot, switch_tab, tab_list, wait,
 };
 use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::de::Deserializer;
@@ -221,9 +221,7 @@ impl TargetedActionResult {
     }
 }
 
-#[derive(
-    Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema, PartialEq, Eq,
-)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema, PartialEq)]
 pub struct SnapshotScope {
     pub mode: SnapshotMode,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -235,6 +233,8 @@ pub struct SnapshotScope {
     pub returned_node_count: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub global_interactive_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub viewport: Option<ViewportMetrics>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -865,6 +865,33 @@ pub(crate) fn normalize_tool_outcome(
     }
 }
 
+fn live_viewport_metrics(context: &mut ToolContext<'_>) -> Option<ViewportMetrics> {
+    context.record_browser_evaluation();
+    let evaluation = context
+        .session
+        .evaluate(
+            r#"(() => [
+                window.innerWidth,
+                window.innerHeight,
+                window.devicePixelRatio || 1,
+                Math.max(
+                    document.documentElement.scrollHeight,
+                    document.body ? document.body.scrollHeight : 0
+                )
+            ])()"#,
+            false,
+        )
+        .ok()?;
+    let value = evaluation.value?;
+    let metrics = value.as_array()?;
+
+    Some(ViewportMetrics {
+        width: metrics.first()?.as_f64()?,
+        height: metrics.get(1)?.as_f64()?,
+        device_pixel_ratio: metrics.get(2)?.as_f64()?,
+    })
+}
+
 pub(crate) fn build_document_envelope(
     context: &mut ToolContext,
     target: Option<&ResolvedTarget>,
@@ -873,7 +900,7 @@ pub(crate) fn build_document_envelope(
     let target = target.map(|resolved| resolved.to_target_envelope());
 
     if options.include_snapshot || options.include_nodes {
-        let (document, snapshot, nodes, global_interactive_count, scope, render_micros) = {
+        let (document, snapshot, nodes, global_interactive_count, mut scope, render_micros) = {
             let dom = context.get_dom()?;
             let document = dom.document.clone();
             let global_interactive_count = Some(dom.count_interactive());
@@ -918,6 +945,10 @@ pub(crate) fn build_document_envelope(
                 projection.render_micros,
             )
         };
+
+        if let Some(scope) = scope.as_mut() {
+            scope.viewport = live_viewport_metrics(context);
+        }
 
         if options.include_snapshot {
             context.record_snapshot_render_micros(render_micros);
@@ -1075,6 +1106,7 @@ fn snapshot_projection(
                 .count(),
             returned_node_count,
             global_interactive_count,
+            viewport: None,
         },
         render_micros,
     }
@@ -1587,6 +1619,7 @@ impl ToolRegistry {
         self.register(hover::HoverTool);
         self.register(press_key::PressKeyTool);
         self.register(scroll::ScrollTool);
+        self.register(set_viewport::SetViewportTool);
 
         // Register tab management tools
         self.register(new_tab::NewTabTool);
@@ -1956,6 +1989,17 @@ mod tests {
             envelope
                 .scope
                 .as_ref()
+                .and_then(|scope| scope.viewport.clone()),
+            Some(ViewportMetrics {
+                width: 800.0,
+                height: 600.0,
+                device_pixel_ratio: 2.0,
+            })
+        );
+        assert_eq!(
+            envelope
+                .scope
+                .as_ref()
                 .and_then(|scope| scope.locality_fallback_reason.as_deref()),
             None
         );
@@ -1988,6 +2032,17 @@ mod tests {
         assert_eq!(
             envelope.scope.as_ref().map(|scope| scope.viewport_biased),
             Some(false)
+        );
+        assert_eq!(
+            envelope
+                .scope
+                .as_ref()
+                .and_then(|scope| scope.viewport.clone()),
+            Some(ViewportMetrics {
+                width: 800.0,
+                height: 600.0,
+                device_pixel_ratio: 2.0,
+            })
         );
         assert_eq!(
             envelope

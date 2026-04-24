@@ -1,5 +1,6 @@
 use crate::browser::backend::{
     ChromeSessionBackend, ScreenshotCapture, ScreenshotRequest, ScriptEvaluation, SessionBackend,
+    ViewportEmulationRequest, ViewportOperationResult, ViewportResetRequest,
 };
 #[cfg(test)]
 use crate::browser::backend::{
@@ -229,6 +230,24 @@ impl BrowserSession {
         Ok((artifact, capture))
     }
 
+    pub(crate) fn apply_viewport_emulation(
+        &self,
+        request: ViewportEmulationRequest,
+    ) -> Result<ViewportOperationResult> {
+        let result = self.backend.apply_viewport_emulation(&request)?;
+        self.invalidate_snapshot_cache()?;
+        Ok(result)
+    }
+
+    pub(crate) fn reset_viewport_emulation(
+        &self,
+        request: ViewportResetRequest,
+    ) -> Result<ViewportOperationResult> {
+        let result = self.backend.reset_viewport_emulation(&request)?;
+        self.invalidate_snapshot_cache()?;
+        Ok(result)
+    }
+
     pub(crate) fn press_key(&self, key: &str) -> Result<()> {
         self.backend.press_key(key)
     }
@@ -358,6 +377,9 @@ impl BrowserSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::browser::backend::{
+        ViewportEmulationRequest, ViewportOrientation, ViewportResetRequest,
+    };
     use crate::browser::launch_error_is_environmental;
     use crate::browser::{ScreenshotMode, ScreenshotRequest};
     use crate::dom::SnapshotNode;
@@ -396,6 +418,55 @@ mod tests {
                 },
             }))
             .expect("snapshot cache should store");
+    }
+
+    fn read_viewport_metrics(
+        session: &BrowserSession,
+        tab_id: Option<&str>,
+    ) -> (f64, f64, f64, f64) {
+        let evaluation = match tab_id {
+            Some(tab_id) => session.evaluate_on_tab(
+                tab_id,
+                r#"(() => [
+                    window.innerWidth,
+                    window.innerHeight,
+                    window.devicePixelRatio || 1,
+                    Math.max(
+                        document.documentElement.scrollHeight,
+                        document.body ? document.body.scrollHeight : 0
+                    )
+                ])()"#,
+                false,
+            ),
+            None => session.evaluate(
+                r#"(() => [
+                    window.innerWidth,
+                    window.innerHeight,
+                    window.devicePixelRatio || 1,
+                    Math.max(
+                        document.documentElement.scrollHeight,
+                        document.body ? document.body.scrollHeight : 0
+                    )
+                ])()"#,
+                false,
+            ),
+        }
+        .expect("viewport metrics should be readable");
+
+        let metrics = evaluation
+            .value
+            .expect("viewport metrics should include a value");
+        let metrics = metrics
+            .as_array()
+            .expect("viewport metrics should return an array");
+        (
+            metrics[0].as_f64().expect("innerWidth should be numeric"),
+            metrics[1].as_f64().expect("innerHeight should be numeric"),
+            metrics[2]
+                .as_f64()
+                .expect("devicePixelRatio should be numeric"),
+            metrics[3].as_f64().expect("scrollHeight should be numeric"),
+        )
     }
 
     #[test]
@@ -558,6 +629,199 @@ mod tests {
                 .snapshot_cache_for_test()
                 .expect("snapshot cache should be readable")
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn test_apply_viewport_emulation_invalidates_snapshot_cache_without_advancing_revision() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        let revision_before = session
+            .document_metadata()
+            .expect("document metadata should be available")
+            .revision;
+        seed_snapshot_cache(&session);
+
+        let result = session
+            .apply_viewport_emulation(ViewportEmulationRequest {
+                width: 375,
+                height: 812,
+                device_scale_factor: 2.0,
+                mobile: true,
+                touch: true,
+                orientation: Some(ViewportOrientation::PortraitPrimary),
+                tab_id: None,
+            })
+            .expect("viewport emulation should succeed");
+
+        assert_eq!(result.tab_id, "tab-1");
+        assert_eq!(result.viewport_after.width, 375.0);
+        assert_eq!(result.viewport_after.height, 812.0);
+        assert_eq!(result.viewport_after.device_pixel_ratio, 2.0);
+        assert_eq!(
+            result.emulation,
+            Some(crate::browser::backend::ViewportEmulation {
+                width: 375,
+                height: 812,
+                device_scale_factor: 2.0,
+                mobile: true,
+                touch: true,
+                orientation: Some(ViewportOrientation::PortraitPrimary),
+            })
+        );
+        assert!(
+            session
+                .snapshot_cache_for_test()
+                .expect("snapshot cache should be readable")
+                .is_none()
+        );
+        assert_eq!(
+            session
+                .document_metadata()
+                .expect("document metadata should still be available")
+                .revision,
+            revision_before,
+            "viewport-only changes should not advance the fake document revision"
+        );
+        assert_eq!(
+            read_viewport_metrics(&session, None),
+            (375.0, 812.0, 2.0, 1800.0)
+        );
+    }
+
+    #[test]
+    fn test_apply_viewport_emulation_can_target_inactive_tab_without_activation() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        let first_tab_id = session.list_tabs().expect("tabs should list")[0].id.clone();
+        let second_tab_id = session
+            .open_tab_entry("https://second.example")
+            .expect("second tab should open")
+            .id;
+
+        let result = session
+            .apply_viewport_emulation(ViewportEmulationRequest {
+                width: 640,
+                height: 360,
+                device_scale_factor: 1.5,
+                mobile: false,
+                touch: false,
+                orientation: None,
+                tab_id: Some(first_tab_id.clone()),
+            })
+            .expect("targeted viewport emulation should succeed");
+
+        assert_eq!(result.tab_id, first_tab_id);
+        assert_eq!(
+            session
+                .list_tabs()
+                .expect("tabs should list")
+                .into_iter()
+                .find(|tab| tab.active)
+                .expect("an active tab should remain")
+                .id,
+            second_tab_id,
+            "specific-tab emulation should not activate the target tab"
+        );
+        assert_eq!(
+            read_viewport_metrics(&session, Some(&result.tab_id)),
+            (640.0, 360.0, 1.5, 1800.0)
+        );
+        assert_eq!(
+            read_viewport_metrics(&session, Some(&second_tab_id)),
+            (800.0, 600.0, 2.0, 1800.0)
+        );
+    }
+
+    #[test]
+    fn test_reset_viewport_emulation_restores_default_fake_metrics() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+
+        session
+            .apply_viewport_emulation(ViewportEmulationRequest {
+                width: 1024,
+                height: 768,
+                device_scale_factor: 1.25,
+                mobile: false,
+                touch: false,
+                orientation: None,
+                tab_id: None,
+            })
+            .expect("viewport emulation should succeed");
+        seed_snapshot_cache(&session);
+
+        let result = session
+            .reset_viewport_emulation(ViewportResetRequest::default())
+            .expect("viewport reset should succeed");
+
+        assert_eq!(result.tab_id, "tab-1");
+        assert!(result.emulation.is_none());
+        assert_eq!(result.viewport_after.width, 800.0);
+        assert_eq!(result.viewport_after.height, 600.0);
+        assert_eq!(result.viewport_after.device_pixel_ratio, 2.0);
+        assert!(
+            session
+                .snapshot_cache_for_test()
+                .expect("snapshot cache should be readable")
+                .is_none()
+        );
+        assert_eq!(
+            read_viewport_metrics(&session, None),
+            (800.0, 600.0, 2.0, 1800.0)
+        );
+    }
+
+    #[test]
+    fn test_apply_viewport_emulation_rejects_invalid_requests_without_mutation() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+
+        let oversize = session.apply_viewport_emulation(ViewportEmulationRequest {
+            width: 10_000_001,
+            height: 600,
+            device_scale_factor: 1.0,
+            mobile: false,
+            touch: false,
+            orientation: None,
+            tab_id: None,
+        });
+        assert!(matches!(oversize, Err(BrowserError::InvalidArgument(_))));
+        assert_eq!(
+            read_viewport_metrics(&session, None),
+            (800.0, 600.0, 2.0, 1800.0)
+        );
+
+        let empty_tab_id = session.apply_viewport_emulation(ViewportEmulationRequest {
+            width: 320,
+            height: 640,
+            device_scale_factor: 1.0,
+            mobile: false,
+            touch: false,
+            orientation: None,
+            tab_id: Some("   ".to_string()),
+        });
+        assert!(matches!(
+            empty_tab_id,
+            Err(BrowserError::InvalidArgument(_))
+        ));
+        assert_eq!(
+            read_viewport_metrics(&session, None),
+            (800.0, 600.0, 2.0, 1800.0)
+        );
+
+        let unknown_tab = session.apply_viewport_emulation(ViewportEmulationRequest {
+            width: 320,
+            height: 640,
+            device_scale_factor: 1.0,
+            mobile: false,
+            touch: false,
+            orientation: None,
+            tab_id: Some("missing-tab".to_string()),
+        });
+        assert!(matches!(
+            unknown_tab,
+            Err(BrowserError::TabOperationFailed(_))
+        ));
+        assert_eq!(
+            read_viewport_metrics(&session, None),
+            (800.0, 600.0, 2.0, 1800.0)
         );
     }
 
@@ -848,5 +1112,56 @@ mod tests {
 
         let tabs = session.list_tabs().expect("Failed to list tabs");
         assert!(tabs.len() >= 2);
+    }
+
+    #[test]
+    #[ignore]
+    fn test_apply_and_reset_viewport_emulation_live() {
+        let Some(session) =
+            launch_or_skip(BrowserSession::launch(LaunchOptions::new().headless(true)))
+        else {
+            return;
+        };
+
+        session
+            .navigate(
+                "data:text/html,<html><body style='margin:0'><div style='height:2000px'>viewport</div></body></html>",
+            )
+            .expect("navigation should succeed");
+        session
+            .wait_for_document_ready_with_timeout(Duration::from_secs(5))
+            .expect("document should become ready");
+
+        let baseline = read_viewport_metrics(&session, None);
+
+        let applied = session
+            .apply_viewport_emulation(ViewportEmulationRequest {
+                width: 412,
+                height: 915,
+                device_scale_factor: 2.0,
+                mobile: true,
+                touch: true,
+                orientation: Some(ViewportOrientation::PortraitPrimary),
+                tab_id: None,
+            })
+            .expect("viewport emulation should apply");
+
+        assert!((applied.viewport_after.width - 412.0).abs() <= 1.0);
+        assert!((applied.viewport_after.height - 915.0).abs() <= 1.0);
+        assert!((applied.viewport_after.device_pixel_ratio - 2.0).abs() <= 0.1);
+
+        let applied_metrics = read_viewport_metrics(&session, None);
+        assert!((applied_metrics.0 - 412.0).abs() <= 1.0);
+        assert!((applied_metrics.1 - 915.0).abs() <= 1.0);
+        assert!((applied_metrics.2 - 2.0).abs() <= 0.1);
+
+        let reset = session
+            .reset_viewport_emulation(ViewportResetRequest::default())
+            .expect("viewport reset should succeed");
+
+        assert!(reset.emulation.is_none());
+        assert!((reset.viewport_after.width - baseline.0).abs() <= 2.0);
+        assert!((reset.viewport_after.height - baseline.1).abs() <= 2.0);
+        assert!((reset.viewport_after.device_pixel_ratio - baseline.2).abs() <= 0.2);
     }
 }

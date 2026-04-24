@@ -279,6 +279,118 @@ fn viewport_metrics(session: &BrowserSession) -> (f64, f64, f64, f64) {
 
 #[test]
 #[ignore]
+fn test_set_viewport_tool_emulates_breakpoint_and_snapshot_scope_reports_viewport() {
+    let Some(browser) = common::browser_or_skip() else {
+        return;
+    };
+    let session = browser.session();
+
+    common::navigate_encoded_html(
+        session,
+        r#"
+            <!DOCTYPE html>
+            <html>
+            <body style="margin: 0;">
+                <main style="height: 2000px;">
+                    <button id="buy">Buy now</button>
+                </main>
+            </body>
+            </html>
+        "#,
+    )
+    .expect("Failed to navigate");
+
+    let baseline = viewport_metrics(session);
+
+    let set_viewport = session
+        .execute_tool(
+            "set_viewport",
+            json!({
+                "width": 412,
+                "height": 915,
+                "device_scale_factor": 2.0,
+                "mobile": true,
+                "touch": true
+            }),
+        )
+        .expect("set_viewport should execute");
+    assert!(set_viewport.success, "set_viewport should succeed");
+    let data = set_viewport.data.expect("set_viewport should include data");
+    assert_eq!(data["action"].as_str(), Some("set_viewport"));
+    assert_eq!(data["reset"].as_bool(), Some(false));
+    assert_close(
+        data["viewport_after"]["width"]
+            .as_f64()
+            .expect("viewport_after width should be returned"),
+        412.0,
+        1.0,
+        "viewport width",
+    );
+    assert_close(
+        data["viewport_after"]["height"]
+            .as_f64()
+            .expect("viewport_after height should be returned"),
+        915.0,
+        1.0,
+        "viewport height",
+    );
+    assert_close(
+        data["viewport_after"]["device_pixel_ratio"]
+            .as_f64()
+            .expect("viewport_after dpr should be returned"),
+        2.0,
+        0.1,
+        "viewport dpr",
+    );
+
+    let applied = viewport_metrics(session);
+    assert_close(applied.0, 412.0, 1.0, "applied innerWidth");
+    assert_close(applied.1, 915.0, 1.0, "applied innerHeight");
+    assert_close(applied.2, 2.0, 0.1, "applied dpr");
+
+    let snapshot = session
+        .execute_tool("snapshot", json!({}))
+        .expect("snapshot should execute after set_viewport");
+    assert!(snapshot.success, "snapshot should succeed");
+    let snapshot_data = snapshot.data.expect("snapshot should include data");
+    assert_close(
+        snapshot_data["scope"]["viewport"]["width"]
+            .as_f64()
+            .expect("scope.viewport.width should be returned"),
+        412.0,
+        1.0,
+        "snapshot scope viewport width",
+    );
+    assert_close(
+        snapshot_data["scope"]["viewport"]["height"]
+            .as_f64()
+            .expect("scope.viewport.height should be returned"),
+        915.0,
+        1.0,
+        "snapshot scope viewport height",
+    );
+    assert_close(
+        snapshot_data["scope"]["viewport"]["device_pixel_ratio"]
+            .as_f64()
+            .expect("scope.viewport.dpr should be returned"),
+        2.0,
+        0.1,
+        "snapshot scope viewport dpr",
+    );
+
+    let reset = session
+        .execute_tool("set_viewport", json!({ "reset": true }))
+        .expect("set_viewport reset should execute");
+    assert!(reset.success, "set_viewport reset should succeed");
+
+    let reset_metrics = viewport_metrics(session);
+    assert_close(reset_metrics.0, baseline.0, 2.0, "reset innerWidth");
+    assert_close(reset_metrics.1, baseline.1, 2.0, "reset innerHeight");
+    assert_close(reset_metrics.2, baseline.2, 0.2, "reset dpr");
+}
+
+#[test]
+#[ignore]
 fn test_screenshot_tool_captures_viewport_artifact() {
     let Some(browser) = common::browser_or_skip() else {
         return;

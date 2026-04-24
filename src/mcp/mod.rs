@@ -427,6 +427,10 @@ mod tests {
                 "screenshot",
                 ["managed", "target", "mode", "scale"].as_slice(),
             ),
+            (
+                "set_viewport",
+                ["breakpoints", "reset", "viewport_after"].as_slice(),
+            ),
         ];
 
         for (tool_name, keywords) in expectations {
@@ -465,6 +469,10 @@ mod tests {
             tool_names.iter().any(|name| name == "screenshot"),
             "screenshot should be exported via MCP"
         );
+        assert!(
+            tool_names.iter().any(|name| name == "set_viewport"),
+            "set_viewport should be exported via MCP"
+        );
     }
 
     #[test]
@@ -479,6 +487,7 @@ mod tests {
 
         assert!(!default_tool_names.iter().any(|name| name == "evaluate"));
         assert!(default_tool_names.iter().any(|name| name == "screenshot"));
+        assert!(default_tool_names.iter().any(|name| name == "set_viewport"));
 
         let mut session = BrowserSession::with_test_backend(FakeSessionBackend::new());
         session.tool_registry_mut().register_operator_tools();
@@ -491,6 +500,7 @@ mod tests {
 
         assert!(tool_names.iter().any(|name| name == "evaluate"));
         assert!(tool_names.iter().any(|name| name == "screenshot"));
+        assert!(tool_names.iter().any(|name| name == "set_viewport"));
     }
 
     #[test]
@@ -605,6 +615,30 @@ mod tests {
         let output_schema =
             serde_json::to_string(&descriptor.output_schema).expect("schema should serialize");
         assert!(output_schema.contains("locality_fallback_reason"));
+        assert!(output_schema.contains("\"viewport\""));
+    }
+
+    #[test]
+    fn test_set_viewport_schema_is_exported_via_mcp() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        let descriptor = session
+            .tool_registry()
+            .descriptors()
+            .into_iter()
+            .find(|tool| tool.name == "set_viewport")
+            .expect("set_viewport descriptor should exist");
+
+        assert!(descriptor.description.contains("breakpoints"));
+        assert!(descriptor.description.contains("viewport_after"));
+
+        let params = &descriptor.parameters_schema["properties"];
+        assert!(params.get("width").is_some());
+        assert!(params.get("height").is_some());
+        assert!(params.get("reset").is_some());
+
+        let output = &descriptor.output_schema["properties"];
+        assert!(output.get("tab_id").is_some());
+        assert!(output.get("viewport_after").is_some());
     }
 
     #[test]

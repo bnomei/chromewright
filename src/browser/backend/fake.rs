@@ -1,10 +1,12 @@
 use super::{
     ScreenshotCapture, ScreenshotImageMetrics, ScreenshotRequest, ScreenshotScale,
-    ScriptEvaluation, SessionBackend, TabDescriptor,
+    ScriptEvaluation, SessionBackend, TabDescriptor, ViewportEmulation, ViewportEmulationRequest,
+    ViewportMetrics, ViewportOperationResult, ViewportResetRequest,
 };
 use crate::dom::{AriaChild, AriaNode, DocumentMetadata, DomTree};
 use crate::error::{BrowserError, Result};
 use serde_json::Value;
+use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -42,6 +44,7 @@ struct FakeState {
     active_tab_id: Option<String>,
     next_tab_id: usize,
     revision: usize,
+    viewport_emulation_by_tab_id: HashMap<String, ViewportEmulation>,
 }
 
 impl FakeSessionBackend {
@@ -76,6 +79,7 @@ impl FakeSessionBackend {
                 active_tab_id: Some(initial_tab.id),
                 next_tab_id: 2,
                 revision: 1,
+                viewport_emulation_by_tab_id: HashMap::new(),
             }),
             close_failure_urls: close_failure_urls.into_iter().map(Into::into).collect(),
         }
@@ -151,25 +155,56 @@ impl FakeSessionBackend {
         bytes
     }
 
-    fn fake_capture_geometry(request: &ScreenshotRequest) -> (f64, f64, f64) {
+    fn default_viewport_metrics() -> ViewportMetrics {
+        ViewportMetrics {
+            width: FAKE_SCREENSHOT_VIEWPORT_WIDTH,
+            height: FAKE_SCREENSHOT_VIEWPORT_HEIGHT,
+            device_pixel_ratio: FAKE_SCREENSHOT_DEVICE_PIXEL_RATIO,
+        }
+    }
+
+    fn current_viewport_metrics(state: &FakeState, tab_id: &str) -> ViewportMetrics {
+        state
+            .viewport_emulation_by_tab_id
+            .get(tab_id)
+            .map(|emulation| ViewportMetrics {
+                width: emulation.width as f64,
+                height: emulation.height as f64,
+                device_pixel_ratio: emulation.device_scale_factor,
+            })
+            .unwrap_or_else(Self::default_viewport_metrics)
+    }
+
+    fn current_scroll_height(state: &FakeState, tab_id: &str) -> f64 {
+        Self::current_viewport_metrics(state, tab_id)
+            .height
+            .max(FAKE_SCREENSHOT_FULL_PAGE_HEIGHT)
+    }
+
+    fn fake_capture_geometry(
+        state: &FakeState,
+        tab_id: &str,
+        request: &ScreenshotRequest,
+    ) -> (f64, f64, f64) {
+        let viewport = Self::current_viewport_metrics(state, tab_id);
         let css_width = request
             .clip
             .as_ref()
             .map(|clip| clip.width)
-            .unwrap_or(FAKE_SCREENSHOT_VIEWPORT_WIDTH);
+            .unwrap_or(viewport.width);
         let css_height = request
             .clip
             .as_ref()
             .map(|clip| clip.height)
             .unwrap_or_else(|| {
                 if request.mode.capture_beyond_viewport() {
-                    FAKE_SCREENSHOT_FULL_PAGE_HEIGHT
+                    Self::current_scroll_height(state, tab_id)
                 } else {
-                    FAKE_SCREENSHOT_VIEWPORT_HEIGHT
+                    viewport.height
                 }
             });
         let pixel_scale = match request.scale {
-            ScreenshotScale::Device => FAKE_SCREENSHOT_DEVICE_PIXEL_RATIO,
+            ScreenshotScale::Device => viewport.device_pixel_ratio,
             ScreenshotScale::Css => 1.0,
         };
 
@@ -260,11 +295,41 @@ impl FakeSessionBackend {
         })
     }
 
+    fn scripted_viewport_metrics(
+        script: &str,
+        viewport: ViewportMetrics,
+        scroll_height: f64,
+    ) -> Option<ScriptEvaluation> {
+        if script.contains("window.innerWidth")
+            && script.contains("window.innerHeight")
+            && script.contains("window.devicePixelRatio")
+        {
+            return Some(ScriptEvaluation {
+                value: Some(serde_json::json!([
+                    viewport.width,
+                    viewport.height,
+                    viewport.device_pixel_ratio,
+                    scroll_height
+                ])),
+                description: None,
+                type_name: Some("Array".to_string()),
+            });
+        }
+
+        None
+    }
+
     fn scripted_result_with_url(
         &self,
         script: &str,
         document_url: Option<&str>,
+        viewport: ViewportMetrics,
+        scroll_height: f64,
     ) -> Option<Result<ScriptEvaluation>> {
+        if let Some(result) = Self::scripted_viewport_metrics(script, viewport, scroll_height) {
+            return Some(Ok(result));
+        }
+
         if script.contains("document.readyState") {
             return Some(Ok(ScriptEvaluation {
                 value: Some(Value::String("complete".to_string())),
@@ -547,8 +612,13 @@ impl FakeSessionBackend {
         None
     }
 
-    fn scripted_result(&self, script: &str) -> Option<Result<ScriptEvaluation>> {
-        self.scripted_result_with_url(script, None)
+    fn scripted_result(
+        &self,
+        script: &str,
+        viewport: ViewportMetrics,
+        scroll_height: f64,
+    ) -> Option<Result<ScriptEvaluation>> {
+        self.scripted_result_with_url(script, None, viewport, scroll_height)
     }
 }
 
@@ -605,11 +675,16 @@ impl SessionBackend for FakeSessionBackend {
     }
 
     fn evaluate(&self, script: &str, _await_promise: bool) -> Result<ScriptEvaluation> {
-        self.scripted_result(script).unwrap_or_else(|| {
-            Err(BrowserError::EvaluationFailed(
-                "Fake backend does not support this JavaScript payload yet".to_string(),
-            ))
-        })
+        let state = self.lock_state()?;
+        let active_tab = Self::active_tab_from_state(&state)?;
+        let viewport = Self::current_viewport_metrics(&state, &active_tab.id);
+        let scroll_height = Self::current_scroll_height(&state, &active_tab.id);
+        self.scripted_result(script, viewport, scroll_height)
+            .unwrap_or_else(|| {
+                Err(BrowserError::EvaluationFailed(
+                    "Fake backend does not support this JavaScript payload yet".to_string(),
+                ))
+            })
     }
 
     fn evaluate_on_tab(
@@ -620,7 +695,9 @@ impl SessionBackend for FakeSessionBackend {
     ) -> Result<ScriptEvaluation> {
         let state = self.lock_state()?;
         let tab = Self::tab_from_state(&state, tab_id)?;
-        self.scripted_result_with_url(script, Some(tab.url.as_str()))
+        let viewport = Self::current_viewport_metrics(&state, &tab.id);
+        let scroll_height = Self::current_scroll_height(&state, &tab.id);
+        self.scripted_result_with_url(script, Some(tab.url.as_str()), viewport, scroll_height)
             .unwrap_or_else(|| {
                 Err(BrowserError::EvaluationFailed(
                     "Fake backend does not support this JavaScript payload yet".to_string(),
@@ -637,15 +714,15 @@ impl SessionBackend for FakeSessionBackend {
         request: &ScreenshotRequest,
     ) -> Result<ScreenshotCapture> {
         request.validate()?;
+        let state = self.lock_state()?;
         let tab = match request.tab_id.as_deref() {
-            Some(tab_id) => {
-                let state = self.lock_state()?;
-                Self::tab_from_state(&state, tab_id)?.clone()
-            }
-            None => self.active_tab()?,
+            Some(tab_id) => Self::tab_from_state(&state, tab_id)?.clone(),
+            None => Self::active_tab_from_state(&state)?.clone(),
         };
 
-        let (css_width, css_height, pixel_scale) = Self::fake_capture_geometry(request);
+        let viewport = Self::current_viewport_metrics(&state, &tab.id);
+        let (css_width, css_height, pixel_scale) =
+            Self::fake_capture_geometry(&state, &tab.id, request);
         let width = (css_width * pixel_scale).round().max(1.0) as u32;
         let height = (css_height * pixel_scale).round().max(1.0) as u32;
         let bytes = Self::fake_png(width, height);
@@ -657,10 +734,53 @@ impl SessionBackend for FakeSessionBackend {
             ScreenshotImageMetrics {
                 css_width,
                 css_height,
-                device_pixel_ratio: FAKE_SCREENSHOT_DEVICE_PIXEL_RATIO,
+                device_pixel_ratio: viewport.device_pixel_ratio,
             },
             bytes,
         )
+    }
+
+    fn apply_viewport_emulation(
+        &self,
+        request: &ViewportEmulationRequest,
+    ) -> Result<ViewportOperationResult> {
+        request.validate()?;
+
+        let mut state = self.lock_state()?;
+        let tab = match request.tab_id.as_deref() {
+            Some(tab_id) => Self::tab_from_state(&state, tab_id)?.clone(),
+            None => Self::active_tab_from_state(&state)?.clone(),
+        };
+        let emulation = request.normalized_emulation();
+        state
+            .viewport_emulation_by_tab_id
+            .insert(tab.id.clone(), emulation.clone());
+
+        Ok(ViewportOperationResult {
+            tab_id: tab.id.clone(),
+            emulation: Some(emulation),
+            viewport_after: Self::current_viewport_metrics(&state, &tab.id),
+        })
+    }
+
+    fn reset_viewport_emulation(
+        &self,
+        request: &ViewportResetRequest,
+    ) -> Result<ViewportOperationResult> {
+        request.validate()?;
+
+        let mut state = self.lock_state()?;
+        let tab = match request.tab_id.as_deref() {
+            Some(tab_id) => Self::tab_from_state(&state, tab_id)?.clone(),
+            None => Self::active_tab_from_state(&state)?.clone(),
+        };
+        state.viewport_emulation_by_tab_id.remove(&tab.id);
+
+        Ok(ViewportOperationResult {
+            tab_id: tab.id.clone(),
+            emulation: None,
+            viewport_after: Self::current_viewport_metrics(&state, &tab.id),
+        })
     }
 
     fn press_key(&self, _key: &str) -> Result<()> {
@@ -722,6 +842,7 @@ impl SessionBackend for FakeSessionBackend {
         }
 
         state.tabs.remove(index);
+        state.viewport_emulation_by_tab_id.remove(target_tab_id);
         if state.tabs.is_empty() {
             state.active_tab_id = None;
         } else if state.active_tab_id.as_deref() == Some(target_tab_id) {

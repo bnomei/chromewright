@@ -326,6 +326,13 @@ fn test_snapshot_tool_exposes_document_metadata_and_node_refs() {
     assert_eq!(data["scope"]["mode"].as_str(), Some("viewport"));
     assert_eq!(data["scope"]["fallback_mode"].as_str(), None);
     assert_eq!(data["scope"]["viewport_biased"].as_bool(), Some(true));
+    assert!(data["scope"]["viewport"]["width"].as_f64().is_some());
+    assert!(data["scope"]["viewport"]["height"].as_f64().is_some());
+    assert!(
+        data["scope"]["viewport"]["device_pixel_ratio"]
+            .as_f64()
+            .is_some()
+    );
     assert_eq!(
         data["scope"]["returned_node_count"].as_u64(),
         Some(nodes.len() as u64)
@@ -364,6 +371,7 @@ fn test_snapshot_tool_exposes_document_metadata_and_node_refs() {
     let full_data = full.data.expect("full snapshot should include data");
     assert_eq!(full_data["scope"]["mode"].as_str(), Some("full"));
     assert_eq!(full_data["scope"]["viewport_biased"].as_bool(), Some(false));
+    assert!(full_data["scope"]["viewport"]["width"].as_f64().is_some());
 }
 
 #[test]

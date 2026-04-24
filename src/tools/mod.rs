@@ -26,6 +26,7 @@ pub mod screenshot;
 pub mod scroll;
 pub mod select;
 pub(crate) mod services;
+pub mod set_viewport;
 pub mod snapshot;
 pub mod switch_tab;
 pub mod tab_list;
@@ -51,6 +52,7 @@ pub use read_links::ReadLinksParams;
 pub use screenshot::{ScreenshotMode, ScreenshotParams, ScreenshotRegion};
 pub use scroll::ScrollParams;
 pub use select::SelectParams;
+pub use set_viewport::SetViewportParams;
 pub use snapshot::{SnapshotMode, SnapshotParams};
 pub use switch_tab::SwitchTabParams;
 pub use tab_list::TabListParams;
@@ -176,6 +178,7 @@ mod tests {
         assert!(registry.has("snapshot"));
         assert!(registry.has("click"));
         assert!(registry.has("screenshot"));
+        assert!(registry.has("set_viewport"));
         assert!(!registry.has("evaluate"));
     }
 
@@ -186,6 +189,7 @@ mod tests {
         assert!(registry.has("snapshot"));
         assert!(registry.has("evaluate"));
         assert!(registry.has("screenshot"));
+        assert!(registry.has("set_viewport"));
     }
 
     #[test]
@@ -216,6 +220,34 @@ mod tests {
         assert!(output.get("width").is_some());
         assert!(output.get("height").is_some());
         assert!(output.get("clip").is_some());
+    }
+
+    #[test]
+    fn test_set_viewport_schema_exposes_breakpoint_contract() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        let descriptor = session
+            .tool_registry()
+            .descriptors()
+            .into_iter()
+            .find(|tool| tool.name == "set_viewport")
+            .expect("set_viewport descriptor should exist");
+
+        let params = &descriptor.parameters_schema["properties"];
+        assert!(params.get("width").is_some());
+        assert!(params.get("height").is_some());
+        assert!(params.get("device_scale_factor").is_some());
+        assert!(params.get("mobile").is_some());
+        assert!(params.get("touch").is_some());
+        assert!(params.get("orientation").is_some());
+        assert!(params.get("tab_id").is_some());
+        assert!(params.get("reset").is_some());
+
+        let output = &descriptor.output_schema["properties"];
+        assert!(output.get("tab_id").is_some());
+        assert!(output.get("reset").is_some());
+        assert!(output.get("emulation").is_some());
+        assert!(output.get("viewport_after").is_some());
+        assert!(output.get("message").is_some());
     }
 
     #[test]
