@@ -1,9 +1,14 @@
+use crate::browser::commands::{
+    BrowserCommand, BrowserCommandResult, InteractionCommand, InteractionCommandResult,
+    TargetedInteractionRequest,
+};
 use crate::dom::{Cursor, NodeRef};
 use crate::error::{BrowserError, Result};
+#[cfg(test)]
+use crate::tools::browser_kernel::render_browser_kernel_script;
 use crate::tools::{
     TargetResolution, Tool, ToolContext, ToolResult,
     actionability::ActionabilityPredicate,
-    browser_kernel::render_browser_kernel_script,
     core::PublicTarget,
     core::TargetedActionResult,
     services::interaction::{
@@ -16,9 +21,12 @@ use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
+#[cfg(test)]
 use std::sync::OnceLock;
 
+#[cfg(test)]
 const HOVER_JS: &str = include_str!("hover.js");
+#[cfg(test)]
 static HOVER_SHELL: OnceLock<crate::tools::browser_kernel::BrowserKernelTemplateShell> =
     OnceLock::new();
 /// Parameters for the hover tool
@@ -144,16 +152,19 @@ impl Tool for HoverTool {
             }
         }
 
-        let hover_config = serde_json::json!({
-            "selector": target.selector,
-            "target_index": target.cursor.as_ref().map(|cursor| cursor.index).or(target.index),
-        });
-        let hover_js = build_hover_js(&hover_config);
-
         context.record_browser_evaluation();
         let result = context
             .session
-            .evaluate(&hover_js, false)
+            .execute_command(BrowserCommand::Interaction(InteractionCommand::Hover(
+                TargetedInteractionRequest {
+                    selector: target.selector.clone(),
+                    target_index: target
+                        .cursor
+                        .as_ref()
+                        .map(|cursor| cursor.index)
+                        .or(target.index),
+                },
+            )))
             .map_err(|e| match e {
                 BrowserError::EvaluationFailed(reason) => BrowserError::ToolExecutionFailed {
                     tool: "hover".to_string(),
@@ -161,8 +172,18 @@ impl Tool for HoverTool {
                 },
                 other => other,
             })?;
+        let BrowserCommandResult::Interaction(InteractionCommandResult::Hover(hover_result)) =
+            result
+        else {
+            return Err(BrowserError::ToolExecutionFailed {
+                tool: "hover".to_string(),
+                reason: "Browser command returned an unexpected result for hover".to_string(),
+            });
+        };
 
-        let hover_result = match parse_hover_result(result.value) {
+        let hover_result = match parse_hover_result(Some(
+            serde_json::to_value(hover_result).map_err(BrowserError::from)?,
+        )) {
             Ok(result) => result,
             Err(reason) => {
                 return Ok(context.finish(ToolResult::failure_with(
@@ -206,6 +227,7 @@ impl Tool for HoverTool {
     }
 }
 
+#[cfg(test)]
 fn build_hover_js(config: &serde_json::Value) -> String {
     render_browser_kernel_script(&HOVER_SHELL, HOVER_JS, "__HOVER_CONFIG__", config)
 }
@@ -301,6 +323,7 @@ mod tests {
     use super::*;
     use crate::browser::BrowserSession;
     use crate::browser::backend::{ScriptEvaluation, SessionBackend, TabDescriptor};
+    use crate::browser::commands::{ActionabilityProbeResult, HoverCommandResult};
     use crate::dom::{AriaChild, AriaNode, DocumentMetadata, DomTree};
     use crate::tools::{OPERATION_METRICS_METADATA_KEY, Tool, ToolContext};
     use schemars::schema_for;
@@ -397,6 +420,40 @@ mod tests {
             }
 
             unreachable!("unexpected script in invalid hover payload test: {script}");
+        }
+
+        fn execute_command(
+            &self,
+            command: BrowserCommand,
+        ) -> crate::error::Result<BrowserCommandResult> {
+            match command {
+                BrowserCommand::ActionabilityProbe(_) => Ok(
+                    BrowserCommandResult::ActionabilityProbe(ActionabilityProbeResult {
+                        present: true,
+                        visible: Some(true),
+                        stable: Some(true),
+                        receives_events: Some(true),
+                        in_viewport: Some(true),
+                        unobscured_center: Some(true),
+                        ..ActionabilityProbeResult::default()
+                    }),
+                ),
+                BrowserCommand::Interaction(InteractionCommand::Hover(_)) => {
+                    Ok(BrowserCommandResult::Interaction(
+                        InteractionCommandResult::Hover(HoverCommandResult {
+                            success: true,
+                            code: None,
+                            error: None,
+                            tag_name: None,
+                            id: Some("fake-target".to_string()),
+                            class_name: Some("fake".to_string()),
+                        }),
+                    ))
+                }
+                command => {
+                    unreachable!("unexpected command in invalid hover payload test: {command:?}")
+                }
+            }
         }
 
         fn capture_screenshot(&self, _full_page: bool) -> crate::error::Result<Vec<u8>> {

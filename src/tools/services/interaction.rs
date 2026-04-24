@@ -1,4 +1,7 @@
 use crate::browser::BrowserSession;
+use crate::browser::commands::{
+    BrowserCommand, BrowserCommandResult, SelectorIdentityProbeRequest, SelectorIdentityProbeResult,
+};
 pub use crate::contract::TargetStatus;
 use crate::dom::{Cursor, DocumentMetadata, DomTree, NodeRef};
 use crate::error::{BrowserError, Result};
@@ -12,7 +15,6 @@ use crate::tools::{
     browser_kernel::render_browser_kernel_script,
     duration_micros, resolve_target_with_cursor,
 };
-use serde::Deserialize;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
@@ -20,85 +22,6 @@ const SCROLL_TARGET_INTO_VIEW_TEMPLATE_JS: &str = include_str!("../scroll_target
 static SCROLL_TARGET_INTO_VIEW_SHELL: OnceLock<
     crate::tools::browser_kernel::BrowserKernelTemplateShell,
 > = OnceLock::new();
-const SELECTOR_IDENTITY_TEMPLATE_JS: &str = r#"
-(() => {
-  const config = __SELECTOR_IDENTITY_CONFIG__;
-
-  __BROWSER_KERNEL__
-
-  function countSelectorMatchesAcrossScopes(selector) {
-    const visitedDocs = new Set();
-    let count = 0;
-
-    function searchRoot(root) {
-      if (!root || typeof root.querySelectorAll !== 'function') {
-        return;
-      }
-
-      let matches = [];
-      try {
-        matches = root.querySelectorAll(selector);
-      } catch (error) {
-        const normalized = normalizeSimpleIdSelector(selector);
-        if (!normalized) {
-          return;
-        }
-
-        try {
-          matches = root.querySelectorAll(normalized);
-        } catch (fallbackError) {
-          return;
-        }
-      }
-
-      count += matches.length;
-      if (count > 1) {
-        return;
-      }
-
-      const elements = root.querySelectorAll ? root.querySelectorAll('*') : [];
-      for (const element of elements) {
-        if (element.shadowRoot) {
-          searchRoot(element.shadowRoot);
-          if (count > 1) {
-            return;
-          }
-        }
-
-        if (element.tagName === 'IFRAME') {
-          try {
-            const frameDoc = element.contentDocument;
-            if (!frameDoc || visitedDocs.has(frameDoc)) {
-              continue;
-            }
-
-            visitedDocs.add(frameDoc);
-            searchRoot(frameDoc);
-            if (count > 1) {
-              return;
-            }
-          } catch (error) {
-            // Cross-origin frame; selector identity stops at the iframe boundary.
-          }
-        }
-      }
-    }
-
-    visitedDocs.add(document);
-    searchRoot(document);
-    return count;
-  }
-
-  const matchCount = config.selector ? countSelectorMatchesAcrossScopes(config.selector) : 0;
-
-  return JSON.stringify({
-    present: matchCount > 0,
-    unique: matchCount === 1
-  });
-})()
-"#;
-static SELECTOR_IDENTITY_SHELL: OnceLock<crate::tools::browser_kernel::BrowserKernelTemplateShell> =
-    OnceLock::new();
 pub(crate) const DEFAULT_ACTIONABILITY_TIMEOUT_MS: u64 = 5_000;
 const ACTIONABILITY_POLL_INTERVAL_MS: u64 = 50;
 
@@ -112,12 +35,6 @@ pub(crate) struct InteractionHandoff {
     pub target_before: TargetEnvelope,
     pub target_after: Option<TargetEnvelope>,
     pub target_status: TargetStatus,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct SelectorIdentityProbeResult {
-    present: bool,
-    unique: bool,
 }
 
 pub(crate) fn resolve_interaction_target(
@@ -485,12 +402,14 @@ fn probe_selector_identity(
     context: &mut ToolContext,
     selector: &str,
 ) -> Result<SelectorIdentityProbeResult> {
-    let config = serde_json::json!({ "selector": selector });
-    let probe_js = build_selector_identity_js(&config);
     context.record_browser_evaluation();
     let result = context
         .session
-        .evaluate(&probe_js, false)
+        .execute_command(BrowserCommand::SelectorIdentityProbe(
+            SelectorIdentityProbeRequest {
+                selector: selector.to_string(),
+            },
+        ))
         .map_err(|e| match e {
             BrowserError::EvaluationFailed(reason) => BrowserError::ToolExecutionFailed {
                 tool: "interaction".to_string(),
@@ -498,35 +417,16 @@ fn probe_selector_identity(
             },
             other => other,
         })?;
-    let payload = decode_action_result(result.value, serde_json::json!({})).map_err(|error| {
-        BrowserError::ToolExecutionFailed {
-            tool: "interaction".to_string(),
-            reason: format!("Failed to parse selector identity result: {}", error),
-        }
-    })?;
 
-    let present = payload
-        .get("present")
-        .and_then(|value| value.as_bool())
-        .ok_or_else(|| BrowserError::ToolExecutionFailed {
+    let BrowserCommandResult::SelectorIdentityProbe(result) = result else {
+        return Err(BrowserError::ToolExecutionFailed {
             tool: "interaction".to_string(),
-            reason: format!(
-                "selector identity probe returned an invalid payload: expected boolean field 'present', got {}",
-                value_kind(payload.get("present").unwrap_or(&serde_json::Value::Null))
-            ),
-        })?;
-    let unique = payload
-        .get("unique")
-        .and_then(|value| value.as_bool())
-        .ok_or_else(|| BrowserError::ToolExecutionFailed {
-            tool: "interaction".to_string(),
-            reason: format!(
-                "selector identity probe returned an invalid payload: expected boolean field 'unique', got {}",
-                value_kind(payload.get("unique").unwrap_or(&serde_json::Value::Null))
-            ),
-        })?;
+            reason: "Browser command returned an unexpected result for selector identity"
+                .to_string(),
+        });
+    };
 
-    Ok(SelectorIdentityProbeResult { present, unique })
+    Ok(result)
 }
 
 fn build_scroll_target_into_view_js(config: &serde_json::Value) -> String {
@@ -536,26 +436,6 @@ fn build_scroll_target_into_view_js(config: &serde_json::Value) -> String {
         "__SCROLL_TARGET_CONFIG__",
         config,
     )
-}
-
-fn build_selector_identity_js(config: &serde_json::Value) -> String {
-    render_browser_kernel_script(
-        &SELECTOR_IDENTITY_SHELL,
-        SELECTOR_IDENTITY_TEMPLATE_JS,
-        "__SELECTOR_IDENTITY_CONFIG__",
-        config,
-    )
-}
-
-fn value_kind(value: &serde_json::Value) -> &'static str {
-    match value {
-        serde_json::Value::Null => "null",
-        serde_json::Value::Bool(_) => "boolean",
-        serde_json::Value::Number(_) => "number",
-        serde_json::Value::String(_) => "string",
-        serde_json::Value::Array(_) => "array",
-        serde_json::Value::Object(_) => "object",
-    }
 }
 
 #[cfg(test)]
@@ -602,11 +482,22 @@ mod tests {
         }
 
         fn evaluate(&self, _script: &str, _await_promise: bool) -> Result<ScriptEvaluation> {
-            Ok(ScriptEvaluation {
-                value: Some(self.value.clone()),
-                description: None,
-                type_name: Some("Object".to_string()),
-            })
+            unreachable!("selector identity tests use browser commands, not raw evaluate")
+        }
+
+        fn execute_command(&self, command: BrowserCommand) -> Result<BrowserCommandResult> {
+            match command {
+                BrowserCommand::SelectorIdentityProbe(_) => {
+                    serde_json::from_value::<SelectorIdentityProbeResult>(self.value.clone())
+                        .map(BrowserCommandResult::SelectorIdentityProbe)
+                        .map_err(|error| {
+                            BrowserError::EvaluationFailed(format!(
+                                "Failed to decode selector identity probe result: {error}"
+                            ))
+                        })
+                }
+                _ => unreachable!("only selector identity commands are used in this test"),
+            }
         }
 
         fn capture_screenshot(&self, _full_page: bool) -> Result<Vec<u8>> {
@@ -670,9 +561,9 @@ mod tests {
         match error {
             BrowserError::ToolExecutionFailed { tool, reason } => {
                 assert_eq!(tool, "interaction");
-                assert!(reason.contains("selector identity probe returned an invalid payload"));
-                assert!(reason.contains("expected boolean field 'present'"));
-                assert!(reason.contains("got string"));
+                assert!(reason.contains("Failed to decode selector identity probe result"));
+                assert!(reason.contains("invalid type: string"));
+                assert!(reason.contains("expected a boolean"));
             }
             other => panic!("unexpected target_exists error: {other:?}"),
         }
@@ -694,9 +585,9 @@ mod tests {
         match error {
             BrowserError::ToolExecutionFailed { tool, reason } => {
                 assert_eq!(tool, "interaction");
-                assert!(reason.contains("selector identity probe returned an invalid payload"));
-                assert!(reason.contains("expected boolean field 'unique'"));
-                assert!(reason.contains("got string"));
+                assert!(reason.contains("Failed to decode selector identity probe result"));
+                assert!(reason.contains("invalid type: string"));
+                assert!(reason.contains("expected a boolean"));
             }
             other => panic!("unexpected target_exists error: {other:?}"),
         }

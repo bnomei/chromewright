@@ -1,3 +1,6 @@
+use crate::browser::commands::{
+    BrowserCommand, BrowserCommandResult, InteractionCommand, InteractionCommandResult,
+};
 use crate::browser::config::CHROME_BROWSER_IDLE_TIMEOUT;
 use crate::browser::{ConnectionOptions, LaunchOptions};
 use crate::contract::{
@@ -423,6 +426,18 @@ where
     }
 }
 
+fn decode_browser_command_value<T>(value: Option<Value>, context: &str) -> Result<T>
+where
+    T: DeserializeOwned,
+{
+    match value.unwrap_or(Value::Null) {
+        Value::String(json) => serde_json::from_str(&json)
+            .map_err(|e| BrowserError::EvaluationFailed(format!("{context}: {e}"))),
+        other => serde_json::from_value(other)
+            .map_err(|e| BrowserError::EvaluationFailed(format!("{context}: {e}"))),
+    }
+}
+
 impl ScreenshotPageMetrics {
     fn evaluate(tab: &Arc<Tab>) -> Result<Self> {
         let evaluation = tab
@@ -566,6 +581,11 @@ pub(crate) trait SessionBackend: Send + Sync {
 
         Err(BrowserError::BackendUnsupported(
             BackendUnsupportedDetails::new("evaluate_on_tab", "evaluate_on_tab"),
+        ))
+    }
+    fn execute_command(&self, command: BrowserCommand) -> Result<BrowserCommandResult> {
+        Err(BrowserError::BackendUnsupported(
+            BackendUnsupportedDetails::new(command.capability(), command.operation()),
         ))
     }
     fn capture_screenshot(&self, full_page: bool) -> Result<Vec<u8>>;
@@ -1164,6 +1184,60 @@ impl SessionBackend for ChromeSessionBackend {
             value: result.value,
             description: result.description,
             type_name: Some(format!("{:?}", result.Type)),
+        })
+    }
+
+    fn execute_command(&self, command: BrowserCommand) -> Result<BrowserCommandResult> {
+        let operation = command.operation();
+        self.with_active_tab_operation(operation, |tab| {
+            let script = command.render_script();
+            let result = tab
+                .evaluate(&script, false)
+                .map_err(|e| BrowserError::EvaluationFailed(e.to_string()))?;
+
+            match &command {
+                BrowserCommand::ActionabilityProbe(_) => Ok(
+                    BrowserCommandResult::ActionabilityProbe(decode_browser_command_value(
+                        result.value,
+                        "Failed to decode actionability probe result",
+                    )?),
+                ),
+                BrowserCommand::SelectorIdentityProbe(_) => Ok(
+                    BrowserCommandResult::SelectorIdentityProbe(decode_browser_command_value(
+                        result.value,
+                        "Failed to decode selector identity probe result",
+                    )?),
+                ),
+                BrowserCommand::Interaction(interaction) => {
+                    let result = match interaction {
+                        InteractionCommand::Click(_) => {
+                            InteractionCommandResult::Click(decode_browser_command_value(
+                                result.value,
+                                "Failed to decode click result",
+                            )?)
+                        }
+                        InteractionCommand::Input(_) => {
+                            InteractionCommandResult::Input(decode_browser_command_value(
+                                result.value,
+                                "Failed to decode input result",
+                            )?)
+                        }
+                        InteractionCommand::Hover(_) => {
+                            InteractionCommandResult::Hover(decode_browser_command_value(
+                                result.value,
+                                "Failed to decode hover result",
+                            )?)
+                        }
+                        InteractionCommand::Select(_) => {
+                            InteractionCommandResult::Select(decode_browser_command_value(
+                                result.value,
+                                "Failed to decode select result",
+                            )?)
+                        }
+                    };
+                    Ok(BrowserCommandResult::Interaction(result))
+                }
+            }
         })
     }
 

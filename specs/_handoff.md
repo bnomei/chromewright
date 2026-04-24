@@ -1,6 +1,6 @@
 # Program handoff
 
-Last updated: 2026-04-24T11:08:31Z
+Last updated: 2026-04-24T11:24:56Z
 
 ## Current focus
 - Implement all open active/planned spec tasks end to end, committing after each successful spec.
@@ -19,9 +19,7 @@ Last updated: 2026-04-24T11:08:31Z
 - (none)
 
 ## Next ready tasks
-- `typed-browser-error-taxonomy/T001` after current browser scope is free.
-- `mcp-blocking-execution-boundary/T001` after current MCP-adjacent exploration returns.
-- `contract-domain-extraction/T001` after viewport metrics lands.
+- `snapshot-projector-extraction/T001` after typed browser command layer commit lands.
 
 ## Completed this cycle
 - `headless-chrome-cdp-contract-pin` completed and ready for commit.
@@ -41,6 +39,9 @@ Last updated: 2026-04-24T11:08:31Z
 - `mcp-blocking-execution-boundary` committed as `c747461`.
 - `contract-domain-extraction` completed and ready for commit.
   - Evidence: `cargo check --locked --no-default-features`; `cargo check --locked --no-default-features --features mcp-handler`; `cargo check --locked`; `cargo test --lib test_set_viewport_schema_is_exported_via_mcp`; `cargo test --lib test_snapshot_schema_exposes_mode_and_scope_contract`; `cargo test --lib tool_registry`; `cargo test --lib public_target`; `cargo test --lib viewport`; `cargo test --lib set_viewport`.
+- `contract-domain-extraction` committed as `71a1bea`.
+- `typed-browser-command-layer` completed and ready for commit.
+  - Evidence: `cargo test --lib actionability`; `cargo test --lib interaction`; `cargo test --lib click`; `cargo test --lib input`; `cargo test --lib hover`; `cargo test --lib select`; `cargo test --lib fake_backend`; `cargo test --lib commands`; `cargo check --locked`.
 
 ## Notes
 - `snapshot` redesign remains out of scope; only `snapshot.scope.viewport` is in wave.

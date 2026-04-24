@@ -2,6 +2,12 @@ use super::{
     ScreenshotCapture, ScreenshotImageMetrics, ScreenshotRequest, ScreenshotScale,
     ScriptEvaluation, SessionBackend, TabDescriptor,
 };
+use crate::browser::commands::{
+    ActionCommandResult, ActionabilityDiagnostics, ActionabilityElementSummary,
+    ActionabilityPredicate, ActionabilityProbeResult, BrowserCommand, BrowserCommandResult,
+    HoverCommandResult, InputCommandResult, InteractionCommand, InteractionCommandResult,
+    SelectCommandResult, SelectorIdentityProbeResult,
+};
 use crate::contract::{
     ViewportEmulation, ViewportEmulationRequest, ViewportMetrics, ViewportOperationResult,
     ViewportResetRequest,
@@ -214,6 +220,43 @@ impl FakeSessionBackend {
         (css_width, css_height, pixel_scale)
     }
 
+    fn fake_actionability_result(
+        predicates: &[ActionabilityPredicate],
+    ) -> ActionabilityProbeResult {
+        let mut result = ActionabilityProbeResult {
+            present: true,
+            frame_depth: Some(0),
+            diagnostics: Some(ActionabilityDiagnostics {
+                pointer_events: Some("auto".to_string()),
+                hit_target: Some(ActionabilityElementSummary {
+                    tag: "button".to_string(),
+                    id: Some("fake-target".to_string()),
+                    classes: Vec::new(),
+                }),
+                text_length: Some(11),
+                has_value: Some(false),
+            }),
+            ..ActionabilityProbeResult::default()
+        };
+
+        for predicate in predicates {
+            match predicate {
+                ActionabilityPredicate::Present => {}
+                ActionabilityPredicate::Visible => result.visible = Some(true),
+                ActionabilityPredicate::Enabled => result.enabled = Some(true),
+                ActionabilityPredicate::Editable => result.editable = Some(true),
+                ActionabilityPredicate::Stable => result.stable = Some(true),
+                ActionabilityPredicate::ReceivesEvents => result.receives_events = Some(true),
+                ActionabilityPredicate::InViewport => result.in_viewport = Some(true),
+                ActionabilityPredicate::UnobscuredCenter => result.unobscured_center = Some(true),
+                ActionabilityPredicate::TextContains => result.text_contains = Some(true),
+                ActionabilityPredicate::ValueEquals => result.value_equals = Some(true),
+            }
+        }
+
+        result
+    }
+
     fn embedded_config(script: &str) -> Option<Value> {
         let needle = "const config = ";
         let start = script.find(needle)? + needle.len();
@@ -255,49 +298,6 @@ impl FakeSessionBackend {
         }
     }
 
-    fn scripted_actionability(script: &str) -> Option<ScriptEvaluation> {
-        if !script.contains("\"predicates\"") {
-            return None;
-        }
-
-        let config = Self::embedded_config(script)?;
-        let mut payload = serde_json::json!({
-            "present": true,
-            "frame_depth": 0,
-            "diagnostics": {
-                "pointer_events": "auto",
-                "hit_target": {
-                    "tag": "button",
-                    "id": "fake-target",
-                    "classes": []
-                },
-                "text_length": 11,
-                "has_value": false
-            }
-        });
-
-        for predicate in config["predicates"].as_array().into_iter().flatten() {
-            match predicate.as_str() {
-                Some("visible") => payload["visible"] = serde_json::json!(true),
-                Some("enabled") => payload["enabled"] = serde_json::json!(true),
-                Some("editable") => payload["editable"] = serde_json::json!(true),
-                Some("stable") => payload["stable"] = serde_json::json!(true),
-                Some("receives_events") => payload["receives_events"] = serde_json::json!(true),
-                Some("in_viewport") => payload["in_viewport"] = serde_json::json!(true),
-                Some("unobscured_center") => payload["unobscured_center"] = serde_json::json!(true),
-                Some("text_contains") => payload["text_contains"] = serde_json::json!(true),
-                Some("value_equals") => payload["value_equals"] = serde_json::json!(true),
-                _ => {}
-            }
-        }
-
-        Some(ScriptEvaluation {
-            value: Some(Value::String(payload.to_string())),
-            description: None,
-            type_name: Some("String".to_string()),
-        })
-    }
-
     fn scripted_result_with_url(
         &self,
         script: &str,
@@ -316,27 +316,6 @@ impl FakeSessionBackend {
                 value: Some(serde_json::json!(true)),
                 description: None,
                 type_name: Some("Boolean".to_string()),
-            }));
-        }
-
-        if let Some(result) = Self::scripted_actionability(script) {
-            return Some(Ok(result));
-        }
-
-        if script.contains("selectorExistsAcrossScopes") && script.contains("\"present\"") {
-            let present = Self::embedded_config(script)
-                .and_then(|config| {
-                    config["selector"]
-                        .as_str()
-                        .map(|selector| !selector.is_empty())
-                })
-                .unwrap_or(false);
-            return Some(Ok(ScriptEvaluation {
-                value: Some(Value::String(
-                    serde_json::json!({ "present": present }).to_string(),
-                )),
-                description: None,
-                type_name: Some("String".to_string()),
             }));
         }
 
@@ -438,67 +417,6 @@ impl FakeSessionBackend {
                 value: Some(serde_json::json!(0)),
                 description: None,
                 type_name: Some("Number".to_string()),
-            }));
-        }
-
-        if script.contains("const config = ")
-            && script.contains("resolveTargetElement(config)")
-            && script.contains("element.click();")
-        {
-            return Some(Ok(ScriptEvaluation {
-                value: Some(Value::String(
-                    serde_json::json!({ "success": true }).to_string(),
-                )),
-                description: None,
-                type_name: Some("String".to_string()),
-            }));
-        }
-
-        if script.contains("const config = ")
-            && script.contains("resolveTargetElement(config)")
-            && script.contains("Element does not accept text input")
-        {
-            return Some(Ok(ScriptEvaluation {
-                value: Some(Value::String(
-                    serde_json::json!({
-                        "success": true,
-                        "value": "fake text"
-                    })
-                    .to_string(),
-                )),
-                description: None,
-                type_name: Some("String".to_string()),
-            }));
-        }
-
-        if script.contains("MouseEvent(\"mouseover\"") {
-            return Some(Ok(ScriptEvaluation {
-                value: Some(Value::String(
-                    serde_json::json!({
-                        "success": true,
-                        "tagName": "BUTTON",
-                        "id": "fake-target",
-                        "className": "fake"
-                    })
-                    .to_string(),
-                )),
-                description: None,
-                type_name: Some("String".to_string()),
-            }));
-        }
-
-        if script.contains("selectedText") && script.contains("Element is not a SELECT element") {
-            return Some(Ok(ScriptEvaluation {
-                value: Some(Value::String(
-                    serde_json::json!({
-                        "success": true,
-                        "selectedValue": "fake-value",
-                        "selectedText": "Fake option"
-                    })
-                    .to_string(),
-                )),
-                description: None,
-                type_name: Some("String".to_string()),
             }));
         }
 
@@ -663,6 +581,61 @@ impl SessionBackend for FakeSessionBackend {
                     "Fake backend does not support this JavaScript payload yet".to_string(),
                 ))
             })
+    }
+
+    fn execute_command(&self, command: BrowserCommand) -> Result<BrowserCommandResult> {
+        match command {
+            BrowserCommand::ActionabilityProbe(request) => {
+                Ok(BrowserCommandResult::ActionabilityProbe(
+                    Self::fake_actionability_result(&request.predicates),
+                ))
+            }
+            BrowserCommand::SelectorIdentityProbe(request) => Ok(
+                BrowserCommandResult::SelectorIdentityProbe(SelectorIdentityProbeResult {
+                    present: !request.selector.is_empty(),
+                    unique: !request.selector.is_empty(),
+                }),
+            ),
+            BrowserCommand::Interaction(command) => {
+                let result = match command {
+                    InteractionCommand::Click(_) => {
+                        InteractionCommandResult::Click(ActionCommandResult {
+                            success: true,
+                            code: None,
+                            error: None,
+                        })
+                    }
+                    InteractionCommand::Input(_) => {
+                        InteractionCommandResult::Input(InputCommandResult {
+                            success: true,
+                            code: None,
+                            error: None,
+                            value: Some("fake text".to_string()),
+                        })
+                    }
+                    InteractionCommand::Hover(_) => {
+                        InteractionCommandResult::Hover(HoverCommandResult {
+                            success: true,
+                            code: None,
+                            error: None,
+                            tag_name: Some("BUTTON".to_string()),
+                            id: Some("fake-target".to_string()),
+                            class_name: Some("fake".to_string()),
+                        })
+                    }
+                    InteractionCommand::Select(_) => {
+                        InteractionCommandResult::Select(SelectCommandResult {
+                            success: true,
+                            code: None,
+                            error: None,
+                            selected_value: Some("fake-value".to_string()),
+                            selected_text: Some("Fake option".to_string()),
+                        })
+                    }
+                };
+                Ok(BrowserCommandResult::Interaction(result))
+            }
+        }
     }
 
     fn capture_screenshot(&self, _full_page: bool) -> Result<Vec<u8>> {
@@ -842,5 +815,164 @@ impl SessionBackend for FakeSessionBackend {
         }
 
         session_close_result(total_tabs, failures)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::browser::commands::{
+        ActionabilityProbeRequest, InputInteractionRequest, SelectInteractionRequest,
+        SelectorIdentityProbeRequest, TargetedInteractionRequest,
+    };
+
+    #[test]
+    fn fake_backend_actionability_uses_command_predicates() {
+        let backend = FakeSessionBackend::new();
+        let result = backend
+            .execute_command(BrowserCommand::ActionabilityProbe(
+                ActionabilityProbeRequest {
+                    selector: "#fake-target".to_string(),
+                    target_index: None,
+                    predicates: vec![
+                        ActionabilityPredicate::Present,
+                        ActionabilityPredicate::Visible,
+                    ],
+                    expected_text: None,
+                    expected_value: None,
+                },
+            ))
+            .expect("fake backend should execute actionability command");
+
+        let BrowserCommandResult::ActionabilityProbe(result) = result else {
+            panic!("expected actionability command result");
+        };
+        assert!(result.present);
+        assert_eq!(result.visible, Some(true));
+        assert_eq!(result.enabled, None);
+        assert_eq!(result.receives_events, None);
+    }
+
+    #[test]
+    fn fake_backend_selector_identity_uses_selector_command_payload() {
+        let backend = FakeSessionBackend::new();
+        let present = backend
+            .execute_command(BrowserCommand::SelectorIdentityProbe(
+                SelectorIdentityProbeRequest {
+                    selector: "#fake-target".to_string(),
+                },
+            ))
+            .expect("fake backend should execute selector identity command");
+        let absent = backend
+            .execute_command(BrowserCommand::SelectorIdentityProbe(
+                SelectorIdentityProbeRequest {
+                    selector: String::new(),
+                },
+            ))
+            .expect("fake backend should execute empty selector identity command");
+
+        let BrowserCommandResult::SelectorIdentityProbe(present) = present else {
+            panic!("expected selector identity command result");
+        };
+        let BrowserCommandResult::SelectorIdentityProbe(absent) = absent else {
+            panic!("expected selector identity command result");
+        };
+
+        assert!(present.present);
+        assert!(present.unique);
+        assert!(!absent.present);
+        assert!(!absent.unique);
+    }
+
+    #[test]
+    fn fake_backend_interactions_use_typed_command_variants() {
+        let backend = FakeSessionBackend::new();
+        let target = TargetedInteractionRequest {
+            selector: "#fake-target".to_string(),
+            target_index: Some(0),
+        };
+
+        let click = backend
+            .execute_command(BrowserCommand::Interaction(InteractionCommand::Click(
+                target.clone(),
+            )))
+            .expect("fake backend should execute click command");
+        let input = backend
+            .execute_command(BrowserCommand::Interaction(InteractionCommand::Input(
+                InputInteractionRequest {
+                    target: target.clone(),
+                    text: "hello".to_string(),
+                    clear: true,
+                },
+            )))
+            .expect("fake backend should execute input command");
+        let hover = backend
+            .execute_command(BrowserCommand::Interaction(InteractionCommand::Hover(
+                target.clone(),
+            )))
+            .expect("fake backend should execute hover command");
+        let select = backend
+            .execute_command(BrowserCommand::Interaction(InteractionCommand::Select(
+                SelectInteractionRequest {
+                    target,
+                    value: "fake-value".to_string(),
+                },
+            )))
+            .expect("fake backend should execute select command");
+
+        assert!(matches!(
+            click,
+            BrowserCommandResult::Interaction(InteractionCommandResult::Click(
+                ActionCommandResult { success: true, .. }
+            ))
+        ));
+        assert!(matches!(
+            input,
+            BrowserCommandResult::Interaction(InteractionCommandResult::Input(
+                InputCommandResult {
+                    success: true,
+                    value: Some(_),
+                    ..
+                }
+            ))
+        ));
+        assert!(matches!(
+            hover,
+            BrowserCommandResult::Interaction(InteractionCommandResult::Hover(
+                HoverCommandResult {
+                    success: true,
+                    tag_name: Some(_),
+                    ..
+                }
+            ))
+        ));
+        assert!(matches!(
+            select,
+            BrowserCommandResult::Interaction(InteractionCommandResult::Select(
+                SelectCommandResult {
+                    success: true,
+                    selected_value: Some(_),
+                    ..
+                }
+            ))
+        ));
+    }
+
+    #[test]
+    fn fake_backend_no_longer_recognizes_rendered_actionability_script() {
+        let backend = FakeSessionBackend::new();
+        let script = BrowserCommand::ActionabilityProbe(ActionabilityProbeRequest {
+            selector: "#fake-target".to_string(),
+            target_index: None,
+            predicates: vec![ActionabilityPredicate::Present],
+            expected_text: None,
+            expected_value: None,
+        })
+        .render_script();
+
+        let error = backend
+            .evaluate(&script, true)
+            .expect_err("fake backend should not recognize migrated rendered scripts");
+        assert!(matches!(error, BrowserError::EvaluationFailed(_)));
     }
 }

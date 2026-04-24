@@ -4,6 +4,7 @@
 //! It includes configuration options, session management, and browser lifecycle control.
 
 pub(crate) mod backend;
+pub(crate) mod commands;
 mod config;
 mod session;
 

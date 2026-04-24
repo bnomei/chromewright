@@ -1,47 +1,10 @@
 use crate::browser::BrowserSession;
+pub(crate) use crate::browser::commands::{
+    ActionabilityDiagnostics, ActionabilityPredicate, ActionabilityProbeRequest,
+    ActionabilityProbeResult,
+};
+use crate::browser::commands::{BrowserCommand, BrowserCommandResult};
 use crate::error::{BrowserError, Result};
-use crate::tools::browser_kernel::render_browser_kernel_script;
-use serde::{Deserialize, Serialize};
-use std::sync::OnceLock;
-
-const ACTIONABILITY_PROBE_TEMPLATE_JS: &str = include_str!("actionability_probe.js");
-static ACTIONABILITY_PROBE_SHELL: OnceLock<
-    crate::tools::browser_kernel::BrowserKernelTemplateShell,
-> = OnceLock::new();
-
-// T001 stages the broader interaction predicate set here so later tasks can
-// reuse the same probe without introducing a second readiness model.
-#[allow(dead_code)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum ActionabilityPredicate {
-    Present,
-    Visible,
-    Enabled,
-    Editable,
-    Stable,
-    ReceivesEvents,
-    InViewport,
-    UnobscuredCenter,
-    TextContains,
-    ValueEquals,
-}
-
-impl ActionabilityPredicate {
-    pub const fn key(self) -> &'static str {
-        match self {
-            ActionabilityPredicate::Present => "present",
-            ActionabilityPredicate::Visible => "visible",
-            ActionabilityPredicate::Enabled => "enabled",
-            ActionabilityPredicate::Editable => "editable",
-            ActionabilityPredicate::Stable => "stable",
-            ActionabilityPredicate::ReceivesEvents => "receives_events",
-            ActionabilityPredicate::InViewport => "in_viewport",
-            ActionabilityPredicate::UnobscuredCenter => "unobscured_center",
-            ActionabilityPredicate::TextContains => "text_contains",
-            ActionabilityPredicate::ValueEquals => "value_equals",
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 pub(crate) struct ActionabilityRequest<'a> {
@@ -52,99 +15,45 @@ pub(crate) struct ActionabilityRequest<'a> {
     pub expected_value: Option<&'a str>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
-pub(crate) struct ActionabilityProbeResult {
-    pub present: bool,
-    pub visible: Option<bool>,
-    pub enabled: Option<bool>,
-    pub editable: Option<bool>,
-    pub stable: Option<bool>,
-    pub receives_events: Option<bool>,
-    pub in_viewport: Option<bool>,
-    pub unobscured_center: Option<bool>,
-    pub text_contains: Option<bool>,
-    pub value_equals: Option<bool>,
-    pub frame_depth: Option<usize>,
-    pub diagnostics: Option<ActionabilityDiagnostics>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
-pub(crate) struct ActionabilityDiagnostics {
-    pub pointer_events: Option<String>,
-    pub hit_target: Option<ActionabilityElementSummary>,
-    pub text_length: Option<usize>,
-    pub has_value: Option<bool>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
-pub(crate) struct ActionabilityElementSummary {
-    pub tag: String,
-    pub id: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub classes: Vec<String>,
-}
-
-impl ActionabilityProbeResult {
-    pub(crate) fn predicate(&self, predicate: ActionabilityPredicate) -> Option<bool> {
-        match predicate {
-            ActionabilityPredicate::Present => Some(self.present),
-            ActionabilityPredicate::Visible => self.visible,
-            ActionabilityPredicate::Enabled => self.enabled,
-            ActionabilityPredicate::Editable => self.editable,
-            ActionabilityPredicate::Stable => self.stable,
-            ActionabilityPredicate::ReceivesEvents => self.receives_events,
-            ActionabilityPredicate::InViewport => self.in_viewport,
-            ActionabilityPredicate::UnobscuredCenter => self.unobscured_center,
-            ActionabilityPredicate::TextContains => self.text_contains,
-            ActionabilityPredicate::ValueEquals => self.value_equals,
-        }
-    }
-}
-
+#[cfg(test)]
 pub(crate) fn build_actionability_probe_js(request: &ActionabilityRequest<'_>) -> String {
-    let config = serde_json::json!({
-        "selector": request.selector,
-        "target_index": request.target_index,
-        "predicates": request
-            .predicates
-            .iter()
-            .map(|predicate| predicate.key())
-            .collect::<Vec<_>>(),
-        "text": request.expected_text,
-        "value": request.expected_value,
-    });
-
-    render_browser_kernel_script(
-        &ACTIONABILITY_PROBE_SHELL,
-        ACTIONABILITY_PROBE_TEMPLATE_JS,
-        "__ACTIONABILITY_CONFIG__",
-        &config,
-    )
+    BrowserCommand::ActionabilityProbe(command_request(request)).render_script()
 }
 
 pub(crate) fn probe_actionability(
     session: &BrowserSession,
     request: &ActionabilityRequest<'_>,
 ) -> Result<ActionabilityProbeResult> {
-    let js = build_actionability_probe_js(request);
-    let result = session.evaluate(&js, false).map_err(|e| match e {
-        BrowserError::EvaluationFailed(reason) => BrowserError::ToolExecutionFailed {
-            tool: "actionability".to_string(),
-            reason,
-        },
-        other => other,
-    })?;
+    let result = session
+        .execute_command(BrowserCommand::ActionabilityProbe(command_request(request)))
+        .map_err(|e| match e {
+            BrowserError::EvaluationFailed(reason) => BrowserError::ToolExecutionFailed {
+                tool: "actionability".to_string(),
+                reason,
+            },
+            other => other,
+        })?;
 
-    let probe = if let Some(serde_json::Value::String(json_str)) = result.value {
-        serde_json::from_str(&json_str).map_err(BrowserError::from)?
-    } else {
-        serde_json::from_value(result.value.unwrap_or(serde_json::Value::Null))
-            .map_err(BrowserError::from)?
+    let BrowserCommandResult::ActionabilityProbe(probe) = result else {
+        return Err(BrowserError::ToolExecutionFailed {
+            tool: "actionability".to_string(),
+            reason: "Browser command returned an unexpected result for actionability".to_string(),
+        });
     };
 
     validate_probe_payload(request, &probe)?;
 
     Ok(probe)
+}
+
+fn command_request(request: &ActionabilityRequest<'_>) -> ActionabilityProbeRequest {
+    ActionabilityProbeRequest {
+        selector: request.selector.to_string(),
+        target_index: request.target_index,
+        predicates: request.predicates.to_vec(),
+        expected_text: request.expected_text.map(str::to_string),
+        expected_value: request.expected_value.map(str::to_string),
+    }
 }
 
 fn validate_probe_payload(
@@ -339,11 +248,18 @@ mod tests {
         }
 
         fn evaluate(&self, _script: &str, _await_promise: bool) -> Result<ScriptEvaluation> {
-            Ok(ScriptEvaluation {
-                value: Some(self.value.clone()),
-                description: None,
-                type_name: Some("Object".to_string()),
-            })
+            unreachable!("actionability tests use browser commands, not raw evaluate")
+        }
+
+        fn execute_command(&self, command: BrowserCommand) -> Result<BrowserCommandResult> {
+            match command {
+                BrowserCommand::ActionabilityProbe(_) => {
+                    serde_json::from_value::<ActionabilityProbeResult>(self.value.clone())
+                        .map(BrowserCommandResult::ActionabilityProbe)
+                        .map_err(BrowserError::from)
+                }
+                _ => unreachable!("only actionability commands are used in this test"),
+            }
         }
 
         fn capture_screenshot(&self, _full_page: bool) -> Result<Vec<u8>> {

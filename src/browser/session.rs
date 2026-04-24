@@ -5,6 +5,7 @@ use crate::browser::backend::{
 use crate::browser::backend::{
     DEBUG_PORT_END, DEBUG_PORT_START, FakeSessionBackend, build_launch_options, choose_debug_port,
 };
+use crate::browser::commands::{BrowserCommand, BrowserCommandResult};
 #[cfg(test)]
 use crate::browser::config::CHROME_BROWSER_IDLE_TIMEOUT;
 use crate::browser::{ConnectionOptions, LaunchOptions};
@@ -209,6 +210,10 @@ impl BrowserSession {
 
     pub(crate) fn viewport_metrics(&self, tab_id: Option<&str>) -> Result<ViewportMetrics> {
         self.backend.viewport_metrics(tab_id)
+    }
+
+    pub(crate) fn execute_command(&self, command: BrowserCommand) -> Result<BrowserCommandResult> {
+        self.backend.execute_command(command)
     }
 
     #[cfg(test)]

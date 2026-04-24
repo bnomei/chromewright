@@ -1,9 +1,14 @@
+use crate::browser::commands::{
+    BrowserCommand, BrowserCommandResult, InteractionCommand, InteractionCommandResult,
+    SelectInteractionRequest, TargetedInteractionRequest,
+};
 use crate::dom::{Cursor, NodeRef};
 use crate::error::{BrowserError, Result};
+#[cfg(test)]
+use crate::tools::browser_kernel::render_browser_kernel_script;
 use crate::tools::{
     TargetResolution, Tool, ToolContext, ToolResult,
     actionability::ActionabilityPredicate,
-    browser_kernel::render_browser_kernel_script,
     core::PublicTarget,
     core::TargetedActionResult,
     services::interaction::{
@@ -16,9 +21,12 @@ use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
+#[cfg(test)]
 use std::sync::OnceLock;
 
+#[cfg(test)]
 const SELECT_JS: &str = include_str!("select.js");
+#[cfg(test)]
 static SELECT_SHELL: OnceLock<crate::tools::browser_kernel::BrowserKernelTemplateShell> =
     OnceLock::new();
 /// Parameters for the select tool
@@ -145,17 +153,22 @@ impl Tool for SelectTool {
             }
         }
 
-        let select_config = serde_json::json!({
-            "selector": target.selector,
-            "target_index": target.cursor.as_ref().map(|cursor| cursor.index).or(target.index),
-            "value": value,
-        });
-        let select_js = build_select_js(&select_config);
-
         context.record_browser_evaluation();
         let result = context
             .session
-            .evaluate(&select_js, false)
+            .execute_command(BrowserCommand::Interaction(InteractionCommand::Select(
+                SelectInteractionRequest {
+                    target: TargetedInteractionRequest {
+                        selector: target.selector.clone(),
+                        target_index: target
+                            .cursor
+                            .as_ref()
+                            .map(|cursor| cursor.index)
+                            .or(target.index),
+                    },
+                    value: value.clone(),
+                },
+            )))
             .map_err(|e| match e {
                 BrowserError::EvaluationFailed(reason) => BrowserError::ToolExecutionFailed {
                     tool: "select".to_string(),
@@ -163,8 +176,18 @@ impl Tool for SelectTool {
                 },
                 other => other,
             })?;
+        let BrowserCommandResult::Interaction(InteractionCommandResult::Select(select_result)) =
+            result
+        else {
+            return Err(BrowserError::ToolExecutionFailed {
+                tool: "select".to_string(),
+                reason: "Browser command returned an unexpected result for select".to_string(),
+            });
+        };
 
-        match parse_select_result(result.value)? {
+        match parse_select_result(Some(
+            serde_json::to_value(select_result).map_err(BrowserError::from)?,
+        ))? {
             SelectParseResult::Success(selected_text) => {
                 let handoff = build_interaction_handoff(context, &target)?;
                 Ok(context.finish(ToolResult::success_with(SelectOutput {
@@ -193,6 +216,7 @@ impl Tool for SelectTool {
     }
 }
 
+#[cfg(test)]
 fn build_select_js(config: &serde_json::Value) -> String {
     render_browser_kernel_script(&SELECT_SHELL, SELECT_JS, "__SELECT_CONFIG__", config)
 }

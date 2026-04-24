@@ -1,24 +1,32 @@
+use crate::browser::commands::{
+    BrowserCommand, BrowserCommandResult, InputInteractionRequest, InteractionCommand,
+    InteractionCommandResult, TargetedInteractionRequest,
+};
 use crate::dom::{Cursor, NodeRef};
 use crate::error::{BrowserError, Result};
+#[cfg(test)]
+use crate::tools::browser_kernel::render_browser_kernel_script;
 use crate::tools::{
     TargetResolution, Tool, ToolContext, ToolResult,
     actionability::ActionabilityPredicate,
-    browser_kernel::render_browser_kernel_script,
     core::PublicTarget,
     core::TargetedActionResult,
     services::interaction::{
         ActionabilityWaitState, DEFAULT_ACTIONABILITY_TIMEOUT_MS, build_actionability_failure,
-        build_interaction_failure, build_interaction_handoff, decode_action_result,
-        resolve_interaction_target, wait_for_actionability,
+        build_interaction_failure, build_interaction_handoff, resolve_interaction_target,
+        wait_for_actionability,
     },
 };
 use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
+#[cfg(test)]
 use std::sync::OnceLock;
 
+#[cfg(test)]
 const INPUT_JS: &str = include_str!("input.js");
+#[cfg(test)]
 static INPUT_SHELL: OnceLock<crate::tools::browser_kernel::BrowserKernelTemplateShell> =
     OnceLock::new();
 
@@ -153,17 +161,23 @@ impl Tool for InputTool {
             }
         }
 
-        let input_config = serde_json::json!({
-            "selector": target.selector,
-            "target_index": target.cursor.as_ref().map(|cursor| cursor.index).or(target.index),
-            "text": text,
-            "clear": clear,
-        });
-        let input_js = build_input_js(&input_config);
         context.record_browser_evaluation();
         let result = context
             .session
-            .evaluate(&input_js, false)
+            .execute_command(BrowserCommand::Interaction(InteractionCommand::Input(
+                InputInteractionRequest {
+                    target: TargetedInteractionRequest {
+                        selector: target.selector.clone(),
+                        target_index: target
+                            .cursor
+                            .as_ref()
+                            .map(|cursor| cursor.index)
+                            .or(target.index),
+                    },
+                    text: text.clone(),
+                    clear,
+                },
+            )))
             .map_err(|e| match e {
                 BrowserError::EvaluationFailed(reason) => BrowserError::ToolExecutionFailed {
                     tool: "input".to_string(),
@@ -171,14 +185,15 @@ impl Tool for InputTool {
                 },
                 other => other,
             })?;
-        let action_result = decode_action_result(
-            result.value,
-            serde_json::json!({
-                "success": false,
-                "code": "target_detached",
-                "error": "Element is no longer present"
-            }),
-        )?;
+        let BrowserCommandResult::Interaction(InteractionCommandResult::Input(action_result)) =
+            result
+        else {
+            return Err(BrowserError::ToolExecutionFailed {
+                tool: "input".to_string(),
+                reason: "Browser command returned an unexpected result for input".to_string(),
+            });
+        };
+        let action_result = serde_json::to_value(action_result).map_err(BrowserError::from)?;
 
         if action_result["success"].as_bool() != Some(true) {
             return build_interaction_failure(
@@ -214,6 +229,7 @@ impl Tool for InputTool {
     }
 }
 
+#[cfg(test)]
 fn build_input_js(config: &serde_json::Value) -> String {
     render_browser_kernel_script(&INPUT_SHELL, INPUT_JS, "__INPUT_CONFIG__", config)
 }
