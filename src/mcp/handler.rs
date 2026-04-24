@@ -69,6 +69,36 @@ impl BrowserServer {
             .map(tool_descriptor_to_mcp)
             .collect()
     }
+
+    pub(crate) fn execute_tool_sync(
+        &self,
+        request: CallToolRequestParams,
+    ) -> Result<CallToolResult, McpError> {
+        let mut context = crate::tools::ToolContext::new(self.session());
+        let params = request
+            .arguments
+            .map(serde_json::Value::Object)
+            .unwrap_or_else(|| serde_json::json!({}));
+
+        match self
+            .session()
+            .tool_registry()
+            .execute(request.name.as_ref(), params, &mut context)
+        {
+            Ok(result) => convert_result(result),
+            Err(error) => Err(mcp_internal_error(error)),
+        }
+    }
+}
+
+#[cfg(feature = "tokio")]
+fn join_blocking_tool_result(
+    result: std::result::Result<Result<CallToolResult, McpError>, tokio::task::JoinError>,
+) -> Result<CallToolResult, McpError> {
+    match result {
+        Ok(result) => result,
+        Err(error) => Err(mcp_internal_error(error)),
+    }
 }
 
 fn tool_descriptor_to_mcp(descriptor: ToolDescriptor) -> McpTool {
@@ -105,22 +135,20 @@ impl ServerHandler for BrowserServer {
         request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<CallToolResult, McpError>> + Send + '_ {
-        future::ready({
-            let mut context = crate::tools::ToolContext::new(self.session());
-            let params = request
-                .arguments
-                .map(serde_json::Value::Object)
-                .unwrap_or_else(|| serde_json::json!({}));
-
-            match self.session().tool_registry().execute(
-                request.name.as_ref(),
-                params,
-                &mut context,
-            ) {
-                Ok(result) => convert_result(result),
-                Err(error) => Err(mcp_internal_error(error)),
+        #[cfg(feature = "tokio")]
+        {
+            let server = self.clone();
+            async move {
+                join_blocking_tool_result(
+                    tokio::task::spawn_blocking(move || server.execute_tool_sync(request)).await,
+                )
             }
-        })
+        }
+
+        #[cfg(not(feature = "tokio"))]
+        {
+            future::ready(self.execute_tool_sync(request))
+        }
     }
 
     fn list_tools(
@@ -143,7 +171,26 @@ fn server_info() -> ServerInfo {
 
 #[cfg(test)]
 mod tests {
-    use super::server_info;
+    #[cfg(feature = "tokio")]
+    use super::join_blocking_tool_result;
+    use super::{BrowserServer, server_info};
+    use crate::browser::BrowserSession;
+    use crate::browser::backend::FakeSessionBackend;
+    use rmcp::model::CallToolRequestParams;
+    #[cfg(feature = "tokio")]
+    use serde_json::json;
+
+    fn call_tool_request(
+        name: &'static str,
+        arguments: Option<serde_json::Map<String, serde_json::Value>>,
+    ) -> CallToolRequestParams {
+        let request = CallToolRequestParams::new(name);
+        if let Some(arguments) = arguments {
+            request.with_arguments(arguments)
+        } else {
+            request
+        }
+    }
 
     #[test]
     fn test_server_info_enables_tools_and_instructions() {
@@ -156,5 +203,74 @@ mod tests {
                 .contains("chromewright MCP server")
         );
         assert!(info.capabilities.tools.is_some());
+    }
+
+    #[test]
+    fn execute_tool_sync_converts_success_results() {
+        let server = BrowserServer::from_session(BrowserSession::with_test_backend(
+            FakeSessionBackend::new(),
+        ));
+        let result = server
+            .execute_tool_sync(call_tool_request("tab_list", None))
+            .expect("tab_list should execute");
+
+        assert_eq!(result.is_error, Some(false));
+        assert_eq!(
+            result
+                .structured_content
+                .as_ref()
+                .and_then(|content| content.get("count"))
+                .and_then(|count| count.as_u64()),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn execute_tool_sync_preserves_tool_local_failures() {
+        let server = BrowserServer::from_session(BrowserSession::with_test_backend(
+            FakeSessionBackend::new(),
+        ));
+        let result = server
+            .execute_tool_sync(call_tool_request("missing_tool", None))
+            .expect("tool-local failures should convert to CallToolResult");
+
+        assert_eq!(result.is_error, Some(true));
+        assert_eq!(
+            result
+                .structured_content
+                .as_ref()
+                .and_then(|content| content.get("code"))
+                .and_then(|code| code.as_str()),
+            Some("tool_error")
+        );
+    }
+
+    #[test]
+    fn list_mcp_tools_uses_metadata_without_tool_execution() {
+        let server = BrowserServer::from_session(BrowserSession::with_test_backend(
+            FakeSessionBackend::new(),
+        ));
+        let tools = server.list_mcp_tools();
+
+        assert!(tools.iter().any(|tool| tool.name.as_ref() == "snapshot"));
+    }
+
+    #[cfg(feature = "tokio")]
+    #[tokio::test]
+    async fn blocking_join_failure_maps_to_internal_mcp_error() {
+        let joined = tokio::task::spawn_blocking(|| {
+            panic!("simulated blocking executor panic");
+            #[allow(unreachable_code)]
+            Ok(rmcp::model::CallToolResult::structured(json!({})))
+        })
+        .await;
+
+        let error = join_blocking_tool_result(joined)
+            .expect_err("blocking executor panic should map to MCP error");
+        assert!(
+            error
+                .to_string()
+                .contains("simulated blocking executor panic")
+        );
     }
 }

@@ -1,6 +1,6 @@
 # Program handoff
 
-Last updated: 2026-04-24T10:54:47Z
+Last updated: 2026-04-24T10:58:54Z
 
 ## Current focus
 - Implement all open active/planned spec tasks end to end, committing after each successful spec.
@@ -35,6 +35,9 @@ Last updated: 2026-04-24T10:54:47Z
 - `viewport-metrics-backend-api` committed as `20994e4`.
 - `typed-browser-error-taxonomy` completed and ready for commit.
   - Evidence: `cargo test --lib page_target`; `cargo test --lib structured_failure`; `cargo test --lib backend_unsupported`; `cargo test --lib attach_session`; `cargo test --lib mcp`; `cargo check --locked`.
+- `typed-browser-error-taxonomy` committed as `315e892`.
+- `mcp-blocking-execution-boundary` completed and ready for commit.
+  - Evidence: `cargo check --locked --no-default-features`; `cargo check --locked --no-default-features --features mcp-handler`; `cargo check --locked --features mcp-server`; `cargo test --lib mcp`; `cargo test --bin chromewright`.
 
 ## Notes
 - `snapshot` redesign remains out of scope; only `snapshot.scope.viewport` is in wave.
