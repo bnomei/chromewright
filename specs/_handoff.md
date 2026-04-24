@@ -1,9 +1,9 @@
 # Program handoff
 
-Last updated: 2026-04-24T11:24:56Z
+Last updated: 2026-04-24T11:33:41Z
 
 ## Current focus
-- Implement all open active/planned spec tasks end to end, committing after each successful spec.
+- All active/planned spec tasks completed and committed.
 - Execution mode: adaptive (cap: 2, bundle depth: 1; currently using strict-by-spec commits for overlapping code scopes)
 
 ## Reservations (in progress scopes)
@@ -19,7 +19,7 @@ Last updated: 2026-04-24T11:24:56Z
 - (none)
 
 ## Next ready tasks
-- `snapshot-projector-extraction/T001` after typed browser command layer commit lands.
+- (none)
 
 ## Completed this cycle
 - `headless-chrome-cdp-contract-pin` completed and ready for commit.
@@ -42,6 +42,9 @@ Last updated: 2026-04-24T11:24:56Z
 - `contract-domain-extraction` committed as `71a1bea`.
 - `typed-browser-command-layer` completed and ready for commit.
   - Evidence: `cargo test --lib actionability`; `cargo test --lib interaction`; `cargo test --lib click`; `cargo test --lib input`; `cargo test --lib hover`; `cargo test --lib select`; `cargo test --lib fake_backend`; `cargo test --lib commands`; `cargo check --locked`.
+- `typed-browser-command-layer` committed as `452804c`.
+- `snapshot-projector-extraction` completed and included in the final spec commit.
+  - Evidence: `cargo test --lib snapshot_projection`; `cargo test --lib build_document_envelope_viewport_mode_scopes_snapshot_handles`; `cargo test --lib build_document_envelope_full_mode_preserves_exhaustive_snapshot_handles`; `cargo test --lib build_document_envelope_delta_mode_falls_back_to_viewport_without_base`; `cargo test --lib test_snapshot_schema_exposes_mode_and_scope_contract`; `cargo test --lib build_document_envelope_delta_mode`; `cargo check --locked`.
 
 ## Notes
 - `snapshot` redesign remains out of scope; only `snapshot.scope.viewport` is in wave.
