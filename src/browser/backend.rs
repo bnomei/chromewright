@@ -17,7 +17,7 @@ pub(crate) const ATTACH_PAGE_TARGET_LOST_CODE: &str = "attach_page_target_lost";
 pub(crate) const ATTACH_SESSION_PAGE_TARGET_LOSS_KIND: &str = "page_target_lost";
 const ATTACH_SESSION_DEGRADED_REASON_PREFIX: &str = "chromewright:attach-session-degraded:";
 const ATTACH_SESSION_RECOVERY_HINT: &str = "Run tab_list, then switch_tab to reacquire an active page target. If page actions still fail, reconnect the attach session and rerun snapshot.";
-const VIEWPORT_DIMENSION_MAX: u32 = 10_000_000;
+pub(crate) const VIEWPORT_DIMENSION_MAX: u32 = 10_000_000;
 static DEBUG_PORT_COUNTER: AtomicU16 = AtomicU16::new(DEBUG_PORT_START);
 
 fn session_close_result(total_tabs: usize, failures: Vec<String>) -> Result<()> {

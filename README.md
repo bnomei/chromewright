@@ -186,7 +186,7 @@ Chromewright also carries a few small but important contract details:
   - `inspect_node`: `{ "target": { "kind": "selector", "selector": "h1" } }`
   - `click`: `{ "target": { "kind": "cursor", "cursor": <snapshot cursor> } }`
 - `screenshot` is part of the default surface and uses `mode` plus optional `scale` instead of legacy `full_page = true`; successful calls return managed artifact metadata including `artifact_uri`, `artifact_path`, `mime_type`, `byte_count`, image dimensions, CSS dimensions, DPR metadata, `revealed_from_offscreen`, and optional `clip`.
-- `set_viewport` is part of the default surface and uses CDP emulation instead of resizing the OS window; pass `reset = true` to clear emulation, and read the live scoped metrics back from `viewport_after` or `snapshot.scope.viewport`.
+- `set_viewport` is part of the default surface and uses CDP emulation instead of resizing the OS window; width and height must be positive bounded CSS pixels, `device_scale_factor` must be greater than zero, and `reset = true` only accepts `tab_id`. Read the live scoped metrics back from `viewport_after` or `snapshot.scope.viewport`.
 - `switch_tab` accepts stable `tab_id` only on the public MCP surface.
 - Structured tool-local failures use one top-level family: `code`, `error`, optional `document`, optional `target`, optional `recovery`, and optional `details`.
 - `extract` uses `code = element_not_found` for selector misses and reserves `code = invalid_extract_payload` for malformed extraction results.

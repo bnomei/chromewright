@@ -77,7 +77,7 @@ pub(crate) use core::{
 mod tests {
     use super::*;
     use crate::browser::BrowserSession;
-    use crate::browser::backend::FakeSessionBackend;
+    use crate::browser::backend::{FakeSessionBackend, VIEWPORT_DIMENSION_MAX};
     use crate::dom::{AriaChild, AriaNode, DomTree};
     use crate::error::BrowserError;
     use serde_json::Value;
@@ -241,6 +241,16 @@ mod tests {
         assert!(params.get("orientation").is_some());
         assert!(params.get("tab_id").is_some());
         assert!(params.get("reset").is_some());
+        assert_schema_number(&params["width"], "minimum", 1.0);
+        assert_schema_number(&params["width"], "maximum", VIEWPORT_DIMENSION_MAX as f64);
+        assert_schema_number(&params["height"], "minimum", 1.0);
+        assert_schema_number(&params["height"], "maximum", VIEWPORT_DIMENSION_MAX as f64);
+        assert_schema_number(&params["device_scale_factor"], "exclusiveMinimum", 0.0);
+        assert!(
+            schema_contains_text(&params["reset"], "only tab_id"),
+            "reset schema should document reset-only semantics: {}",
+            params["reset"]
+        );
 
         let output = &descriptor.output_schema["properties"];
         assert!(output.get("tab_id").is_some());
@@ -248,6 +258,41 @@ mod tests {
         assert!(output.get("emulation").is_some());
         assert!(output.get("viewport_after").is_some());
         assert!(output.get("message").is_some());
+    }
+
+    fn assert_schema_number(schema: &Value, key: &str, expected: f64) {
+        assert!(
+            schema_has_number(schema, key, expected),
+            "schema should contain {key}={expected}: {schema}"
+        );
+    }
+
+    fn schema_has_number(schema: &Value, key: &str, expected: f64) -> bool {
+        schema
+            .get(key)
+            .and_then(Value::as_f64)
+            .is_some_and(|actual| (actual - expected).abs() < f64::EPSILON)
+            || ["anyOf", "oneOf", "allOf"].iter().any(|nested_key| {
+                schema
+                    .get(*nested_key)
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .any(|nested| schema_has_number(nested, key, expected))
+            })
+    }
+
+    fn schema_contains_text(schema: &Value, needle: &str) -> bool {
+        match schema {
+            Value::String(text) => text.contains(needle),
+            Value::Array(values) => values
+                .iter()
+                .any(|value| schema_contains_text(value, needle)),
+            Value::Object(object) => object
+                .values()
+                .any(|value| schema_contains_text(value, needle)),
+            _ => false,
+        }
     }
 
     #[test]

@@ -1,3 +1,4 @@
+use crate::browser::backend::VIEWPORT_DIMENSION_MAX;
 use crate::browser::{
     ViewportEmulation, ViewportEmulationRequest, ViewportMetrics, ViewportOperationResult,
     ViewportOrientation, ViewportResetRequest,
@@ -7,28 +8,82 @@ use crate::tools::{
     DocumentActionResult, DocumentEnvelopeOptions, Tool, ToolContext, ToolResult,
     build_document_envelope,
 };
-use schemars::JsonSchema;
+use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct SetViewportParams {
+    /// Viewport width in CSS pixels. Required unless reset is true.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub width: Option<u32>,
+    /// Viewport height in CSS pixels. Required unless reset is true.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub height: Option<u32>,
+    /// Device scale factor; must be a finite number greater than zero.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub device_scale_factor: Option<f64>,
+    /// Simulate a mobile viewport.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mobile: Option<bool>,
+    /// Enable touch emulation.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub touch: Option<bool>,
+    /// Optional screen orientation for the emulated viewport.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub orientation: Option<ViewportOrientation>,
+    /// Optional stable tab identifier. Omit to target the active tab.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tab_id: Option<String>,
+    /// Reset viewport emulation. When true, only tab_id may also be supplied; omit width, height,
+    /// device_scale_factor, mobile, touch, and orientation.
     #[serde(default)]
     pub reset: bool,
+}
+
+impl JsonSchema for SetViewportParams {
+    fn schema_name() -> Cow<'static, str> {
+        "SetViewportParams".into()
+    }
+
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        #[derive(JsonSchema)]
+        #[serde(deny_unknown_fields)]
+        #[allow(dead_code)]
+        struct SetViewportParamsSchema {
+            /// Viewport width in CSS pixels. Required unless reset is true.
+            #[schemars(range(min = 1, max = VIEWPORT_DIMENSION_MAX))]
+            #[serde(skip_serializing_if = "Option::is_none")]
+            width: Option<u32>,
+            /// Viewport height in CSS pixels. Required unless reset is true.
+            #[schemars(range(min = 1, max = VIEWPORT_DIMENSION_MAX))]
+            #[serde(skip_serializing_if = "Option::is_none")]
+            height: Option<u32>,
+            /// Device scale factor; must be a finite number greater than zero.
+            #[schemars(extend("exclusiveMinimum" = 0.0))]
+            #[serde(skip_serializing_if = "Option::is_none")]
+            device_scale_factor: Option<f64>,
+            /// Simulate a mobile viewport.
+            #[serde(skip_serializing_if = "Option::is_none")]
+            mobile: Option<bool>,
+            /// Enable touch emulation.
+            #[serde(skip_serializing_if = "Option::is_none")]
+            touch: Option<bool>,
+            /// Optional screen orientation for the emulated viewport.
+            #[serde(skip_serializing_if = "Option::is_none")]
+            orientation: Option<ViewportOrientation>,
+            /// Optional stable tab identifier. Omit to target the active tab.
+            #[serde(skip_serializing_if = "Option::is_none")]
+            tab_id: Option<String>,
+            /// Reset viewport emulation. When true, only tab_id may also be supplied; omit width,
+            /// height, device_scale_factor, mobile, touch, and orientation.
+            #[serde(default)]
+            reset: bool,
+        }
+
+        SetViewportParamsSchema::json_schema(generator)
+    }
 }
 
 #[derive(Default)]
@@ -60,7 +115,7 @@ impl Tool for SetViewportTool {
     }
 
     fn description(&self) -> &str {
-        "Simulate per-tab breakpoints. width/height or reset; returns live viewport_after."
+        "Simulate per-tab breakpoints. width/height or reset-only; returns live viewport_after."
     }
 
     fn execute_typed(
