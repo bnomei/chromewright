@@ -1350,7 +1350,7 @@ impl SessionBackend for ChromeSessionBackend {
                         "Failed to clear viewport emulation: {e}"
                     ))
                 })?;
-            tab.call_method(set_touch_emulation(false, Some(0)))
+            tab.call_method(set_touch_emulation(false, None))
                 .map_err(|e| {
                     BrowserError::TabOperationFailed(format!(
                         "Failed to disable touch emulation: {e}"
@@ -1630,6 +1630,14 @@ mod tests {
         assert_eq!(metrics.scroll_width, 1200.0);
         assert_eq!(metrics.scroll_height, 2400.0);
         assert_eq!(metrics.device_pixel_ratio, 1.5);
+    }
+
+    #[test]
+    fn disabled_touch_emulation_omits_max_touch_points() {
+        let method = set_touch_emulation(false, None);
+
+        assert!(!method.enabled);
+        assert_eq!(method.max_touch_points, None);
     }
 
     #[test]
