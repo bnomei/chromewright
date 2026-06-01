@@ -233,6 +233,12 @@ pub(crate) enum TargetResolution {
     Failure(ToolResult),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StaleCursorPolicy {
+    AllowRebind,
+    DenyRebind,
+}
+
 fn default_target_resolution_status() -> String {
     "exact".to_string()
 }
@@ -310,6 +316,7 @@ fn stale_node_ref_failure(
     current: &DocumentMetadata,
     selector: Option<&str>,
     recovered_from: TargetRecoveredFrom,
+    selector_rebound_attempted: bool,
 ) -> ToolResult {
     let selector = selector.filter(|selector| !selector.is_empty());
     structured_tool_failure(
@@ -326,7 +333,7 @@ fn stale_node_ref_failure(
             "resolution": {
                 "status": "unrecoverable_stale",
                 "recovered_from": recovered_from,
-                "selector_rebound_attempted": selector.is_some(),
+                "selector_rebound_attempted": selector_rebound_attempted,
             },
         })),
     )
@@ -339,6 +346,7 @@ pub(crate) fn resolve_target_with_cursor(
     node_ref: Option<NodeRef>,
     cursor: Option<Cursor>,
     dom: Option<&DomTree>,
+    stale_cursor_policy: StaleCursorPolicy,
 ) -> Result<TargetResolution> {
     let target_count = usize::from(selector.is_some())
         + usize::from(index.is_some())
@@ -400,6 +408,7 @@ pub(crate) fn resolve_target_with_cursor(
                     &dom.document,
                     None,
                     TargetRecoveredFrom::NodeRef,
+                    false,
                 )));
             }
 
@@ -428,7 +437,9 @@ pub(crate) fn resolve_target_with_cursor(
             if cursor_input.node_ref.document_id != dom.document.document_id
                 || cursor_input.node_ref.revision != dom.document.revision
             {
-                if !cursor_input.selector.is_empty()
+                let selector = Some(cursor_input.selector.as_str());
+                if stale_cursor_policy == StaleCursorPolicy::AllowRebind
+                    && !cursor_input.selector.is_empty()
                     && let Some(cursor) =
                         actionable_cursor_for_selector(dom, &cursor_input.selector)
                 {
@@ -447,8 +458,10 @@ pub(crate) fn resolve_target_with_cursor(
                 return Ok(TargetResolution::Failure(stale_node_ref_failure(
                     &cursor_input.node_ref,
                     &dom.document,
-                    Some(cursor_input.selector.as_str()),
+                    selector,
                     TargetRecoveredFrom::Cursor,
+                    stale_cursor_policy == StaleCursorPolicy::AllowRebind
+                        && !cursor_input.selector.is_empty(),
                 )));
             }
 
@@ -1293,14 +1306,21 @@ mod tests {
     }
 
     #[test]
-    fn resolve_target_with_cursor_rebinds_stale_cursor_via_selector() {
+    fn resolve_target_with_cursor_rebinds_stale_cursor_via_selector_when_allowed() {
         let dom = sample_dom();
         let mut stale_cursor = dom.cursor_for_index(1).expect("cursor should exist");
         stale_cursor.node_ref.revision = "main:0".to_string();
 
-        let result =
-            resolve_target_with_cursor("click", None, None, None, Some(stale_cursor), Some(&dom))
-                .expect("stale cursor should resolve via selector rebound");
+        let result = resolve_target_with_cursor(
+            "inspect_node",
+            None,
+            None,
+            None,
+            Some(stale_cursor),
+            Some(&dom),
+            StaleCursorPolicy::AllowRebind,
+        )
+        .expect("stale cursor should resolve via selector rebound");
 
         match result {
             TargetResolution::Resolved(target) => {
@@ -1324,6 +1344,56 @@ mod tests {
                 assert_eq!(envelope.recovered_from.as_deref(), Some("cursor"));
             }
             TargetResolution::Failure(failure) => panic!("unexpected failure: {:?}", failure),
+        }
+    }
+
+    #[test]
+    fn resolve_target_with_cursor_rejects_stale_cursor_when_rebind_denied() {
+        let dom = sample_dom();
+        let mut stale_cursor = dom.cursor_for_index(1).expect("cursor should exist");
+        stale_cursor.node_ref.revision = "main:0".to_string();
+
+        let result = resolve_target_with_cursor(
+            "click",
+            None,
+            None,
+            None,
+            Some(stale_cursor),
+            Some(&dom),
+            StaleCursorPolicy::DenyRebind,
+        )
+        .expect("stale cursor should become a structured tool failure");
+
+        match result {
+            TargetResolution::Failure(failure) => {
+                let data = failure
+                    .data
+                    .expect("stale cursor failure should include structured data");
+                assert_eq!(data["code"].as_str(), Some("stale_node_ref"));
+                assert_eq!(
+                    data["details"]["resolution"]["status"].as_str(),
+                    Some("unrecoverable_stale")
+                );
+                assert_eq!(
+                    data["details"]["resolution"]["recovered_from"].as_str(),
+                    Some("cursor")
+                );
+                assert_eq!(
+                    data["details"]["resolution"]["selector_rebound_attempted"].as_bool(),
+                    Some(false)
+                );
+                assert_eq!(
+                    data["recovery"]["suggested_tool"].as_str(),
+                    Some("snapshot")
+                );
+                assert_eq!(
+                    data["recovery"]["suggested_selector"].as_str(),
+                    Some("#submit")
+                );
+            }
+            TargetResolution::Resolved(target) => {
+                panic!("unexpected resolved stale cursor target: {target:?}")
+            }
         }
     }
 

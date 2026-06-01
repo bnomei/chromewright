@@ -7,7 +7,7 @@ use crate::dom::{Cursor, DocumentMetadata, DomTree, NodeRef};
 use crate::error::{BrowserError, Result};
 use crate::tools::core::structured_tool_failure;
 use crate::tools::{
-    ResolvedTarget, TargetEnvelope, TargetResolution, ToolContext, ToolResult,
+    ResolvedTarget, StaleCursorPolicy, TargetEnvelope, TargetResolution, ToolContext, ToolResult,
     actionability::{
         ActionabilityDiagnostics, ActionabilityPredicate, ActionabilityProbeResult,
         ActionabilityRequest, probe_actionability,
@@ -46,7 +46,15 @@ pub(crate) fn resolve_interaction_target(
     context: &mut ToolContext,
 ) -> Result<TargetResolution> {
     let dom = Some(context.get_dom()?);
-    resolve_target_with_cursor(tool, selector, index, node_ref, cursor, dom)
+    resolve_target_with_cursor(
+        tool,
+        selector,
+        index,
+        node_ref,
+        cursor,
+        dom,
+        StaleCursorPolicy::DenyRebind,
+    )
 }
 
 pub(crate) fn wait_for_actionability(
@@ -443,8 +451,8 @@ mod tests {
     use super::*;
     use crate::browser::BrowserSession;
     use crate::browser::backend::{ScriptEvaluation, SessionBackend, TabDescriptor};
+    use crate::dom::{AriaChild, AriaNode, DocumentMetadata, DomTree};
     use crate::tools::core::{TargetRecoveredFrom, encode_selector_rebound_method};
-    use crate::{dom::DocumentMetadata, dom::DomTree};
     use serde_json::Value;
     use std::time::Duration;
 
@@ -542,6 +550,69 @@ mod tests {
 
         fn close(&self) -> Result<()> {
             unreachable!("close is not used in this test")
+        }
+    }
+
+    fn sample_dom() -> DomTree {
+        let root = AriaNode::fragment().with_child(AriaChild::Node(Box::new(
+            AriaNode::new("button", "Save")
+                .with_index(0)
+                .with_box(true, Some("pointer".to_string())),
+        )));
+        let mut dom = DomTree::new(root);
+        dom.document.document_id = "doc-1".to_string();
+        dom.document.revision = "rev-2".to_string();
+        dom.replace_selectors(vec!["#save".to_string()]);
+        dom
+    }
+
+    #[test]
+    fn test_resolve_interaction_target_rejects_stale_cursor_for_action_tools() {
+        let dom = sample_dom();
+        let mut stale_cursor = dom.cursor_for_index(0).expect("cursor should exist");
+        stale_cursor.node_ref.revision = "rev-1".to_string();
+
+        for tool in ["click", "input", "select", "hover", "wait"] {
+            let session =
+                BrowserSession::with_test_backend(StaticInteractionBackend { value: Value::Null });
+            let mut context = ToolContext::with_dom(&session, dom.clone());
+            let result = resolve_interaction_target(
+                tool,
+                None,
+                None,
+                None,
+                Some(stale_cursor.clone()),
+                &mut context,
+            )
+            .expect("stale cursor should become a structured tool failure");
+
+            match result {
+                TargetResolution::Failure(failure) => {
+                    let data = failure
+                        .data
+                        .expect("stale cursor failure should include structured data");
+                    assert_eq!(data["code"].as_str(), Some("stale_node_ref"));
+                    assert_eq!(
+                        data["details"]["resolution"]["recovered_from"].as_str(),
+                        Some("cursor")
+                    );
+                    assert_eq!(
+                        data["details"]["resolution"]["selector_rebound_attempted"].as_bool(),
+                        Some(false)
+                    );
+                    assert_eq!(
+                        data["recovery"]["suggested_tool"].as_str(),
+                        Some("snapshot")
+                    );
+                    assert_eq!(
+                        data["recovery"]["suggested_selector"].as_str(),
+                        Some("#save")
+                    );
+                }
+                TargetResolution::Resolved(target) => {
+                    panic!("{tool} unexpectedly resolved stale cursor target: {target:?}")
+                }
+            }
         }
     }
 

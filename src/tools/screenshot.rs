@@ -5,7 +5,8 @@ use crate::browser::{
 };
 use crate::error::{BrowserError, Result};
 use crate::tools::core::{
-    PublicTarget, TargetResolution, resolve_target_with_cursor, structured_tool_failure,
+    PublicTarget, StaleCursorPolicy, TargetResolution, resolve_target_with_cursor,
+    structured_tool_failure,
 };
 use crate::tools::inspect_node::{
     InspectBoundingBox, InspectLayout, InspectNodeProbePayload, build_inspect_node_js,
@@ -327,6 +328,7 @@ fn inspect_element_target(
                 None,
                 cursor,
                 Some(&dom),
+                StaleCursorPolicy::DenyRebind,
             )? {
                 TargetResolution::Resolved(target) => target,
                 TargetResolution::Failure(failure) => {
@@ -336,8 +338,15 @@ fn inspect_element_target(
         }
         None => {
             let dom = context.get_dom()?;
-            match resolve_target_with_cursor("screenshot", selector, None, None, cursor, Some(dom))?
-            {
+            match resolve_target_with_cursor(
+                "screenshot",
+                selector,
+                None,
+                None,
+                cursor,
+                Some(dom),
+                StaleCursorPolicy::DenyRebind,
+            )? {
                 TargetResolution::Resolved(target) => target,
                 TargetResolution::Failure(failure) => {
                     return Ok(CapturePreparation::Failure(failure));
@@ -842,6 +851,45 @@ mod tests {
         assert_eq!(data["device_pixel_ratio"].as_f64(), Some(2.0));
         assert_eq!(data["pixel_scale"].as_f64(), Some(2.0));
         assert_eq!(data["revealed_from_offscreen"].as_bool(), Some(false));
+    }
+
+    #[test]
+    fn test_screenshot_tool_rejects_stale_cursor_for_element_mode() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        let dom = session.extract_dom().expect("fake DOM should extract");
+        let mut stale_cursor = dom.cursor_for_index(0).expect("cursor should exist");
+        stale_cursor.node_ref.revision = "fake:0".to_string();
+        let tool = ScreenshotTool;
+        let mut context = ToolContext::with_dom(&session, dom);
+
+        let result = tool
+            .execute_typed(
+                ScreenshotParams {
+                    mode: ScreenshotMode::Element,
+                    scale: ScreenshotScale::Device,
+                    tab_id: None,
+                    target: Some(PublicTarget::Cursor {
+                        cursor: stale_cursor,
+                    }),
+                    region: None,
+                },
+                &mut context,
+            )
+            .expect("stale cursor should stay a tool failure");
+
+        assert!(!result.success);
+        let data = result
+            .data
+            .expect("stale cursor failure should include details");
+        assert_eq!(data["code"].as_str(), Some("stale_node_ref"));
+        assert_eq!(
+            data["details"]["resolution"]["recovered_from"].as_str(),
+            Some("cursor")
+        );
+        assert_eq!(
+            data["details"]["resolution"]["selector_rebound_attempted"].as_bool(),
+            Some(false)
+        );
     }
 
     #[test]

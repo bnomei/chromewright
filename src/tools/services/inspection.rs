@@ -7,8 +7,8 @@ use crate::tools::inspect_node::{
     build_inspect_node_js, decode_probe_payload,
 };
 use crate::tools::{
-    DocumentActionResult, DocumentEnvelopeOptions, TargetResolution, ToolContext, ToolResult,
-    build_document_envelope, resolve_target_with_cursor,
+    DocumentActionResult, DocumentEnvelopeOptions, StaleCursorPolicy, TargetResolution,
+    ToolContext, ToolResult, build_document_envelope, resolve_target_with_cursor,
 };
 use std::collections::BTreeSet;
 
@@ -164,6 +164,7 @@ pub(crate) fn execute_inspect_node(
             node_ref,
             cursor,
             Some(dom),
+            StaleCursorPolicy::AllowRebind,
         )? {
             TargetResolution::Resolved(target) => target,
             TargetResolution::Failure(failure) => return Ok(context.finish(failure)),

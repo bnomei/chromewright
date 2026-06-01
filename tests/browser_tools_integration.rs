@@ -650,7 +650,7 @@ fn test_screenshot_tool_captures_heading_and_image_targets() {
 
 #[test]
 #[ignore]
-fn test_screenshot_tool_rebinds_stale_cursor_for_element_capture() {
+fn test_screenshot_tool_rejects_stale_cursor_for_element_capture() {
     let Some(browser) = common::browser_or_skip() else {
         return;
     };
@@ -683,7 +683,7 @@ fn test_screenshot_tool_rebinds_stale_cursor_for_element_capture() {
     )
     .expect("document revision should change after mutation");
 
-    let data = execute_screenshot(
+    let data = execute_screenshot_failure(
         session,
         json!({
             "mode": "element",
@@ -693,21 +693,19 @@ fn test_screenshot_tool_rebinds_stale_cursor_for_element_capture() {
             },
         }),
     );
-    let artifact_path = common::assert_png_screenshot_artifact(&data);
-    let (clip_x, clip_y, clip_width, clip_height) = clip_rect(&data);
-    let (expected_x, expected_y, expected_width, expected_height) =
-        rect_for_selector(session, stale_cursor.selector.as_str());
-
-    assert_eq!(data["mode"].as_str(), Some("element"));
-    let (_inner_width, _inner_height, dpr, _scroll_height) = viewport_metrics(session);
-    assert_screenshot_scale_metadata(
-        &data,
-        "device",
-        expected_width,
-        expected_height,
-        dpr,
-        dpr,
-        2.0,
+    assert_eq!(data["code"].as_str(), Some("stale_node_ref"));
+    assert_eq!(data["details"]["provided"], stale_cursor_value["node_ref"]);
+    assert_eq!(
+        data["details"]["resolution"]["recovered_from"].as_str(),
+        Some("cursor")
+    );
+    assert_eq!(
+        data["details"]["resolution"]["selector_rebound_attempted"].as_bool(),
+        Some(false)
+    );
+    assert_eq!(
+        data["recovery"]["suggested_selector"].as_str(),
+        Some(stale_cursor.selector.as_str())
     );
     assert_ne!(
         session
@@ -716,12 +714,6 @@ fn test_screenshot_tool_rebinds_stale_cursor_for_element_capture() {
             .revision,
         stale_revision
     );
-    assert_close(clip_x, expected_x, 1.0, "rebound clip x");
-    assert_close(clip_y, expected_y, 1.0, "rebound clip y");
-    assert_close(clip_width, expected_width, 1.0, "rebound clip width");
-    assert_close(clip_height, expected_height, 1.0, "rebound clip height");
-
-    remove_artifact(&artifact_path);
 }
 
 #[test]
@@ -1977,7 +1969,7 @@ fn test_click_tool_reports_rebound_handoff_for_tab_selection_state_change() {
 
 #[test]
 #[ignore]
-fn test_click_tool_rebinds_stale_snapshot_cursor_via_selector_for_tab_selection() {
+fn test_click_tool_rejects_stale_snapshot_cursor_for_tab_selection() {
     let Some(browser) = common::browser_or_skip() else {
         return;
     };
@@ -2038,6 +2030,7 @@ fn test_click_tool_rebinds_stale_snapshot_cursor_via_selector_for_tab_selection(
     )
     .expect("pre-click mutation should succeed");
 
+    let mut action_context = ToolContext::new(session);
     let result = click_tool
         .execute_typed(
             ClickParams {
@@ -2046,39 +2039,26 @@ fn test_click_tool_rebinds_stale_snapshot_cursor_via_selector_for_tab_selection(
                 node_ref: None,
                 cursor: Some(stale_cursor),
             },
-            &mut context,
+            &mut action_context,
         )
-        .expect("click should succeed after stale cursor rebound");
+        .expect("stale cursor should stay a tool failure");
 
-    assert!(result.success);
-    let data = result.data.expect("click should include data");
-    assert_eq!(data["target_before"]["method"].as_str(), Some("cursor"));
+    assert!(!result.success);
+    let data = result.data.expect("click failure should include data");
+    assert_eq!(data["code"].as_str(), Some("stale_node_ref"));
+    assert_eq!(data["details"]["provided"], stale_cursor_json["node_ref"]);
     assert_eq!(
-        data["target_before"]["resolution_status"].as_str(),
-        Some("selector_rebound")
-    );
-    assert_eq!(
-        data["target_before"]["recovered_from"].as_str(),
+        data["details"]["resolution"]["recovered_from"].as_str(),
         Some("cursor")
     );
     assert_eq!(
-        data["target_before"]["selector"].as_str(),
+        data["recovery"]["suggested_selector"].as_str(),
         Some("#tab-better")
     );
     assert_eq!(
-        data["target_before"]["cursor"]["selector"].as_str(),
-        Some("#tab-better")
+        data["details"]["resolution"]["selector_rebound_attempted"].as_bool(),
+        Some(false)
     );
-    assert_ne!(
-        data["target_before"]["cursor"]["node_ref"]["revision"].as_str(),
-        stale_cursor_json["node_ref"]["revision"].as_str()
-    );
-    assert_eq!(
-        data["target_after"]["selector"].as_str(),
-        Some("#tab-better")
-    );
-    assert_eq!(data["target_status"].as_str(), Some("rebound"));
-    assert!(data.get("target").is_none());
 
     let selected = common::evaluate(
         session,
@@ -2087,7 +2067,7 @@ fn test_click_tool_rebinds_stale_snapshot_cursor_via_selector_for_tab_selection(
     .expect("selected state should be readable")
     .as_str()
     .map(str::to_string);
-    assert_eq!(selected.as_deref(), Some("true"));
+    assert_eq!(selected.as_deref(), Some("false"));
 }
 
 #[test]

@@ -70,8 +70,9 @@ pub use core::{
 #[allow(unused_imports)]
 pub(crate) use core::{
     DocumentEnvelopeOptions, OPERATION_METRICS_METADATA_KEY, OperationMetrics, ResolvedTarget,
-    TargetResolution, actionable_cursor_for_selector, build_document_envelope, duration_micros,
-    normalize_tool_outcome, resolve_target_with_cursor, tool_result_from_browser_error,
+    StaleCursorPolicy, TargetResolution, actionable_cursor_for_selector, build_document_envelope,
+    duration_micros, normalize_tool_outcome, resolve_target_with_cursor,
+    tool_result_from_browser_error,
 };
 
 #[cfg(test)]
@@ -377,6 +378,7 @@ mod tests {
             None,
             None,
             None,
+            StaleCursorPolicy::DenyRebind,
         )
         .expect("selector target should resolve");
 
@@ -401,8 +403,16 @@ mod tests {
     #[test]
     fn test_resolve_target_resolves_index_via_dom() {
         let dom = sample_dom();
-        let target = resolve_target_with_cursor("click", None, Some(1), None, None, Some(&dom))
-            .expect("index target should resolve against DOM");
+        let target = resolve_target_with_cursor(
+            "click",
+            None,
+            Some(1),
+            None,
+            None,
+            Some(&dom),
+            StaleCursorPolicy::DenyRebind,
+        )
+        .expect("index target should resolve against DOM");
 
         match target {
             TargetResolution::Resolved(target) => {
@@ -455,6 +465,7 @@ mod tests {
             None,
             Some(cursor.clone()),
             Some(&dom),
+            StaleCursorPolicy::DenyRebind,
         )
         .expect("cursor target should resolve against DOM");
 
@@ -482,6 +493,7 @@ mod tests {
             None,
             None,
             Some(&dom),
+            StaleCursorPolicy::DenyRebind,
         )
         .expect("selector target should resolve");
 
@@ -504,19 +516,36 @@ mod tests {
             None,
             None,
             None,
+            StaleCursorPolicy::DenyRebind,
         )
         .expect("invalid combination should return tool failure");
         assert!(matches!(both, TargetResolution::Failure(_)));
 
-        let neither = resolve_target_with_cursor("click", None, None, None, None, None)
-            .expect("missing target should return tool failure");
+        let neither = resolve_target_with_cursor(
+            "click",
+            None,
+            None,
+            None,
+            None,
+            None,
+            StaleCursorPolicy::DenyRebind,
+        )
+        .expect("missing target should return tool failure");
         assert!(matches!(neither, TargetResolution::Failure(_)));
     }
 
     #[test]
     fn test_resolve_target_errors_for_missing_index() {
         let dom = sample_dom();
-        let result = resolve_target_with_cursor("click", None, Some(9), None, None, Some(&dom));
+        let result = resolve_target_with_cursor(
+            "click",
+            None,
+            Some(9),
+            None,
+            None,
+            Some(&dom),
+            StaleCursorPolicy::DenyRebind,
+        );
 
         assert!(matches!(result, Err(BrowserError::ElementNotFound(_))));
     }
@@ -535,6 +564,7 @@ mod tests {
             }),
             None,
             Some(&dom),
+            StaleCursorPolicy::DenyRebind,
         )
         .expect("stale node ref should become tool failure");
 
@@ -581,6 +611,7 @@ mod tests {
             None,
             Some(stale_cursor),
             Some(&dom),
+            StaleCursorPolicy::AllowRebind,
         )
         .expect("stale cursor should resolve");
 
@@ -618,6 +649,7 @@ mod tests {
             None,
             Some(stale_cursor),
             Some(&dom),
+            StaleCursorPolicy::AllowRebind,
         )
         .expect("stale cursor should become tool failure");
 

@@ -692,4 +692,45 @@ mod tests {
         assert_eq!(data["condition"].as_str(), Some("navigation_settled"));
         assert_eq!(data["document"]["ready_state"].as_str(), Some("complete"));
     }
+
+    #[test]
+    fn test_wait_tool_rejects_stale_cursor_for_targeted_wait() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        let dom = session.extract_dom().expect("fake DOM should extract");
+        let mut stale_cursor = dom.cursor_for_index(0).expect("cursor should exist");
+        stale_cursor.node_ref.revision = "fake:0".to_string();
+        let tool = WaitTool;
+        let mut context = ToolContext::with_dom(&session, dom);
+
+        let result = tool
+            .execute_typed(
+                WaitParams {
+                    selector: None,
+                    index: None,
+                    node_ref: None,
+                    cursor: Some(stale_cursor),
+                    condition: WaitCondition::Present,
+                    text: None,
+                    value: None,
+                    since_revision: None,
+                    timeout_ms: 1,
+                },
+                &mut context,
+            )
+            .expect("stale cursor should stay a tool failure");
+
+        assert!(!result.success);
+        let data = result
+            .data
+            .expect("stale cursor failure should include details");
+        assert_eq!(data["code"].as_str(), Some("stale_node_ref"));
+        assert_eq!(
+            data["details"]["resolution"]["recovered_from"].as_str(),
+            Some("cursor")
+        );
+        assert_eq!(
+            data["details"]["resolution"]["selector_rebound_attempted"].as_bool(),
+            Some(false)
+        );
+    }
 }
