@@ -16,6 +16,7 @@ pub mod hover;
 mod html_to_markdown;
 pub mod input;
 pub mod inspect_node;
+pub(crate) mod limits;
 pub mod markdown;
 pub mod navigate;
 pub mod new_tab;

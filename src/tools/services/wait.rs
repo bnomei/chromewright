@@ -6,6 +6,7 @@ use crate::tools::{
     },
     build_document_envelope,
     core::DocumentActionResult,
+    limits::validate_wait_timeout,
     services::interaction::{
         ActionabilityWaitState, build_interaction_handoff, resolve_interaction_target,
         wait_for_actionability,
@@ -15,6 +16,7 @@ use crate::tools::{
 use std::time::{Duration, Instant};
 
 pub(crate) fn execute_wait(params: WaitParams, context: &mut ToolContext) -> Result<ToolResult> {
+    validate_wait_timeout(params.timeout_ms)?;
     let start = Instant::now();
     let timeout = Duration::from_millis(params.timeout_ms);
     let has_target = params.selector.is_some()

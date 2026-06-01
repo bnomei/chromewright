@@ -9,6 +9,7 @@ use crate::contract::{
 };
 use crate::dom::{DocumentMetadata, DomTree};
 use crate::error::{BackendUnsupportedDetails, BrowserError, PageTargetLostDetails, Result};
+use crate::tools::limits::validate_screenshot_css_size;
 use headless_chrome::protocol::cdp::{Emulation, Page};
 use headless_chrome::{Browser, Tab};
 use serde::de::DeserializeOwned;
@@ -491,6 +492,16 @@ impl ScreenshotPageMetrics {
             }),
             _ => None,
         }
+    }
+
+    fn validate_css_size_for(&self, request: &ScreenshotRequest) -> Result<()> {
+        let (width, height) = self.css_size_for(request);
+        let source = match (request.mode, request.clip.is_some()) {
+            (_, true) => "clip",
+            (ScreenshotMode::Viewport, false) => "viewport",
+            (ScreenshotMode::FullPage, false) => "full page",
+        };
+        validate_screenshot_css_size(source, width, height)
     }
 
     fn viewport_metrics(&self) -> ViewportMetrics {
@@ -1079,6 +1090,7 @@ fn browser_error_detail(error: &BrowserError) -> String {
         | BrowserError::ChromeError(reason) => reason.clone(),
         BrowserError::PageTargetLost(details) => details.detail.clone(),
         BrowserError::BackendUnsupported(details) => details.to_string(),
+        BrowserError::ResourceLimitExceeded(details) => details.detail.clone(),
         BrowserError::ToolExecutionFailed { reason, .. } => reason.clone(),
         BrowserError::JsonError(error) => error.to_string(),
         BrowserError::IoError(error) => error.to_string(),
@@ -1254,6 +1266,7 @@ impl SessionBackend for ChromeSessionBackend {
 
         let capture_from_tab = |tab: &Arc<Tab>| -> Result<ScreenshotCapture> {
             let metrics = ScreenshotPageMetrics::evaluate(tab)?;
+            metrics.validate_css_size_for(request)?;
             let resolved_clip = metrics.capture_clip_for(request);
             let (css_width, css_height) = metrics.css_size_for(request);
             let clip = resolved_clip.as_ref().map(|clip| {

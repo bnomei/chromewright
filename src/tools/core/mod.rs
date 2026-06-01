@@ -649,6 +649,18 @@ pub(crate) fn tool_result_from_browser_error(
                 "operation": details.operation,
             })),
         )),
+        BrowserError::ResourceLimitExceeded(details) => Ok(structured_tool_failure(
+            "resource_limit_exceeded",
+            details.detail.clone(),
+            None,
+            None,
+            None,
+            Some(serde_json::json!({
+                "resource": details.resource,
+                "limit": details.limit,
+                "actual": details.actual,
+            })),
+        )),
         BrowserError::JsonError(error) => Ok(structured_failure(
             "json_error",
             format!("JSON error: {}", error),

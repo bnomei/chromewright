@@ -337,7 +337,9 @@ mod tests {
     use super::*;
     use crate::browser::BrowserSession;
     use crate::browser::backend::FakeSessionBackend;
+    use crate::error::BrowserError;
     use crate::tools::actionability::ActionabilityPredicate;
+    use crate::tools::limits::MAX_WAIT_TIMEOUT_MS;
     use schemars::schema_for;
     use serde_json::json;
 
@@ -731,6 +733,52 @@ mod tests {
         assert_eq!(
             data["details"]["resolution"]["selector_rebound_attempted"].as_bool(),
             Some(false)
+        );
+    }
+
+    #[test]
+    fn test_wait_tool_rejects_timeout_above_resource_cap() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        let tool = WaitTool;
+        let mut context = ToolContext::new(&session);
+
+        let err = tool
+            .execute_typed(
+                WaitParams {
+                    selector: None,
+                    index: None,
+                    node_ref: None,
+                    cursor: None,
+                    condition: WaitCondition::NavigationSettled,
+                    text: None,
+                    value: None,
+                    since_revision: None,
+                    timeout_ms: MAX_WAIT_TIMEOUT_MS + 1,
+                },
+                &mut context,
+            )
+            .expect_err("oversized timeout should be rejected");
+
+        assert!(matches!(err, BrowserError::InvalidArgument(_)));
+        assert!(err.to_string().contains("wait.timeout_ms"));
+        assert!(err.to_string().contains(&MAX_WAIT_TIMEOUT_MS.to_string()));
+
+        let result = session
+            .execute_tool(
+                "wait",
+                json!({
+                    "timeout_ms": MAX_WAIT_TIMEOUT_MS + 1
+                }),
+            )
+            .expect("wait should execute through registry");
+        assert!(!result.success);
+        let data = result.data.expect("invalid argument should be structured");
+        assert_eq!(data["code"].as_str(), Some("invalid_argument"));
+        assert!(
+            data["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("wait.timeout_ms")
         );
     }
 }

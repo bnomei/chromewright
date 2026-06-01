@@ -71,6 +71,40 @@ impl std::fmt::Display for BackendUnsupportedDetails {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResourceLimitDetails {
+    pub resource: String,
+    pub detail: String,
+    pub limit: String,
+    pub actual: String,
+}
+
+impl ResourceLimitDetails {
+    pub fn new(
+        resource: impl Into<String>,
+        detail: impl Into<String>,
+        limit: impl Into<String>,
+        actual: impl Into<String>,
+    ) -> Self {
+        Self {
+            resource: resource.into(),
+            detail: detail.into(),
+            limit: limit.into(),
+            actual: actual.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for ResourceLimitDetails {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "resource={} limit={} actual={} detail={}",
+            self.resource, self.limit, self.actual, self.detail
+        )
+    }
+}
+
 /// Core error type for chromewright operations
 #[derive(Error, Debug)]
 pub enum BrowserError {
@@ -134,6 +168,10 @@ pub enum BrowserError {
     #[error("Backend unsupported: {0}")]
     BackendUnsupported(BackendUnsupportedDetails),
 
+    /// Operation would exceed a configured resource limit.
+    #[error("Resource limit exceeded: {0}")]
+    ResourceLimitExceeded(ResourceLimitDetails),
+
     /// Chrome/CDP error from headless_chrome crate
     #[error("Chrome error: {0}")]
     ChromeError(String),
@@ -145,6 +183,17 @@ pub enum BrowserError {
     /// IO error
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
+}
+
+impl BrowserError {
+    pub(crate) fn resource_limit_exceeded(
+        resource: impl Into<String>,
+        detail: impl Into<String>,
+        limit: impl Into<String>,
+        actual: impl Into<String>,
+    ) -> Self {
+        Self::ResourceLimitExceeded(ResourceLimitDetails::new(resource, detail, limit, actual))
+    }
 }
 
 /// Result type alias for chromewright operations

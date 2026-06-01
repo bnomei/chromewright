@@ -14,6 +14,7 @@ use crate::contract::{
 };
 use crate::dom::{AriaChild, AriaNode, DocumentMetadata, DomTree};
 use crate::error::{BrowserError, Result};
+use crate::tools::limits::validate_screenshot_css_size;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -656,6 +657,14 @@ impl SessionBackend for FakeSessionBackend {
         let viewport = Self::current_viewport_metrics(&state, &tab.id);
         let (css_width, css_height, pixel_scale) =
             Self::fake_capture_geometry(&state, &tab.id, request);
+        let source = if request.clip.is_some() {
+            "clip"
+        } else if request.mode.capture_beyond_viewport() {
+            "full page"
+        } else {
+            "viewport"
+        };
+        validate_screenshot_css_size(source, css_width, css_height)?;
         let width = (css_width * pixel_scale).round().max(1.0) as u32;
         let height = (css_height * pixel_scale).round().max(1.0) as u32;
         let bytes = Self::fake_png(width, height);

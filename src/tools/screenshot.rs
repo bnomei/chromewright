@@ -12,6 +12,7 @@ use crate::tools::inspect_node::{
     InspectBoundingBox, InspectLayout, InspectNodeProbePayload, build_inspect_node_js,
     decode_probe_payload,
 };
+use crate::tools::limits::validate_screenshot_css_size;
 use crate::tools::{Tool, ToolContext, ToolResult};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -655,6 +656,8 @@ fn clip_from_values(
         )));
     }
 
+    validate_screenshot_css_size(source, width, height)?;
+
     Ok(BrowserScreenshotClip {
         x,
         y,
@@ -668,8 +671,10 @@ mod tests {
     use super::{ScreenshotMode, ScreenshotParams, ScreenshotScale, ScreenshotTool};
     use crate::browser::BrowserSession;
     use crate::browser::backend::FakeSessionBackend;
+    use crate::contract::ViewportEmulationRequest;
     use crate::error::{BrowserError, Result};
     use crate::tools::core::PublicTarget;
+    use crate::tools::limits::{SCREENSHOT_MAX_CSS_AREA, SCREENSHOT_MAX_CSS_DIMENSION};
     use crate::tools::{Tool, ToolContext};
     use serde_json::json;
     use std::path::PathBuf;
@@ -966,6 +971,109 @@ mod tests {
             error
                 .to_string()
                 .contains("must start within viewport CSS pixels")
+        );
+    }
+
+    #[test]
+    fn test_screenshot_tool_rejects_oversized_region_clip() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        let tool = ScreenshotTool;
+        let mut context = ToolContext::new(&session);
+
+        let error = tool
+            .execute_typed(
+                ScreenshotParams {
+                    mode: ScreenshotMode::Region,
+                    scale: ScreenshotScale::Device,
+                    tab_id: None,
+                    target: None,
+                    region: Some(super::ScreenshotRegion {
+                        x: 0.0,
+                        y: 0.0,
+                        width: SCREENSHOT_MAX_CSS_DIMENSION + 1.0,
+                        height: 12.0,
+                    }),
+                },
+                &mut context,
+            )
+            .expect_err("oversized region clip should be rejected");
+
+        let BrowserError::ResourceLimitExceeded(details) = error else {
+            panic!("expected resource limit error");
+        };
+        assert_eq!(details.resource, "screenshot_css_width");
+        assert!(details.detail.contains("region"));
+    }
+
+    #[test]
+    fn test_screenshot_tool_rejects_region_area_above_cap() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        let tool = ScreenshotTool;
+        let mut context = ToolContext::new(&session);
+
+        let error = tool
+            .execute_typed(
+                ScreenshotParams {
+                    mode: ScreenshotMode::Region,
+                    scale: ScreenshotScale::Device,
+                    tab_id: None,
+                    target: None,
+                    region: Some(super::ScreenshotRegion {
+                        x: 0.0,
+                        y: 0.0,
+                        width: SCREENSHOT_MAX_CSS_AREA.sqrt() + 1.0,
+                        height: SCREENSHOT_MAX_CSS_AREA.sqrt() + 1.0,
+                    }),
+                },
+                &mut context,
+            )
+            .expect_err("oversized region area should be rejected");
+
+        let BrowserError::ResourceLimitExceeded(details) = error else {
+            panic!("expected resource limit error");
+        };
+        assert_eq!(details.resource, "screenshot_css_area");
+        assert!(details.detail.contains("region"));
+    }
+
+    #[test]
+    fn test_screenshot_tool_rejects_full_page_metrics_above_cap() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        session
+            .apply_viewport_emulation(ViewportEmulationRequest {
+                width: SCREENSHOT_MAX_CSS_DIMENSION as u32 + 1,
+                height: 600,
+                device_scale_factor: 1.0,
+                mobile: false,
+                touch: false,
+                orientation: None,
+                tab_id: None,
+            })
+            .expect("oversized test viewport should be accepted by viewport limits");
+
+        let result = session
+            .execute_tool(
+                "screenshot",
+                json!({
+                    "mode": "full_page"
+                }),
+            )
+            .expect("screenshot should execute");
+
+        assert!(!result.success);
+        let data = result
+            .data
+            .expect("resource limit failure should include data");
+        assert_eq!(data["code"].as_str(), Some("resource_limit_exceeded"));
+        assert_eq!(
+            data["details"]["resource"].as_str(),
+            Some("screenshot_css_width")
+        );
+        assert!(
+            data["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("full page")
         );
     }
 

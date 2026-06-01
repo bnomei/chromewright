@@ -4,6 +4,7 @@ use crate::browser::backend::{
 };
 use crate::dom::{DocumentMetadata, SnapshotNode};
 use crate::error::{BrowserError, Result};
+use crate::tools::limits::validate_screenshot_png_bytes;
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -242,6 +243,8 @@ impl BrowserSession {
         &self,
         capture: ScreenshotCapture,
     ) -> Result<Arc<ScreenshotArtifact>> {
+        validate_screenshot_png_bytes(capture.bytes.len())?;
+
         let root = screenshot_artifact_root();
         std::fs::create_dir_all(&root).map_err(|e| {
             BrowserError::ScreenshotFailed(format!(
@@ -351,8 +354,11 @@ fn remove_screenshot_file(path: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use crate::browser::BrowserSession;
-    use crate::browser::backend::{FakeSessionBackend, ScreenshotRequest};
+    use crate::browser::backend::{
+        FakeSessionBackend, ScreenshotRequest, ScreenshotScale, TabDescriptor,
+    };
     use crate::dom::{Cursor, NodeRef};
+    use crate::tools::limits::SCREENSHOT_MAX_PNG_BYTES;
 
     fn sample_document(document_id: &str, revision: &str) -> DocumentMetadata {
         DocumentMetadata {
@@ -510,5 +516,40 @@ mod tests {
         session
             .close()
             .expect("session close should clean artifacts");
+    }
+
+    #[test]
+    fn screenshot_artifact_rejects_png_over_byte_cap_before_storage() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        let capture = ScreenshotCapture {
+            mode: ScreenshotMode::Viewport,
+            scale: ScreenshotScale::Device,
+            tab: TabDescriptor {
+                id: "tab-1".to_string(),
+                title: "Test Tab".to_string(),
+                url: "about:blank".to_string(),
+            },
+            format: ScreenshotFormat::Png,
+            mime_type: ScreenshotFormat::Png.mime_type(),
+            byte_count: SCREENSHOT_MAX_PNG_BYTES + 1,
+            width: 1,
+            height: 1,
+            css_width: 1.0,
+            css_height: 1.0,
+            device_pixel_ratio: 1.0,
+            pixel_scale: 1.0,
+            clip: None,
+            bytes: vec![0; SCREENSHOT_MAX_PNG_BYTES + 1],
+        };
+
+        let err = session
+            .store_screenshot_artifact(capture)
+            .expect_err("oversized PNG should be rejected before storage");
+
+        let BrowserError::ResourceLimitExceeded(details) = err else {
+            panic!("expected resource limit error");
+        };
+        assert_eq!(details.resource, "screenshot_png_bytes");
+        assert!(session.screenshot_artifacts_for_test().is_empty());
     }
 }
