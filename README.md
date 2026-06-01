@@ -58,7 +58,7 @@ cargo build --release
 
 ## Quickstart
 
-### 1) Prepare Chrome or Chromium
+### 1) Prepare Chrome, Chromium or Obscura
 
 The default attach mode expects a browser exposing DevTools on `http://127.0.0.1:9222`.
 
@@ -71,6 +71,8 @@ open -na "Google Chrome" --args \
 ```
 
 Use a dedicated profile when you do not want agent automation attached to your personal browsing session. If you prefer Chromewright to launch its own browser instead, skip this and pass any launch-mode flag in the next step. Launch mode is headed by default; add `--headless` only when you want a hidden browser.
+
+Or use [Obscura](https://github.com/h4ckf0r0day/obscura) instead of Chrome.
 
 ### 2) Start Chromewright
 
