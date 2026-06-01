@@ -9,6 +9,7 @@ use crate::dom::{Cursor, DocumentMetadata, DomTree, NodeRef};
 #[cfg(test)]
 use crate::error::BackendUnsupportedDetails;
 use crate::error::{BrowserError, PageTargetLostDetails, Result};
+use crate::tools::limits::validate_snapshot_output_bytes;
 use crate::tools::{
     click, close, close_tab, evaluate, extract, go_back, go_forward, hover, input, inspect_node,
     markdown, navigate, new_tab, press_key, read_links, screenshot, scroll, select, set_viewport,
@@ -713,6 +714,15 @@ pub(crate) fn build_document_envelope(
                 global_interactive_count,
                 base: base.as_deref(),
             });
+            let mut output_bytes = if options.include_snapshot {
+                projection_output.current.snapshot.as_ref().len()
+            } else {
+                0
+            };
+            if options.include_nodes {
+                output_bytes += serde_json::to_vec(&projection_output.current.nodes)?.len();
+            }
+            validate_snapshot_output_bytes(output_bytes)?;
 
             if let Some(cache_projection) = projection_output.cache_projection.as_ref() {
                 session.store_snapshot_cache(Arc::new(snapshot_cache_entry_from_projection(
@@ -1044,6 +1054,7 @@ mod tests {
     use crate::browser::backend::FakeSessionBackend;
     use crate::browser::{SnapshotCacheEntry, SnapshotCacheScope};
     use crate::dom::{AriaChild, AriaNode, DomTree, SnapshotNode};
+    use crate::tools::limits::MAX_SNAPSHOT_OUTPUT_BYTES;
     use schemars::schema_for;
     use serde_json::json;
     use std::collections::HashMap;
@@ -1406,6 +1417,35 @@ mod tests {
             TargetResolution::Resolved(target) => {
                 panic!("unexpected resolved stale cursor target: {target:?}")
             }
+        }
+    }
+
+    #[test]
+    fn build_document_envelope_rejects_oversized_snapshot_output() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        let root = AriaNode::fragment().with_child(AriaChild::Node(Box::new(
+            AriaNode::new("button", "x".repeat(MAX_SNAPSHOT_OUTPUT_BYTES + 1))
+                .with_index(0)
+                .with_public_handle(true),
+        )));
+        let mut dom = DomTree::new(root);
+        dom.document.document_id = "doc-large-snapshot".to_string();
+        dom.document.revision = "main:1".to_string();
+        dom.replace_selectors(vec!["#large-button".to_string()]);
+        let mut context = ToolContext::with_dom(&session, dom);
+
+        let error = build_document_envelope(
+            &mut context,
+            None,
+            DocumentEnvelopeOptions::snapshot(SnapshotMode::Full),
+        )
+        .expect_err("oversized snapshots should fail closed");
+
+        match error {
+            BrowserError::ResourceLimitExceeded(details) => {
+                assert_eq!(details.resource, "snapshot_output_bytes");
+            }
+            other => panic!("unexpected snapshot output error: {other:?}"),
         }
     }
 

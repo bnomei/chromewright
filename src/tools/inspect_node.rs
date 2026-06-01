@@ -108,6 +108,8 @@ pub struct InspectNodeOutput {
     pub boundary: Option<InspectBoundary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sections: Option<InspectSections>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub truncated_fields: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -295,6 +297,7 @@ mod tests {
     use super::*;
     use crate::browser::BrowserSession;
     use crate::browser::backend::FakeSessionBackend;
+    use crate::tools::limits::{MAX_INSPECT_CLASSES, MAX_INSPECT_COMPACT_CHARS};
     use crate::tools::{OPERATION_METRICS_METADATA_KEY, Tool, ToolContext};
     use schemars::schema_for;
     use serde_json::json;
@@ -480,6 +483,76 @@ mod tests {
             missing_fields
                 .iter()
                 .any(|field| field.as_str() == Some("identity"))
+        );
+    }
+
+    #[test]
+    fn test_inspect_node_tool_truncates_compact_fields_with_metadata() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        let tool = InspectNodeTool;
+        let mut context = ToolContext::new(&session);
+
+        let result = tool
+            .execute_typed(
+                InspectNodeParams {
+                    selector: Some("#fake-target".to_string()),
+                    index: None,
+                    node_ref: None,
+                    cursor: None,
+                    detail: InspectDetail::Compact,
+                    style_names: vec!["__long_compact_payload__".to_string()],
+                },
+                &mut context,
+            )
+            .expect("inspect_node should succeed with bounded compact fields");
+
+        assert!(result.success);
+        let data = result.data.expect("inspect_node should include data");
+        assert_eq!(
+            data["identity"]["tag"]
+                .as_str()
+                .expect("tag should serialize")
+                .chars()
+                .count(),
+            MAX_INSPECT_COMPACT_CHARS
+        );
+        assert_eq!(
+            data["accessibility"]["name"]
+                .as_str()
+                .expect("name should serialize")
+                .chars()
+                .count(),
+            MAX_INSPECT_COMPACT_CHARS
+        );
+        assert_eq!(
+            data["identity"]["classes"]
+                .as_array()
+                .expect("classes should serialize")
+                .len(),
+            MAX_INSPECT_CLASSES
+        );
+        let truncated_fields = data["truncated_fields"]
+            .as_array()
+            .expect("truncation metadata should be present");
+        assert!(
+            truncated_fields
+                .iter()
+                .any(|field| field.as_str() == Some("identity.tag"))
+        );
+        assert!(
+            truncated_fields
+                .iter()
+                .any(|field| field.as_str() == Some("identity.classes"))
+        );
+        assert!(
+            truncated_fields
+                .iter()
+                .any(|field| field.as_str() == Some("accessibility.name"))
+        );
+        assert!(
+            truncated_fields
+                .iter()
+                .any(|field| field.as_str() == Some("context.document_url"))
         );
     }
 }

@@ -269,8 +269,7 @@ impl FakeSessionBackend {
     fn extract_selector(script: &str) -> Option<Option<String>> {
         let needle = "const selector = ";
         let start = script.find(needle)? + needle.len();
-        let suffix = "\n            const element = ";
-        let end = start + script[start..].find(suffix)?;
+        let end = start + script[start..].find(';')?;
         let raw = script[start..end].trim().trim_end_matches(';').trim();
 
         if raw == "null" {
@@ -358,20 +357,30 @@ impl FakeSessionBackend {
 
         if script.contains("document.querySelector(selector)")
             && script.contains("const selector = ")
-            && (script.contains("element ? element.innerHTML : ''")
-                || script
-                    .contains("element ? (element.innerText || element.textContent || '') : ''"))
+            && script.contains("const content = ")
+            && (script.contains("innerHTML") || script.contains("innerText"))
         {
             let selector = Self::extract_selector(script)?;
             let content = Self::extract_content_for_selector(
                 selector.as_deref(),
-                script.contains("element ? element.innerHTML : ''"),
+                script.contains("innerHTML"),
             );
 
-            return Some(content.map(|content| ScriptEvaluation {
-                value: Some(Value::String(content)),
-                description: None,
-                type_name: Some("String".to_string()),
+            return Some(content.map(|content| {
+                let value = if script.contains("success: true") {
+                    serde_json::json!({
+                        "success": true,
+                        "content": content
+                    })
+                    .to_string()
+                } else {
+                    content
+                };
+                ScriptEvaluation {
+                    value: Some(Value::String(value)),
+                    description: None,
+                    type_name: Some("String".to_string()),
+                }
             }));
         }
 
@@ -426,20 +435,85 @@ impl FakeSessionBackend {
                 .map(str::to_string)
                 .or_else(|| self.active_tab().ok().map(|tab| tab.url))
                 .unwrap_or_else(|| "about:blank".to_string());
-            let incomplete_payload = Self::embedded_config(script)
+            let style_names = Self::embedded_config(script)
                 .and_then(|config| config["style_names"].as_array().cloned())
-                .map(|style_names| {
-                    style_names
-                        .iter()
-                        .any(|name| name.as_str() == Some("__incomplete_payload__"))
-                })
-                .unwrap_or(false);
+                .unwrap_or_default();
+            let incomplete_payload = style_names
+                .iter()
+                .any(|name| name.as_str() == Some("__incomplete_payload__"));
             if incomplete_payload {
                 return Some(Ok(ScriptEvaluation {
                     value: Some(Value::String(
                         serde_json::json!({
                             "success": true,
                             "actionable_index": 0
+                        })
+                        .to_string(),
+                    )),
+                    description: None,
+                    type_name: Some("String".to_string()),
+                }));
+            }
+            let long_compact_payload = style_names
+                .iter()
+                .any(|name| name.as_str() == Some("__long_compact_payload__"));
+            if long_compact_payload {
+                let long = "x".repeat(3_000);
+                let classes = (0..70)
+                    .map(|index| format!("class-{index}-{long}"))
+                    .collect::<Vec<_>>();
+                return Some(Ok(ScriptEvaluation {
+                    value: Some(Value::String(
+                        serde_json::json!({
+                            "success": true,
+                            "resolved_selector": "#fake-target",
+                            "identity": {
+                                "tag": long.clone(),
+                                "id": long.clone(),
+                                "classes": classes
+                            },
+                            "accessibility": {
+                                "role": long.clone(),
+                                "name": long.clone(),
+                                "active": true,
+                                "checked": null,
+                                "disabled": false,
+                                "expanded": null,
+                                "pressed": null,
+                                "selected": null
+                            },
+                            "form_state": {
+                                "value": long.clone(),
+                                "placeholder": long.clone(),
+                                "readonly": null,
+                                "disabled": false
+                            },
+                            "layout": {
+                                "bounding_box": {
+                                    "x": 0.0,
+                                    "y": 0.0,
+                                    "width": 100.0,
+                                    "height": 32.0
+                                },
+                                "visible": true,
+                                "visible_in_viewport": true,
+                                "receives_pointer_events": true,
+                                "pointer_events": long.clone(),
+                                "cursor": long.clone()
+                            },
+                            "context": {
+                                "document_url": long.clone(),
+                                "frame_depth": 0,
+                                "inside_shadow_root": false
+                            },
+                            "actionable_index": 0,
+                            "boundary": {
+                                "kind": "frame",
+                                "status": "available",
+                                "available": true,
+                                "url": long
+                            },
+                            "sections": null
                         })
                         .to_string(),
                     )),

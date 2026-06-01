@@ -3,9 +3,11 @@ use crate::tools::ResolvedTarget;
 use crate::tools::TargetEnvelope;
 use crate::tools::core::structured_tool_failure;
 use crate::tools::inspect_node::{
-    InspectDetail, InspectNodeOutput, InspectNodeParams, InspectNodeProbePayload,
+    InspectAccessibility, InspectBoundary, InspectContext, InspectDetail, InspectFormState,
+    InspectIdentity, InspectLayout, InspectNodeOutput, InspectNodeParams, InspectNodeProbePayload,
     build_inspect_node_js, decode_probe_payload,
 };
+use crate::tools::limits::{MAX_INSPECT_CLASSES, MAX_INSPECT_COMPACT_CHARS};
 use crate::tools::{
     DocumentActionResult, DocumentEnvelopeOptions, StaleCursorPolicy, TargetResolution,
     ToolContext, ToolResult, build_document_envelope, resolve_target_with_cursor,
@@ -142,6 +144,118 @@ fn reconcile_target_with_probe(
     target.selector = resolved_selector;
 }
 
+fn truncate_string(value: &mut String, limit: usize) -> bool {
+    if value.chars().count() <= limit {
+        return false;
+    }
+
+    *value = value.chars().take(limit).collect();
+    true
+}
+
+fn truncate_option_string(
+    value: &mut Option<String>,
+    field: &str,
+    truncated_fields: &mut Vec<String>,
+) {
+    if let Some(value) = value.as_mut()
+        && truncate_string(value, MAX_INSPECT_COMPACT_CHARS)
+    {
+        truncated_fields.push(field.to_string());
+    }
+}
+
+fn truncate_required_string(value: &mut String, field: &str, truncated_fields: &mut Vec<String>) {
+    if truncate_string(value, MAX_INSPECT_COMPACT_CHARS) {
+        truncated_fields.push(field.to_string());
+    }
+}
+
+fn truncate_target_fields(target: &mut TargetEnvelope, truncated_fields: &mut Vec<String>) {
+    truncate_option_string(&mut target.selector, "target.selector", truncated_fields);
+    if let Some(cursor) = target.cursor.as_mut() {
+        if truncate_string(&mut cursor.selector, MAX_INSPECT_COMPACT_CHARS) {
+            truncated_fields.push("target.cursor.selector".to_string());
+        }
+        if truncate_string(&mut cursor.role, MAX_INSPECT_COMPACT_CHARS) {
+            truncated_fields.push("target.cursor.role".to_string());
+        }
+        if truncate_string(&mut cursor.name, MAX_INSPECT_COMPACT_CHARS) {
+            truncated_fields.push("target.cursor.name".to_string());
+        }
+    }
+}
+
+fn truncate_identity_fields(identity: &mut InspectIdentity, truncated_fields: &mut Vec<String>) {
+    truncate_required_string(&mut identity.tag, "identity.tag", truncated_fields);
+    truncate_option_string(&mut identity.id, "identity.id", truncated_fields);
+
+    if identity.classes.len() > MAX_INSPECT_CLASSES {
+        identity.classes.truncate(MAX_INSPECT_CLASSES);
+        truncated_fields.push("identity.classes".to_string());
+    }
+
+    for (index, class_name) in identity.classes.iter_mut().enumerate() {
+        if truncate_string(class_name, MAX_INSPECT_COMPACT_CHARS) {
+            truncated_fields.push(format!("identity.classes[{index}]"));
+        }
+    }
+}
+
+fn truncate_accessibility_fields(
+    accessibility: &mut InspectAccessibility,
+    truncated_fields: &mut Vec<String>,
+) {
+    truncate_required_string(
+        &mut accessibility.role,
+        "accessibility.role",
+        truncated_fields,
+    );
+    truncate_required_string(
+        &mut accessibility.name,
+        "accessibility.name",
+        truncated_fields,
+    );
+}
+
+fn truncate_form_state_fields(
+    form_state: &mut InspectFormState,
+    truncated_fields: &mut Vec<String>,
+) {
+    truncate_option_string(&mut form_state.value, "form_state.value", truncated_fields);
+    truncate_option_string(
+        &mut form_state.placeholder,
+        "form_state.placeholder",
+        truncated_fields,
+    );
+}
+
+fn truncate_layout_fields(layout: &mut InspectLayout, truncated_fields: &mut Vec<String>) {
+    truncate_option_string(
+        &mut layout.pointer_events,
+        "layout.pointer_events",
+        truncated_fields,
+    );
+    truncate_option_string(&mut layout.cursor, "layout.cursor", truncated_fields);
+}
+
+fn truncate_context_fields(context: &mut InspectContext, truncated_fields: &mut Vec<String>) {
+    truncate_required_string(
+        &mut context.document_url,
+        "context.document_url",
+        truncated_fields,
+    );
+}
+
+fn truncate_boundary_fields(
+    boundary: &mut Option<InspectBoundary>,
+    truncated_fields: &mut Vec<String>,
+) {
+    if let Some(boundary) = boundary.as_mut() {
+        truncate_option_string(&mut boundary.url, "boundary.url", truncated_fields);
+    }
+}
+
 pub(crate) fn execute_inspect_node(
     params: InspectNodeParams,
     context: &mut ToolContext,
@@ -269,21 +383,30 @@ pub(crate) fn execute_inspect_node(
         )));
     }
 
-    let identity = payload
+    let mut identity = payload
         .identity
         .expect("required inspect payload fields should be validated");
-    let accessibility = payload
+    let mut accessibility = payload
         .accessibility
         .expect("required inspect payload fields should be validated");
-    let form_state = payload
+    let mut form_state = payload
         .form_state
         .expect("required inspect payload fields should be validated");
-    let layout = payload
+    let mut layout = payload
         .layout
         .expect("required inspect payload fields should be validated");
-    let inspect_context = payload
+    let mut inspect_context = payload
         .context
         .expect("required inspect payload fields should be validated");
+    let mut boundary = payload.boundary;
+    let mut truncated_fields = Vec::new();
+    truncate_target_fields(&mut target_envelope, &mut truncated_fields);
+    truncate_identity_fields(&mut identity, &mut truncated_fields);
+    truncate_accessibility_fields(&mut accessibility, &mut truncated_fields);
+    truncate_form_state_fields(&mut form_state, &mut truncated_fields);
+    truncate_layout_fields(&mut layout, &mut truncated_fields);
+    truncate_context_fields(&mut inspect_context, &mut truncated_fields);
+    truncate_boundary_fields(&mut boundary, &mut truncated_fields);
 
     Ok(context.finish(ToolResult::success_with(InspectNodeOutput {
         result: DocumentActionResult::new("inspect_node", envelope.document),
@@ -293,8 +416,9 @@ pub(crate) fn execute_inspect_node(
         form_state,
         layout,
         context: inspect_context,
-        boundary: payload.boundary,
+        boundary,
         sections: payload.sections,
+        truncated_fields,
     })))
 }
 

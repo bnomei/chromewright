@@ -1,4 +1,5 @@
 use crate::error::{BrowserError, Result};
+use crate::tools::limits::MAX_MARKDOWN_PAGE_SIZE;
 use crate::tools::{
     DocumentResult, Tool, ToolContext, ToolResult, services::markdown::execute_get_markdown,
 };
@@ -43,6 +44,11 @@ impl GetMarkdownParams {
             return Err(BrowserError::InvalidArgument(
                 "get_markdown.page_size must be greater than 0".to_string(),
             ));
+        }
+        if self.page_size > MAX_MARKDOWN_PAGE_SIZE {
+            return Err(BrowserError::InvalidArgument(format!(
+                "get_markdown.page_size must be less than or equal to {MAX_MARKDOWN_PAGE_SIZE}"
+            )));
         }
 
         Ok(())
@@ -241,6 +247,22 @@ mod tests {
         .expect_err("zero page_size should be rejected");
 
         assert!(matches!(err, BrowserError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn test_get_markdown_params_rejects_oversized_page_size() {
+        let err = GetMarkdownParams {
+            page: 1,
+            page_size: MAX_MARKDOWN_PAGE_SIZE + 1,
+        }
+        .validate()
+        .expect_err("oversized page_size should be rejected");
+
+        assert!(matches!(err, BrowserError::InvalidArgument(_)));
+        assert!(
+            err.to_string()
+                .contains(&MAX_MARKDOWN_PAGE_SIZE.to_string())
+        );
     }
 
     #[test]

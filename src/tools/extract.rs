@@ -1,5 +1,6 @@
 use crate::error::{BrowserError, Result};
 use crate::tools::core::structured_tool_failure;
+use crate::tools::limits::{MAX_EXTRACT_CHARS, validate_extract_chars};
 use crate::tools::{DocumentResult, Tool, ToolContext, ToolResult};
 use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::de::Deserializer;
@@ -161,7 +162,15 @@ impl Tool for ExtractContentTool {
                     })),
                 )));
             }
+            Err(ExtractFailure::ResourceLimit { char_count }) => {
+                return Ok(context.finish(extract_resource_limit_failure(
+                    format_label,
+                    selector.as_deref(),
+                    char_count,
+                )));
+            }
         };
+        validate_extract_chars(content.chars().count(), format_label)?;
 
         context.record_browser_evaluation();
         let document = context.session.document_metadata()?;
@@ -173,6 +182,31 @@ impl Tool for ExtractContentTool {
             content,
         })))
     }
+}
+
+fn extract_resource_limit_failure(
+    format: &str,
+    selector: Option<&str>,
+    char_count: usize,
+) -> ToolResult {
+    structured_tool_failure(
+        "resource_limit_exceeded",
+        format!(
+            "extract {format} output is {char_count} characters, exceeding the {MAX_EXTRACT_CHARS} character limit"
+        ),
+        None,
+        None,
+        Some(serde_json::json!({
+            "suggested_tool": "snapshot",
+        })),
+        Some(serde_json::json!({
+            "resource": "extract_chars",
+            "limit": format!("{MAX_EXTRACT_CHARS} characters"),
+            "actual": format!("{char_count} characters"),
+            "format": format,
+            "selector": selector,
+        })),
+    )
 }
 
 fn extract_missing_target_failure(selector: &str, format: &str) -> ToolResult {
@@ -209,6 +243,9 @@ enum ExtractFailure {
         reason: String,
         received_type: &'static str,
     },
+    ResourceLimit {
+        char_count: usize,
+    },
 }
 
 fn parse_extract_output(
@@ -216,14 +253,8 @@ fn parse_extract_output(
     selector: Option<&str>,
 ) -> std::result::Result<String, ExtractFailure> {
     match value {
-        Some(Value::String(content)) => Ok(content),
-        Some(other) => {
-            let received_type = value_kind(&other);
-            Err(ExtractFailure::InvalidPayload {
-                reason: format!("Extract returned an unexpected {received_type} payload"),
-                received_type,
-            })
-        }
+        Some(Value::String(payload)) => parse_extract_string_payload(payload),
+        Some(other) => parse_extract_structured_payload(other),
         None => match selector {
             Some(selector) => Err(ExtractFailure::MissingTarget(selector.to_string())),
             None => Err(ExtractFailure::InvalidPayload {
@@ -231,6 +262,61 @@ fn parse_extract_output(
                 received_type: "null",
             }),
         },
+    }
+}
+
+fn parse_extract_string_payload(payload: String) -> std::result::Result<String, ExtractFailure> {
+    if let Ok(value) = serde_json::from_str::<Value>(&payload)
+        && value.get("success").is_some()
+    {
+        return parse_extract_structured_payload(value);
+    }
+
+    Ok(payload)
+}
+
+fn parse_extract_structured_payload(value: Value) -> std::result::Result<String, ExtractFailure> {
+    let received_type = value_kind(&value);
+    let Some(object) = value.as_object() else {
+        return Err(ExtractFailure::InvalidPayload {
+            reason: format!("Extract returned an unexpected {received_type} payload"),
+            received_type,
+        });
+    };
+
+    if object.get("success").and_then(Value::as_bool) == Some(false) {
+        if object.get("code").and_then(Value::as_str) == Some("resource_limit_exceeded") {
+            return Err(ExtractFailure::ResourceLimit {
+                char_count: object
+                    .get("char_count")
+                    .and_then(Value::as_u64)
+                    .unwrap_or((MAX_EXTRACT_CHARS + 1) as u64) as usize,
+            });
+        }
+
+        return Err(ExtractFailure::InvalidPayload {
+            reason: object
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("Extract returned an unsuccessful payload")
+                .to_string(),
+            received_type,
+        });
+    }
+
+    if object.get("success").and_then(Value::as_bool) != Some(true) {
+        return Err(ExtractFailure::InvalidPayload {
+            reason: format!("Extract returned an unexpected {received_type} payload"),
+            received_type,
+        });
+    }
+
+    match object.get("content") {
+        Some(Value::String(content)) => Ok(content.clone()),
+        _ => Err(ExtractFailure::InvalidPayload {
+            reason: "Extract returned a structured payload without string content".to_string(),
+            received_type,
+        }),
     }
 }
 
@@ -258,11 +344,24 @@ fn build_extract_js(selector: Option<&str>, format: &str) -> String {
     format!(
         "(() => {{
             const selector = {selector_literal};
+            const maxChars = {MAX_EXTRACT_CHARS};
             const element = selector ? document.querySelector(selector) : document.body;
             if (selector && !element) {{
                 throw new Error(`Element not found: ${{selector}}`);
             }}
-            return {value_expr};
+            const content = {value_expr};
+            if (content.length > maxChars) {{
+                return JSON.stringify({{
+                    success: false,
+                    code: 'resource_limit_exceeded',
+                    error: `extract {format} output exceeds the ${{maxChars}} character limit`,
+                    char_count: content.length
+                }});
+            }}
+            return JSON.stringify({{
+                success: true,
+                content
+            }});
         }})()"
     )
 }
@@ -275,6 +374,7 @@ mod tests {
         FakeSessionBackend, ScriptEvaluation, SessionBackend, TabDescriptor,
     };
     use crate::error::BrowserError;
+    use crate::tools::limits::MAX_EXTRACT_CHARS;
     use crate::{dom::DocumentMetadata, dom::DomTree};
     use schemars::schema_for;
     use serde_json::json;
@@ -609,5 +709,73 @@ mod tests {
             data["recovery"]["suggested_tool"].as_str(),
             Some("snapshot")
         );
+    }
+
+    #[test]
+    fn test_extract_tool_returns_structured_failure_for_resource_limit_payload() {
+        let session = BrowserSession::with_test_backend(EvaluateOnlyBackend {
+            outcome: EvaluateOnlyOutcome::Success(serde_json::Value::String(
+                serde_json::json!({
+                    "success": false,
+                    "code": "resource_limit_exceeded",
+                    "error": "extract text output exceeds the character limit",
+                    "char_count": MAX_EXTRACT_CHARS + 1,
+                })
+                .to_string(),
+            )),
+        });
+        let tool = ExtractContentTool;
+        let mut context = ToolContext::new(&session);
+
+        let result = tool
+            .execute_typed(
+                ExtractParams {
+                    selector: Some("#fake-target".to_string()),
+                    format: "text".to_string(),
+                },
+                &mut context,
+            )
+            .expect("resource limit payload should stay a tool failure");
+
+        assert!(!result.success);
+        let data = result
+            .data
+            .expect("resource limit failure should include details");
+        assert_eq!(data["code"].as_str(), Some("resource_limit_exceeded"));
+        assert_eq!(data["details"]["resource"].as_str(), Some("extract_chars"));
+        assert_eq!(data["details"]["format"].as_str(), Some("text"));
+        assert_eq!(data["details"]["selector"].as_str(), Some("#fake-target"));
+    }
+
+    #[test]
+    fn test_extract_tool_defensively_rejects_oversized_legacy_payload() {
+        let session = BrowserSession::with_test_backend(EvaluateOnlyBackend {
+            outcome: EvaluateOnlyOutcome::Success(serde_json::Value::String(
+                "x".repeat(MAX_EXTRACT_CHARS + 1),
+            )),
+        });
+        let tool = ExtractContentTool;
+        let mut context = ToolContext::new(&session);
+
+        let error = tool
+            .execute_typed(
+                ExtractParams {
+                    selector: None,
+                    format: "text".to_string(),
+                },
+                &mut context,
+            )
+            .expect_err("oversized legacy extract payload should fail closed");
+
+        match error {
+            BrowserError::ResourceLimitExceeded(details) => {
+                assert_eq!(details.resource, "extract_chars");
+                assert_eq!(
+                    details.actual,
+                    format!("{} characters", MAX_EXTRACT_CHARS + 1)
+                );
+            }
+            other => panic!("unexpected extract resource limit error: {other:?}"),
+        }
     }
 }

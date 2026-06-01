@@ -1,5 +1,6 @@
 use crate::error::Result;
 use crate::tools::core::structured_tool_failure;
+use crate::tools::limits::{MAX_READ_LINK_FIELD_CHARS, MAX_READ_LINKS_COUNT};
 use crate::tools::{DocumentResult, Tool, ToolContext, ToolResult};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -48,24 +49,58 @@ impl Tool for ReadLinksTool {
     ) -> Result<ToolResult> {
         // JavaScript code to extract all links on the page
         // We use JSON.stringify to ensure the result is returned properly
-        let js_code = r#"
-            JSON.stringify(
-                Array.from(document.querySelectorAll('a[href]'))
-                    .map(el => ({
+        let js_code = format!(
+            r#"
+            JSON.stringify((() => {{
+                const maxLinks = {MAX_READ_LINKS_COUNT};
+                const maxFieldChars = {MAX_READ_LINK_FIELD_CHARS};
+                const links = [];
+                for (const el of Array.from(document.querySelectorAll('a[href]'))) {{
+                    const link = {{
                         text: el.innerText || '',
                         href: el.getAttribute('href') || '',
                         resolved_url: el.href || ''
-                    }))
-                    .filter(link => link.href !== '')
-            )
-        "#;
+                    }};
+                    if (link.href === '') {{
+                        continue;
+                    }}
+                    for (const [field, value] of Object.entries(link)) {{
+                        if (String(value).length > maxFieldChars) {{
+                            return {{
+                                success: false,
+                                code: 'resource_limit_exceeded',
+                                error: `read_links field ${{field}} exceeds the ${{maxFieldChars}} character limit`,
+                                resource: 'read_links_field_chars',
+                                field,
+                                char_count: String(value).length
+                            }};
+                        }}
+                    }}
+                    links.push(link);
+                    if (links.length > maxLinks) {{
+                        return {{
+                            success: false,
+                            code: 'resource_limit_exceeded',
+                            error: `read_links found more than ${{maxLinks}} links`,
+                            resource: 'read_links_count',
+                            count: links.length
+                        }};
+                    }}
+                }}
+                return {{
+                    success: true,
+                    links
+                }};
+            }})())
+        "#
+        );
 
         context.record_browser_evaluation();
-        let result = context.session.evaluate(js_code, false)?;
+        let result = context.session.evaluate(&js_code, false)?;
 
         let links = match parse_links_output(result.value) {
             Ok(links) => links,
-            Err(reason) => {
+            Err(ReadLinksFailure::InvalidPayload(reason)) => {
                 return Ok(context.finish(structured_tool_failure(
                     "invalid_links_payload",
                     reason,
@@ -75,6 +110,28 @@ impl Tool for ReadLinksTool {
                         "suggested_tool": "snapshot",
                     })),
                     None,
+                )));
+            }
+            Err(ReadLinksFailure::ResourceLimit {
+                resource,
+                error,
+                actual,
+                field,
+            }) => {
+                return Ok(context.finish(structured_tool_failure(
+                    "resource_limit_exceeded",
+                    error,
+                    None,
+                    None,
+                    Some(serde_json::json!({
+                        "suggested_tool": "snapshot",
+                    })),
+                    Some(serde_json::json!({
+                        "resource": resource,
+                        "limit": read_links_limit_for_resource(resource),
+                        "actual": actual,
+                        "field": field,
+                    })),
                 )));
             }
         };
@@ -90,14 +147,151 @@ impl Tool for ReadLinksTool {
     }
 }
 
-fn parse_links_output(value: Option<Value>) -> std::result::Result<Vec<Link>, String> {
-    match value {
-        Some(Value::String(payload)) => serde_json::from_str(&payload)
-            .map_err(|error| format!("Failed to parse link extraction result: {}", error)),
-        Some(other) => serde_json::from_value(other)
-            .map_err(|error| format!("Failed to deserialize link extraction result: {}", error)),
-        None => Err("Link extraction returned no data".to_string()),
+#[derive(Debug)]
+enum ReadLinksFailure {
+    InvalidPayload(String),
+    ResourceLimit {
+        resource: &'static str,
+        error: String,
+        actual: String,
+        field: Option<String>,
+    },
+}
+
+fn read_links_limit_for_resource(resource: &str) -> String {
+    match resource {
+        "read_links_count" => format!("{MAX_READ_LINKS_COUNT} links"),
+        "read_links_field_chars" => format!("{MAX_READ_LINK_FIELD_CHARS} characters"),
+        _ => String::new(),
     }
+}
+
+fn validate_link_limits(links: &[Link]) -> std::result::Result<(), ReadLinksFailure> {
+    if links.len() > MAX_READ_LINKS_COUNT {
+        return Err(ReadLinksFailure::ResourceLimit {
+            resource: "read_links_count",
+            error: format!(
+                "read_links found {} links, exceeding the {MAX_READ_LINKS_COUNT} link limit",
+                links.len()
+            ),
+            actual: format!("{} links", links.len()),
+            field: None,
+        });
+    }
+
+    for link in links {
+        for (field, value) in [
+            ("text", link.text.as_str()),
+            ("href", link.href.as_str()),
+            ("resolved_url", link.resolved_url.as_str()),
+        ] {
+            let char_count = value.chars().count();
+            if char_count > MAX_READ_LINK_FIELD_CHARS {
+                return Err(ReadLinksFailure::ResourceLimit {
+                    resource: "read_links_field_chars",
+                    error: format!(
+                        "read_links field {field} is {char_count} characters, exceeding the {MAX_READ_LINK_FIELD_CHARS} character limit"
+                    ),
+                    actual: format!("{char_count} characters"),
+                    field: Some(field.to_string()),
+                });
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn parse_links_output(value: Option<Value>) -> std::result::Result<Vec<Link>, ReadLinksFailure> {
+    match value {
+        Some(Value::String(payload)) => {
+            let value = serde_json::from_str::<Value>(&payload).map_err(|error| {
+                ReadLinksFailure::InvalidPayload(format!(
+                    "Failed to parse link extraction result: {}",
+                    error
+                ))
+            })?;
+            parse_links_value(value)
+        }
+        Some(other) => parse_links_value(other),
+        None => Err(ReadLinksFailure::InvalidPayload(
+            "Link extraction returned no data".to_string(),
+        )),
+    }
+}
+
+fn parse_links_value(value: Value) -> std::result::Result<Vec<Link>, ReadLinksFailure> {
+    if let Some(array) = value.as_array() {
+        let links: Vec<Link> =
+            serde_json::from_value(Value::Array(array.clone())).map_err(|error| {
+                ReadLinksFailure::InvalidPayload(format!(
+                    "Failed to deserialize link extraction result: {}",
+                    error
+                ))
+            })?;
+        validate_link_limits(&links)?;
+        return Ok(links);
+    }
+
+    let Some(object) = value.as_object() else {
+        return Err(ReadLinksFailure::InvalidPayload(
+            "Link extraction returned an unexpected payload".to_string(),
+        ));
+    };
+
+    if object.get("success").and_then(Value::as_bool) == Some(false)
+        && object.get("code").and_then(Value::as_str) == Some("resource_limit_exceeded")
+    {
+        let resource = match object.get("resource").and_then(Value::as_str) {
+            Some("read_links_count") => "read_links_count",
+            Some("read_links_field_chars") => "read_links_field_chars",
+            _ => "read_links_count",
+        };
+        let actual = match resource {
+            "read_links_count" => format!(
+                "{} links",
+                object
+                    .get("count")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(MAX_READ_LINKS_COUNT.saturating_add(1) as u64)
+            ),
+            "read_links_field_chars" => format!(
+                "{} characters",
+                object
+                    .get("char_count")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(MAX_READ_LINK_FIELD_CHARS.saturating_add(1) as u64)
+            ),
+            _ => String::new(),
+        };
+        return Err(ReadLinksFailure::ResourceLimit {
+            resource,
+            error: object
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("read_links exceeded a resource limit")
+                .to_string(),
+            actual,
+            field: object
+                .get("field")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        });
+    }
+
+    let links_value = object.get("links").cloned().ok_or_else(|| {
+        ReadLinksFailure::InvalidPayload(
+            "Link extraction returned a structured payload without links".to_string(),
+        )
+    })?;
+    let links: Vec<Link> = serde_json::from_value(links_value).map_err(|error| {
+        ReadLinksFailure::InvalidPayload(format!(
+            "Failed to deserialize link extraction result: {}",
+            error
+        ))
+    })?;
+    validate_link_limits(&links)?;
+    Ok(links)
 }
 
 #[cfg(test)]
@@ -107,6 +301,7 @@ mod tests {
     use crate::browser::backend::{
         FakeSessionBackend, ScriptEvaluation, SessionBackend, TabDescriptor,
     };
+    use crate::tools::limits::{MAX_READ_LINK_FIELD_CHARS, MAX_READ_LINKS_COUNT};
     use crate::tools::{OPERATION_METRICS_METADATA_KEY, Tool, ToolContext};
     use crate::{dom::DocumentMetadata, dom::DomTree};
     use std::time::Duration;
@@ -264,5 +459,54 @@ mod tests {
         );
         assert_eq!(links[1].href, "https://www.rust-lang.org/");
         assert_eq!(links[1].resolved_url, "https://www.rust-lang.org/");
+    }
+
+    #[test]
+    fn test_parse_links_output_rejects_link_count_over_limit() {
+        let payload = (0..=MAX_READ_LINKS_COUNT)
+            .map(|index| {
+                serde_json::json!({
+                    "text": format!("Link {index}"),
+                    "href": format!("/link-{index}"),
+                    "resolved_url": format!("https://example.test/link-{index}")
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let error = parse_links_output(Some(Value::Array(payload)))
+            .expect_err("too many links should fail closed");
+
+        match error {
+            ReadLinksFailure::ResourceLimit { resource, .. } => {
+                assert_eq!(resource, "read_links_count");
+            }
+            ReadLinksFailure::InvalidPayload(reason) => {
+                panic!("unexpected invalid links payload: {reason}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_links_output_rejects_field_over_limit() {
+        let error = parse_links_output(Some(serde_json::json!([
+            {
+                "text": "x".repeat(MAX_READ_LINK_FIELD_CHARS + 1),
+                "href": "/oversized",
+                "resolved_url": "https://example.test/oversized"
+            }
+        ])))
+        .expect_err("oversized link fields should fail closed");
+
+        match error {
+            ReadLinksFailure::ResourceLimit {
+                resource, field, ..
+            } => {
+                assert_eq!(resource, "read_links_field_chars");
+                assert_eq!(field.as_deref(), Some("text"));
+            }
+            ReadLinksFailure::InvalidPayload(reason) => {
+                panic!("unexpected invalid links payload: {reason}");
+            }
+        }
     }
 }

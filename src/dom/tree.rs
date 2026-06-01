@@ -1,5 +1,8 @@
 use crate::dom::element::{AriaChild, AriaNode};
 use crate::error::{BrowserError, Result};
+use crate::tools::limits::{
+    MAX_DOM_COLLECTION_ITEMS, MAX_DOM_DEPTH, MAX_DOM_FRAMES, MAX_DOM_NODES, MAX_DOM_STRING_CHARS,
+};
 use headless_chrome::Tab;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -118,6 +121,8 @@ struct SnapshotResponse {
     selectors: Vec<String>,
     #[serde(rename = "iframe_indices", default)]
     _iframe_indices: Vec<usize>,
+    #[serde(default)]
+    error: Option<String>,
 }
 
 impl Default for SnapshotResponse {
@@ -127,6 +132,7 @@ impl Default for SnapshotResponse {
             root: AriaNode::fragment(),
             selectors: Vec::new(),
             _iframe_indices: Vec::new(),
+            error: None,
         }
     }
 }
@@ -220,9 +226,12 @@ impl IndexedSnapshot {
 
 impl DocumentMetadata {
     fn decode_result_value(value: serde_json::Value) -> Result<Self> {
-        decode_browser_payload(value, "Failed to parse document metadata JSON", |value| {
-            serde_json::from_value(value)
-        })
+        let metadata =
+            decode_browser_payload(value, "Failed to parse document metadata JSON", |value| {
+                serde_json::from_value(value)
+            })?;
+        validate_document_metadata_limits(&metadata)?;
+        Ok(metadata)
     }
 
     /// Read lightweight document metadata from the current tab without rebuilding the full DOM tree.
@@ -255,9 +264,160 @@ struct LegacySnapshotResponse {
     iframe_indices: Vec<usize>,
 }
 
+fn validate_dom_string(field: &str, value: &str) -> Result<()> {
+    let char_count = value.chars().count();
+    if char_count > MAX_DOM_STRING_CHARS {
+        return Err(BrowserError::resource_limit_exceeded(
+            "dom_string_chars",
+            format!(
+                "DOM field {field} is {char_count} characters, exceeding the {MAX_DOM_STRING_CHARS} character limit"
+            ),
+            format!("{MAX_DOM_STRING_CHARS} characters"),
+            format!("{char_count} characters"),
+        ));
+    }
+
+    Ok(())
+}
+
+fn add_dom_collection_items(aggregate_count: &mut usize, item_count: usize) -> Result<()> {
+    *aggregate_count = aggregate_count.saturating_add(item_count);
+    if *aggregate_count > MAX_DOM_COLLECTION_ITEMS {
+        return Err(BrowserError::resource_limit_exceeded(
+            "dom_collection_items",
+            "DOM aggregate class, prop, selector, iframe, and text child count exceeds the collection item limit",
+            format!("{MAX_DOM_COLLECTION_ITEMS} items"),
+            format!("{} items", *aggregate_count),
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_document_metadata_limits(document: &DocumentMetadata) -> Result<()> {
+    if document.frames.len() > MAX_DOM_FRAMES {
+        return Err(BrowserError::resource_limit_exceeded(
+            "dom_frames",
+            format!(
+                "Document metadata has {} frames, exceeding the {MAX_DOM_FRAMES} frame limit",
+                document.frames.len()
+            ),
+            format!("{MAX_DOM_FRAMES} frames"),
+            format!("{} frames", document.frames.len()),
+        ));
+    }
+
+    validate_dom_string("document_id", &document.document_id)?;
+    validate_dom_string("revision", &document.revision)?;
+    validate_dom_string("url", &document.url)?;
+    validate_dom_string("title", &document.title)?;
+    validate_dom_string("ready_state", &document.ready_state)?;
+    for frame in &document.frames {
+        validate_dom_string("frame_status", &frame.status)?;
+        if let Some(url) = frame.url.as_ref() {
+            validate_dom_string("frame_url", url)?;
+        }
+        if let Some(document_id) = frame.document_id.as_ref() {
+            validate_dom_string("frame_document_id", document_id)?;
+        }
+        if let Some(revision) = frame.revision.as_ref() {
+            validate_dom_string("frame_revision", revision)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_dom_node_limits(
+    node: &AriaNode,
+    depth: usize,
+    node_count: &mut usize,
+    aggregate_count: &mut usize,
+) -> Result<()> {
+    if depth > MAX_DOM_DEPTH {
+        return Err(BrowserError::resource_limit_exceeded(
+            "dom_depth",
+            format!("DOM depth exceeds the {MAX_DOM_DEPTH} node limit"),
+            format!("{MAX_DOM_DEPTH} nodes"),
+            format!("{depth} nodes"),
+        ));
+    }
+
+    *node_count += 1;
+    if *node_count > MAX_DOM_NODES {
+        return Err(BrowserError::resource_limit_exceeded(
+            "dom_nodes",
+            format!("DOM snapshot exceeds the {MAX_DOM_NODES} node limit"),
+            format!("{MAX_DOM_NODES} nodes"),
+            format!("{} nodes", *node_count),
+        ));
+    }
+
+    validate_dom_string("role", &node.role)?;
+    validate_dom_string("name", &node.name)?;
+    if let Some(tag) = node.tag.as_ref() {
+        validate_dom_string("tag", tag)?;
+    }
+    if let Some(id) = node.id.as_ref() {
+        validate_dom_string("id", id)?;
+    }
+    add_dom_collection_items(aggregate_count, node.classes.len())?;
+    for class_name in &node.classes {
+        validate_dom_string("class", class_name)?;
+    }
+    add_dom_collection_items(aggregate_count, node.props.len())?;
+    for (key, value) in &node.props {
+        validate_dom_string("prop_key", key)?;
+        validate_dom_string("prop_value", value)?;
+    }
+    if let Some(cursor) = node.box_info.cursor.as_ref() {
+        validate_dom_string("cursor", cursor)?;
+    }
+    if let Some(position) = node.box_info.persistent_position.as_ref() {
+        validate_dom_string("persistent_position", position)?;
+    }
+    if let Some(edge) = node.box_info.persistent_edge.as_ref() {
+        validate_dom_string("persistent_edge", edge)?;
+    }
+
+    for child in &node.children {
+        match child {
+            AriaChild::Text(text) => {
+                add_dom_collection_items(aggregate_count, 1)?;
+                validate_dom_string("text", text)?;
+            }
+            AriaChild::Node(child_node) => {
+                validate_dom_node_limits(child_node, depth + 1, node_count, aggregate_count)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_snapshot_response_limits(response: &SnapshotResponse) -> Result<()> {
+    validate_document_metadata_limits(&response.document)?;
+
+    let mut aggregate_count = 0;
+    add_dom_collection_items(
+        &mut aggregate_count,
+        response
+            .selectors
+            .len()
+            .saturating_add(response._iframe_indices.len()),
+    )?;
+
+    for selector in &response.selectors {
+        validate_dom_string("selector", selector)?;
+    }
+
+    let mut node_count = 0;
+    validate_dom_node_limits(&response.root, 1, &mut node_count, &mut aggregate_count)
+}
+
 impl DomTree {
     fn decode_snapshot_result_value(value: serde_json::Value) -> Result<SnapshotResponse> {
-        decode_browser_payload(value, "Failed to parse snapshot JSON", |value| {
+        let response = decode_browser_payload(value, "Failed to parse snapshot JSON", |value| {
             serde_json::from_value::<SnapshotResponse>(value.clone()).or_else(|_| {
                 serde_json::from_value::<LegacySnapshotResponse>(value).map(|legacy| {
                     SnapshotResponse {
@@ -265,10 +425,21 @@ impl DomTree {
                         root: legacy.root,
                         selectors: legacy.selectors,
                         _iframe_indices: legacy.iframe_indices,
+                        error: None,
                     }
                 })
             })
-        })
+        })?;
+        if let Some(error) = response.error.as_ref() {
+            return Err(BrowserError::resource_limit_exceeded(
+                "dom_extraction_error",
+                format!("DOM extraction failed before producing a bounded snapshot: {error}"),
+                "successful bounded DOM snapshot",
+                "DOM extraction error",
+            ));
+        }
+        validate_snapshot_response_limits(&response)?;
+        Ok(response)
     }
 
     fn apply_public_handle_flags(
@@ -392,6 +563,7 @@ impl DomTree {
             root,
             selectors,
             _iframe_indices: _,
+            error: _,
         } = response;
         let mut tree = Self {
             document,
@@ -636,6 +808,28 @@ mod tests {
         })
     }
 
+    fn assert_snapshot_limit_resource(payload: serde_json::Value, resource: &str) {
+        let error = DomTree::decode_snapshot_result_value(payload)
+            .expect_err("oversized snapshot payload should fail closed");
+        match error {
+            BrowserError::ResourceLimitExceeded(details) => {
+                assert_eq!(details.resource, resource);
+            }
+            other => panic!("unexpected snapshot limit error: {other:?}"),
+        }
+    }
+
+    fn assert_document_metadata_limit_resource(payload: serde_json::Value, resource: &str) {
+        let error = DocumentMetadata::decode_result_value(payload)
+            .expect_err("oversized document metadata should fail closed");
+        match error {
+            BrowserError::ResourceLimitExceeded(details) => {
+                assert_eq!(details.resource, resource);
+            }
+            other => panic!("unexpected document metadata limit error: {other:?}"),
+        }
+    }
+
     #[test]
     fn test_decode_document_metadata_from_structured_value() {
         let metadata = DocumentMetadata::decode_result_value(sample_document_metadata_json())
@@ -660,6 +854,32 @@ mod tests {
     }
 
     #[test]
+    fn test_decode_document_metadata_rejects_too_many_frames() {
+        let mut payload = sample_document_metadata_json();
+        payload["frames"] = serde_json::Value::Array(
+            (0..=MAX_DOM_FRAMES)
+                .map(|index| {
+                    json!({
+                        "index": index,
+                        "status": "ready",
+                        "url": format!("https://example.test/frame-{index}")
+                    })
+                })
+                .collect(),
+        );
+
+        assert_document_metadata_limit_resource(payload, "dom_frames");
+    }
+
+    #[test]
+    fn test_decode_document_metadata_rejects_overlong_strings() {
+        let mut payload = sample_document_metadata_json();
+        payload["title"] = serde_json::Value::String("x".repeat(MAX_DOM_STRING_CHARS + 1));
+
+        assert_document_metadata_limit_resource(payload, "dom_string_chars");
+    }
+
+    #[test]
     fn test_decode_snapshot_response_from_structured_value() {
         let response = DomTree::decode_snapshot_result_value(sample_snapshot_response_json())
             .expect("structured snapshot should decode");
@@ -680,6 +900,105 @@ mod tests {
         assert_eq!(response.document, DocumentMetadata::default());
         assert_eq!(response.root.role, "button");
         assert_eq!(response.selectors, vec!["button.primary"]);
+    }
+
+    #[test]
+    fn test_decode_snapshot_response_rejects_too_many_frames() {
+        let mut payload = sample_snapshot_response_json();
+        payload["document"]["frames"] = serde_json::Value::Array(
+            (0..=MAX_DOM_FRAMES)
+                .map(|index| {
+                    json!({
+                        "index": index,
+                        "status": "ready",
+                        "url": format!("https://example.test/frame-{index}")
+                    })
+                })
+                .collect(),
+        );
+
+        assert_snapshot_limit_resource(payload, "dom_frames");
+    }
+
+    #[test]
+    fn test_decode_snapshot_response_rejects_too_many_nodes() {
+        let children = (0..MAX_DOM_NODES)
+            .map(|_| {
+                json!({
+                    "role": "generic",
+                    "name": "",
+                    "children": []
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut payload = sample_snapshot_response_json();
+        payload["root"] = json!({
+            "role": "fragment",
+            "name": "",
+            "children": children
+        });
+
+        assert_snapshot_limit_resource(payload, "dom_nodes");
+    }
+
+    #[test]
+    fn test_decode_snapshot_response_rejects_too_deep_tree() {
+        let mut node = json!({
+            "role": "button",
+            "name": "Deep",
+            "children": []
+        });
+        for _ in 0..=MAX_DOM_DEPTH {
+            node = json!({
+                "role": "generic",
+                "name": "",
+                "children": [node]
+            });
+        }
+        let mut payload = sample_snapshot_response_json();
+        payload["root"] = node;
+
+        assert_snapshot_limit_resource(payload, "dom_depth");
+    }
+
+    #[test]
+    fn test_decode_snapshot_response_rejects_overlong_dom_strings() {
+        let mut payload = sample_snapshot_response_json();
+        payload["document"]["title"] =
+            serde_json::Value::String("x".repeat(MAX_DOM_STRING_CHARS + 1));
+
+        assert_snapshot_limit_resource(payload, "dom_string_chars");
+    }
+
+    #[test]
+    fn test_decode_snapshot_response_rejects_aggregate_collection_items() {
+        let mut payload = sample_snapshot_response_json();
+        payload["root"] = json!({
+            "role": "button",
+            "name": "Click me",
+            "children": [],
+            "index": 0,
+            "classes": (0..=MAX_DOM_COLLECTION_ITEMS)
+                .map(|index| format!("c{index}"))
+                .collect::<Vec<_>>()
+        });
+
+        assert_snapshot_limit_resource(payload, "dom_collection_items");
+    }
+
+    #[test]
+    fn test_decode_snapshot_response_rejects_extraction_error_payload() {
+        let mut payload = sample_snapshot_response_json();
+        payload["error"] =
+            serde_json::Value::String("RangeError: maximum call stack size exceeded".to_string());
+        payload["root"] = json!({
+            "role": "fragment",
+            "name": "",
+            "children": []
+        });
+        payload["selectors"] = json!([]);
+
+        assert_snapshot_limit_resource(payload, "dom_extraction_error");
     }
 
     #[test]

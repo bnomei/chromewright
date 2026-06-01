@@ -23,6 +23,20 @@
         if (!ReadabilityConstructor) {
             throw new Error('Failed to load Readability constructor');
         }
+
+        var maxHtmlChars = __MARKDOWN_MAX_HTML_CHARS__;
+        function resourceLimitPayload(contentLength) {
+            return JSON.stringify({
+                title: document.title || '',
+                content: '',
+                textContent: '',
+                url: window.location.href,
+                error: 'markdown HTML input exceeds the ' + maxHtmlChars + ' character limit',
+                readabilityFailed: false,
+                resourceLimitExceeded: true,
+                charCount: contentLength
+            });
+        }
         
         // Clone the document to avoid DOM flickering (visual artifacts)
         // This prevents the page from changing appearance during extraction
@@ -57,6 +71,9 @@
             // This can happen on pages with insufficient content or unusual structure
             var fallbackContent = document.body ? document.body.innerHTML : '';
             var fallbackText = document.body ? document.body.textContent : '';
+            if (fallbackContent.length > maxHtmlChars || fallbackText.length > maxHtmlChars) {
+                return resourceLimitPayload(Math.max(fallbackContent.length, fallbackText.length));
+            }
             
             return JSON.stringify({
                 title: document.title || '',
@@ -77,10 +94,15 @@
         
         // Return structured data as JSON string
         // The HTML content will be converted to Markdown on the Rust side
+        var articleContent = article.content || '';
+        var articleTextContent = article.textContent || '';
+        if (articleContent.length > maxHtmlChars || articleTextContent.length > maxHtmlChars) {
+            return resourceLimitPayload(Math.max(articleContent.length, articleTextContent.length));
+        }
         return JSON.stringify({
             title: article.title || document.title || '',
-            content: article.content || '',           // Main HTML content
-            textContent: article.textContent || '',   // Plain text version
+            content: articleContent,                  // Main HTML content
+            textContent: articleTextContent,          // Plain text version
             url: window.location.href,
             excerpt: article.excerpt || '',
             byline: article.byline || '',

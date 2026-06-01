@@ -1,12 +1,57 @@
 use crate::browser::{MarkdownCacheEntry, MarkdownCacheMetadata};
 use crate::error::{BrowserError, Result};
 use crate::tools::html_to_markdown::convert_html_to_markdown;
+use crate::tools::limits::{
+    MAX_DOM_STRING_CHARS, MAX_MARKDOWN_HTML_CHARS, validate_markdown_html_chars,
+};
 use crate::tools::markdown::{GetMarkdownOutput, GetMarkdownParams};
 use crate::tools::readability_script::READABILITY_SCRIPT;
 use crate::tools::{DocumentResult, ToolContext, ToolResult};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
+
+fn validate_markdown_metadata_string(field: &str, value: &str) -> Result<()> {
+    let char_count = value.chars().count();
+    if char_count > MAX_DOM_STRING_CHARS {
+        return Err(BrowserError::resource_limit_exceeded(
+            "markdown_metadata_chars",
+            format!(
+                "markdown metadata field {field} is {char_count} characters, exceeding the {MAX_DOM_STRING_CHARS} character limit"
+            ),
+            format!("{MAX_DOM_STRING_CHARS} characters"),
+            format!("{char_count} characters"),
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_markdown_extraction_metadata(result: &ExtractionResult) -> Result<()> {
+    validate_markdown_metadata_string("title", &result.title)?;
+    validate_markdown_metadata_string("url", &result.url)?;
+    validate_markdown_metadata_string("excerpt", &result.excerpt)?;
+    validate_markdown_metadata_string("byline", &result.byline)?;
+    validate_markdown_metadata_string("site_name", &result.site_name)?;
+    validate_markdown_metadata_string("lang", &result.lang)?;
+    validate_markdown_metadata_string("dir", &result.dir)?;
+    validate_markdown_metadata_string("published_time", &result.published_time)
+}
+
+fn validate_markdown_text_chars(char_count: usize) -> Result<()> {
+    if char_count > MAX_MARKDOWN_HTML_CHARS {
+        return Err(BrowserError::resource_limit_exceeded(
+            "markdown_text_chars",
+            format!(
+                "markdown text input is {char_count} characters, exceeding the {MAX_MARKDOWN_HTML_CHARS} character limit"
+            ),
+            format!("{MAX_MARKDOWN_HTML_CHARS} characters"),
+            format!("{char_count} characters"),
+        ));
+    }
+
+    Ok(())
+}
 
 pub(crate) fn execute_get_markdown(
     params: GetMarkdownParams,
@@ -38,6 +83,21 @@ pub(crate) fn execute_get_markdown(
 
     let extraction_result = extract_markdown(context)?;
 
+    if extraction_result.resource_limit_exceeded {
+        let char_count = extraction_result
+            .char_count
+            .unwrap_or(MAX_MARKDOWN_HTML_CHARS + 1);
+        return Err(BrowserError::resource_limit_exceeded(
+            "markdown_html_chars",
+            extraction_result.error.unwrap_or_else(|| {
+                format!(
+                    "markdown HTML input is {char_count} characters, exceeding the {MAX_MARKDOWN_HTML_CHARS} character limit"
+                )
+            }),
+            format!("{MAX_MARKDOWN_HTML_CHARS} characters"),
+            format!("{char_count} characters"),
+        ));
+    }
     if extraction_result.readability_failed {
         return Err(BrowserError::ToolExecutionFailed {
             tool: "get_markdown".to_string(),
@@ -46,6 +106,9 @@ pub(crate) fn execute_get_markdown(
                 .unwrap_or_else(|| "Readability extraction failed".to_string()),
         });
     }
+    validate_markdown_html_chars(extraction_result.content.chars().count())?;
+    validate_markdown_text_chars(extraction_result.text_content.chars().count())?;
+    validate_markdown_extraction_metadata(&extraction_result)?;
 
     let entry = Arc::new(MarkdownCacheEntry::new(
         MarkdownCacheMetadata {
@@ -165,11 +228,15 @@ fn byte_index_for_char_offset(entry: &MarkdownCacheEntry, char_offset: usize) ->
 fn markdown_extraction_script() -> &'static str {
     static SCRIPT: OnceLock<String> = OnceLock::new();
     SCRIPT.get_or_init(|| {
+        let extraction_script = include_str!("../convert_to_markdown.js").replace(
+            "__MARKDOWN_MAX_HTML_CHARS__",
+            &MAX_MARKDOWN_HTML_CHARS.to_string(),
+        );
         format!(
             "var READABILITY_SCRIPT = {};\n{}",
             serde_json::to_string(READABILITY_SCRIPT)
                 .expect("Readability script serialization should never fail"),
-            include_str!("../convert_to_markdown.js")
+            extraction_script
         )
     })
 }
@@ -299,6 +366,10 @@ struct ExtractionResult {
     readability_failed: bool,
     #[serde(default)]
     error: Option<String>,
+    #[serde(default)]
+    resource_limit_exceeded: bool,
+    #[serde(default)]
+    char_count: Option<usize>,
 }
 
 #[cfg(test)]
@@ -307,6 +378,8 @@ mod tests {
     use crate::browser::BrowserSession;
     use crate::browser::backend::{ScriptEvaluation, SessionBackend, TabDescriptor};
     use crate::dom::{DocumentMetadata, DomTree};
+    use crate::tools::limits::{MAX_DOM_STRING_CHARS, MAX_MARKDOWN_HTML_CHARS};
+
     struct ReadyWaitFailureBackend;
 
     impl SessionBackend for ReadyWaitFailureBackend {
@@ -382,6 +455,17 @@ mod tests {
 
     struct InvalidMarkdownSettleBackend;
 
+    enum MarkdownExtractionPayload {
+        ResourceLimit,
+        OversizedContent,
+        OversizedMetadata,
+        OversizedTextContent,
+    }
+
+    struct MarkdownExtractionBackend {
+        payload: MarkdownExtractionPayload,
+    }
+
     impl SessionBackend for InvalidMarkdownSettleBackend {
         fn navigate(&self, _url: &str) -> Result<()> {
             unreachable!("navigate is not used in this test")
@@ -452,6 +536,129 @@ mod tests {
         }
     }
 
+    impl SessionBackend for MarkdownExtractionBackend {
+        fn navigate(&self, _url: &str) -> Result<()> {
+            unreachable!("navigate is not used in this test")
+        }
+
+        fn wait_for_navigation(&self) -> Result<()> {
+            unreachable!("wait_for_navigation is not used in this test")
+        }
+
+        fn wait_for_document_ready_with_timeout(&self, _timeout: Duration) -> Result<()> {
+            unreachable!("wait_for_document_ready_with_timeout is not used in this test")
+        }
+
+        fn document_metadata(&self) -> Result<DocumentMetadata> {
+            Ok(DocumentMetadata {
+                document_id: "doc-markdown".to_string(),
+                revision: "rev-1".to_string(),
+                url: "https://example.test".to_string(),
+                title: "Example".to_string(),
+                ready_state: "complete".to_string(),
+                frames: Vec::new(),
+            })
+        }
+
+        fn extract_dom(&self) -> Result<DomTree> {
+            unreachable!("extract_dom is not used in this test")
+        }
+
+        fn extract_dom_with_prefix(&self, _prefix: &str) -> Result<DomTree> {
+            unreachable!("extract_dom_with_prefix is not used in this test")
+        }
+
+        fn evaluate(&self, script: &str, _await_promise: bool) -> Result<ScriptEvaluation> {
+            if script.contains("document.body && document.body.textContent") {
+                return Ok(ScriptEvaluation {
+                    value: Some(serde_json::json!(0)),
+                    description: None,
+                    type_name: Some("Number".to_string()),
+                });
+            }
+
+            let value = match self.payload {
+                MarkdownExtractionPayload::ResourceLimit => serde_json::json!({
+                    "title": "Example",
+                    "content": "",
+                    "textContent": "",
+                    "url": "https://example.test",
+                    "resourceLimitExceeded": true,
+                    "charCount": MAX_MARKDOWN_HTML_CHARS + 1,
+                    "readabilityFailed": false,
+                    "error": "markdown HTML input exceeds the character limit"
+                }),
+                MarkdownExtractionPayload::OversizedContent => serde_json::json!({
+                    "title": "Example",
+                    "content": "x".repeat(MAX_MARKDOWN_HTML_CHARS + 1),
+                    "textContent": "",
+                    "url": "https://example.test",
+                    "readabilityFailed": false
+                }),
+                MarkdownExtractionPayload::OversizedMetadata => serde_json::json!({
+                    "title": "x".repeat(MAX_DOM_STRING_CHARS + 1),
+                    "content": "<main><p>bounded</p></main>",
+                    "textContent": "bounded",
+                    "url": "https://example.test",
+                    "readabilityFailed": false
+                }),
+                MarkdownExtractionPayload::OversizedTextContent => serde_json::json!({
+                    "title": "Example",
+                    "content": "<main><p>bounded</p></main>",
+                    "textContent": "x".repeat(MAX_MARKDOWN_HTML_CHARS + 1),
+                    "url": "https://example.test",
+                    "readabilityFailed": false
+                }),
+            };
+
+            Ok(ScriptEvaluation {
+                value: Some(serde_json::Value::String(value.to_string())),
+                description: None,
+                type_name: Some("String".to_string()),
+            })
+        }
+
+        fn capture_screenshot(&self, _full_page: bool) -> Result<Vec<u8>> {
+            unreachable!("capture_screenshot is not used in this test")
+        }
+
+        fn press_key(&self, _key: &str) -> Result<()> {
+            unreachable!("press_key is not used in this test")
+        }
+
+        fn list_tabs(&self) -> Result<Vec<TabDescriptor>> {
+            Ok(vec![TabDescriptor {
+                id: "tab-1".to_string(),
+                title: "Example".to_string(),
+                url: "https://example.test".to_string(),
+            }])
+        }
+
+        fn active_tab(&self) -> Result<TabDescriptor> {
+            Ok(TabDescriptor {
+                id: "tab-1".to_string(),
+                title: "Example".to_string(),
+                url: "https://example.test".to_string(),
+            })
+        }
+
+        fn open_tab(&self, _url: &str) -> Result<TabDescriptor> {
+            unreachable!("open_tab is not used in this test")
+        }
+
+        fn activate_tab(&self, _tab_id: &str) -> Result<()> {
+            unreachable!("activate_tab is not used in this test")
+        }
+
+        fn close_tab(&self, _tab_id: &str, _with_unload: bool) -> Result<()> {
+            unreachable!("close_tab is not used in this test")
+        }
+
+        fn close(&self) -> Result<()> {
+            unreachable!("close is not used in this test")
+        }
+    }
+
     #[test]
     fn test_execute_get_markdown_propagates_document_ready_wait_errors() {
         let session = BrowserSession::with_test_backend(ReadyWaitFailureBackend);
@@ -481,6 +688,103 @@ mod tests {
                 assert!(reason.contains("string"));
             }
             other => panic!("unexpected settle probe error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_execute_get_markdown_rejects_resource_limit_payload() {
+        let session = BrowserSession::with_test_backend(MarkdownExtractionBackend {
+            payload: MarkdownExtractionPayload::ResourceLimit,
+        });
+        let mut context = ToolContext::new(&session);
+
+        let err = execute_get_markdown(GetMarkdownParams::default(), &mut context)
+            .expect_err("resource limit payload should fail closed");
+
+        match err {
+            BrowserError::ResourceLimitExceeded(details) => {
+                assert_eq!(details.resource, "markdown_html_chars");
+                assert_eq!(
+                    details.limit,
+                    format!("{MAX_MARKDOWN_HTML_CHARS} characters")
+                );
+                assert_eq!(
+                    details.actual,
+                    format!("{} characters", MAX_MARKDOWN_HTML_CHARS + 1)
+                );
+            }
+            other => panic!("unexpected markdown resource limit error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_execute_get_markdown_defensively_rejects_oversized_html_content() {
+        let session = BrowserSession::with_test_backend(MarkdownExtractionBackend {
+            payload: MarkdownExtractionPayload::OversizedContent,
+        });
+        let mut context = ToolContext::new(&session);
+
+        let err = execute_get_markdown(GetMarkdownParams::default(), &mut context)
+            .expect_err("oversized extracted HTML should fail closed");
+
+        match err {
+            BrowserError::ResourceLimitExceeded(details) => {
+                assert_eq!(details.resource, "markdown_html_chars");
+                assert_eq!(
+                    details.actual,
+                    format!("{} characters", MAX_MARKDOWN_HTML_CHARS + 1)
+                );
+            }
+            other => panic!("unexpected markdown oversized content error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_execute_get_markdown_rejects_oversized_metadata() {
+        let session = BrowserSession::with_test_backend(MarkdownExtractionBackend {
+            payload: MarkdownExtractionPayload::OversizedMetadata,
+        });
+        let mut context = ToolContext::new(&session);
+
+        let err = execute_get_markdown(GetMarkdownParams::default(), &mut context)
+            .expect_err("oversized markdown metadata should fail closed");
+
+        match err {
+            BrowserError::ResourceLimitExceeded(details) => {
+                assert_eq!(details.resource, "markdown_metadata_chars");
+                assert_eq!(details.limit, format!("{MAX_DOM_STRING_CHARS} characters"));
+                assert_eq!(
+                    details.actual,
+                    format!("{} characters", MAX_DOM_STRING_CHARS + 1)
+                );
+            }
+            other => panic!("unexpected markdown metadata error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_execute_get_markdown_rejects_oversized_text_content() {
+        let session = BrowserSession::with_test_backend(MarkdownExtractionBackend {
+            payload: MarkdownExtractionPayload::OversizedTextContent,
+        });
+        let mut context = ToolContext::new(&session);
+
+        let err = execute_get_markdown(GetMarkdownParams::default(), &mut context)
+            .expect_err("oversized markdown text content should fail closed");
+
+        match err {
+            BrowserError::ResourceLimitExceeded(details) => {
+                assert_eq!(details.resource, "markdown_text_chars");
+                assert_eq!(
+                    details.limit,
+                    format!("{MAX_MARKDOWN_HTML_CHARS} characters")
+                );
+                assert_eq!(
+                    details.actual,
+                    format!("{} characters", MAX_MARKDOWN_HTML_CHARS + 1)
+                );
+            }
+            other => panic!("unexpected markdown text content error: {other:?}"),
         }
     }
 }
