@@ -52,6 +52,9 @@ pub struct BrowserSession {
 
     /// Managed screenshot artifacts retained for the current session.
     screenshot_artifacts: Mutex<VecDeque<Arc<ScreenshotArtifact>>>,
+
+    /// Private per-session root for managed screenshot artifacts.
+    screenshot_artifact_root: tempfile::TempDir,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -294,6 +297,30 @@ impl BrowserSession {
             SessionOrigin::Connected => HashSet::new(),
         };
 
+        let screenshot_artifact_root = tempfile::Builder::new()
+            .prefix("chromewright-screenshots-")
+            .tempdir()
+            .map_err(|e| {
+                BrowserError::ScreenshotFailed(format!(
+                    "Failed to prepare screenshot artifact directory: {}",
+                    e
+                ))
+            })?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(
+                screenshot_artifact_root.path(),
+                std::fs::Permissions::from_mode(0o700),
+            )
+            .map_err(|e| {
+                BrowserError::ScreenshotFailed(format!(
+                    "Failed to secure screenshot artifact directory: {}",
+                    e
+                ))
+            })?;
+        }
+
         Ok(Self {
             backend: Arc::new(backend),
             origin,
@@ -302,6 +329,7 @@ impl BrowserSession {
             markdown_cache: Mutex::new(None),
             snapshot_cache: Mutex::new(None),
             screenshot_artifacts: Mutex::new(VecDeque::new()),
+            screenshot_artifact_root,
         })
     }
 
@@ -382,6 +410,14 @@ impl BrowserSession {
             .iter()
             .cloned()
             .collect()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn screenshot_artifact_root_for_test(&self) -> std::path::PathBuf {
+        self.screenshot_artifact_root
+            .path()
+            .canonicalize()
+            .unwrap_or_else(|_| self.screenshot_artifact_root.path().to_path_buf())
     }
 }
 

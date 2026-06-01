@@ -6,6 +6,8 @@ use crate::dom::{DocumentMetadata, SnapshotNode};
 use crate::error::{BrowserError, Result};
 use crate::tools::limits::validate_screenshot_png_bytes;
 use std::collections::VecDeque;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -149,18 +151,37 @@ fn screenshot_artifact_id() -> String {
     format!("{millis}-{ordinal}")
 }
 
-fn screenshot_artifact_root() -> PathBuf {
-    std::env::temp_dir()
-        .join("chromewright")
-        .join("screenshots")
-}
-
 fn file_uri(path: &Path) -> String {
     format!("file://{}", path.display())
 }
 
 fn screenshot_artifact_filename(id: &str, format: ScreenshotFormat) -> String {
     format!("chromewright-shot-{id}.{}", format.extension())
+}
+
+fn create_screenshot_artifact_file(path: &Path, bytes: &[u8]) -> Result<()> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+
+    let mut file = options.open(path).map_err(|e| {
+        BrowserError::ScreenshotFailed(format!("Failed to store screenshot artifact: {}", e))
+    })?;
+
+    if let Err(err) = file.write_all(bytes) {
+        let _ = std::fs::remove_file(path);
+        return Err(BrowserError::ScreenshotFailed(format!(
+            "Failed to store screenshot artifact: {}",
+            err
+        )));
+    }
+
+    Ok(())
 }
 
 impl BrowserSession {
@@ -245,19 +266,12 @@ impl BrowserSession {
     ) -> Result<Arc<ScreenshotArtifact>> {
         validate_screenshot_png_bytes(capture.bytes.len())?;
 
-        let root = screenshot_artifact_root();
-        std::fs::create_dir_all(&root).map_err(|e| {
-            BrowserError::ScreenshotFailed(format!(
-                "Failed to prepare screenshot artifact directory: {}",
-                e
-            ))
-        })?;
-
         let artifact_id = screenshot_artifact_id();
-        let path = root.join(screenshot_artifact_filename(&artifact_id, capture.format));
-        std::fs::write(&path, &capture.bytes).map_err(|e| {
-            BrowserError::ScreenshotFailed(format!("Failed to store screenshot artifact: {}", e))
-        })?;
+        let path = self
+            .screenshot_artifact_root
+            .path()
+            .join(screenshot_artifact_filename(&artifact_id, capture.format));
+        create_screenshot_artifact_file(&path, &capture.bytes)?;
         let path = path.canonicalize().unwrap_or(path);
 
         let artifact = Arc::new(ScreenshotArtifact {
@@ -359,6 +373,8 @@ mod tests {
     };
     use crate::dom::{Cursor, NodeRef};
     use crate::tools::limits::SCREENSHOT_MAX_PNG_BYTES;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
 
     fn sample_document(document_id: &str, revision: &str) -> DocumentMetadata {
         DocumentMetadata {
@@ -474,6 +490,67 @@ mod tests {
     }
 
     #[test]
+    fn screenshot_artifacts_use_private_per_session_roots() {
+        let session_a = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        let session_b = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        let root_a = session_a.screenshot_artifact_root_for_test();
+        let root_b = session_b.screenshot_artifact_root_for_test();
+
+        assert_ne!(root_a, root_b);
+
+        let artifact_a = session_a
+            .capture_screenshot_artifact(ScreenshotRequest::default())
+            .expect("session A screenshot should store");
+        let artifact_b = session_b
+            .capture_screenshot_artifact(ScreenshotRequest::default())
+            .expect("session B screenshot should store");
+
+        assert!(artifact_a.path.starts_with(&root_a));
+        assert!(artifact_b.path.starts_with(&root_b));
+
+        #[cfg(unix)]
+        {
+            let root_mode = std::fs::metadata(&root_a)
+                .expect("root metadata should be readable")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(root_mode, 0o700);
+
+            let file_mode = std::fs::metadata(&artifact_a.path)
+                .expect("artifact metadata should be readable")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(file_mode, 0o600);
+        }
+
+        session_a
+            .close()
+            .expect("session A close should clean artifacts");
+        session_b
+            .close()
+            .expect("session B close should clean artifacts");
+    }
+
+    #[test]
+    fn screenshot_artifact_duplicate_path_creation_fails_without_truncating() {
+        let root = tempfile::tempdir().expect("private tempdir should be created");
+        let path = root.path().join("duplicate.png");
+
+        create_screenshot_artifact_file(&path, b"first")
+            .expect("first exclusive create should succeed");
+        let err = create_screenshot_artifact_file(&path, b"second")
+            .expect_err("second exclusive create should fail");
+
+        assert!(matches!(err, BrowserError::ScreenshotFailed(_)));
+        assert_eq!(
+            std::fs::read(&path).expect("original artifact should remain readable"),
+            b"first"
+        );
+    }
+
+    #[test]
     fn screenshot_artifact_retention_prunes_old_entries() {
         let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
         let mut first_path = None;
@@ -497,6 +574,28 @@ mod tests {
         session
             .close()
             .expect("session close should clean artifacts");
+    }
+
+    #[test]
+    fn clear_screenshot_artifacts_removes_retained_private_files() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        let artifact = session
+            .capture_screenshot_artifact(ScreenshotRequest::default())
+            .expect("screenshot artifact should store");
+        let path = artifact.path.clone();
+        let root = session.screenshot_artifact_root_for_test();
+
+        assert!(path.exists());
+        session
+            .clear_screenshot_artifacts()
+            .expect("clear should remove retained artifacts");
+
+        assert!(session.screenshot_artifacts_for_test().is_empty());
+        assert!(!path.exists());
+        assert!(
+            root.exists(),
+            "session tempdir should stay alive until session drop"
+        );
     }
 
     #[test]
