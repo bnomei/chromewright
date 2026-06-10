@@ -725,7 +725,7 @@ mod tests {
         });
 
         assert_eq!(output.current.scope.mode, SnapshotMode::Full);
-        assert_eq!(output.current.scope.viewport_biased, false);
+        assert!(!output.current.scope.viewport_biased);
         assert_eq!(output.current.nodes.len(), 2);
         assert!(output.current.snapshot.contains("Offscreen save"));
         assert!(output.current.snapshot.contains("Visible tab"));

@@ -267,28 +267,37 @@ impl<'de> Deserialize<'de> for WaitParams {
     }
 }
 
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+#[allow(dead_code)]
+struct WaitParamsAdvertisedSchema {
+    /// Wait predicate. Defaults to `navigation_settled` when omitted.
+    #[serde(default)]
+    pub condition: Option<WaitCondition>,
+    /// Node target for node-state, `text_contains`, and `value_equals` waits.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<PublicTarget>,
+    /// Expected text fragment for `text_contains`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// Expected value for `value_equals`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    /// Baseline revision token for `revision_changed`. Omit to use the current document revision.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub since_revision: Option<String>,
+    /// Timeout in milliseconds (default: 30000)
+    #[serde(default = "default_timeout")]
+    pub timeout_ms: u64,
+}
+
 impl JsonSchema for WaitParams {
     fn schema_name() -> Cow<'static, str> {
         "WaitParams".into()
     }
 
     fn json_schema(generator: &mut SchemaGenerator) -> Schema {
-        let variants = [
-            generator.subschema_for::<StrictNavigationSettledWaitParams>(),
-            generator.subschema_for::<StrictRevisionChangedWaitParams>(),
-            generator.subschema_for::<StrictNodeStateWaitParams>(),
-            generator.subschema_for::<StrictTextContainsWaitParams>(),
-            generator.subschema_for::<StrictValueEqualsWaitParams>(),
-        ]
-        .into_iter()
-        .map(|schema| serde_json::to_value(schema).expect("wait schema variant should serialize"))
-        .collect::<Vec<_>>();
-
-        serde_json::from_value(serde_json::json!({
-            "type": "object",
-            "oneOf": variants,
-        }))
-        .expect("wait params schema should deserialize")
+        WaitParamsAdvertisedSchema::json_schema(generator)
     }
 }
 
@@ -449,43 +458,34 @@ mod tests {
     }
 
     #[test]
-    fn test_wait_params_schema_encodes_union_without_legacy_target_fields() {
+    fn test_wait_params_schema_is_flat_object_without_legacy_target_fields() {
         let schema = schema_for!(WaitParams);
         let schema_json = serde_json::to_value(&schema).expect("schema should serialize");
         assert_eq!(
             schema_json.get("type").and_then(|value| value.as_str()),
             Some("object")
         );
-        let variants = schema_json
-            .get("oneOf")
-            .and_then(|value| value.as_array())
-            .expect("wait schema should expose oneOf variants");
-
-        for variant in variants {
-            let resolved_variant =
-                if let Some(reference) = variant.get("$ref").and_then(|value| value.as_str()) {
-                    let definition_name = reference
-                        .strip_prefix("#/$defs/")
-                        .or_else(|| reference.strip_prefix("#/definitions/"))
-                        .expect("wait schema refs should target local definitions");
-                    schema_json
-                        .get("$defs")
-                        .or_else(|| schema_json.get("definitions"))
-                        .and_then(|defs| defs.get(definition_name))
-                        .expect("wait schema ref should resolve")
-                } else {
-                    variant
-                };
-
-            let properties = resolved_variant
-                .get("properties")
-                .and_then(|value| value.as_object())
-                .expect("wait schema variants should expose properties");
-            assert!(!properties.contains_key("selector"));
-            assert!(!properties.contains_key("index"));
-            assert!(!properties.contains_key("node_ref"));
-            assert!(!properties.contains_key("cursor"));
+        for key in ["oneOf", "anyOf", "allOf", "enum", "not"] {
+            assert!(
+                schema_json.get(key).is_none(),
+                "wait schema should not expose top-level {key}"
+            );
         }
+
+        let properties = schema_json
+            .get("properties")
+            .and_then(|value| value.as_object())
+            .expect("wait schema should expose properties");
+        assert!(properties.contains_key("condition"));
+        assert!(properties.contains_key("target"));
+        assert!(properties.contains_key("text"));
+        assert!(properties.contains_key("value"));
+        assert!(properties.contains_key("since_revision"));
+        assert!(properties.contains_key("timeout_ms"));
+        assert!(!properties.contains_key("selector"));
+        assert!(!properties.contains_key("index"));
+        assert!(!properties.contains_key("node_ref"));
+        assert!(!properties.contains_key("cursor"));
 
         let serialized = serde_json::to_string(&schema_json).expect("schema should stringify");
         assert!(serialized.contains("\"target\""));

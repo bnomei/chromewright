@@ -345,6 +345,13 @@ mod tests {
                     "tool '{}' should expose an object input schema",
                     tool.name()
                 );
+                for key in ["oneOf", "anyOf", "allOf", "enum", "not"] {
+                    assert!(
+                        input_schema.get(key).is_none(),
+                        "tool '{}' should not expose top-level {key} in its input schema",
+                        tool.name()
+                    );
+                }
 
                 let output_schema = tool.output_schema();
                 assert_eq!(
