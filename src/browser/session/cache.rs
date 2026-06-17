@@ -152,7 +152,23 @@ fn screenshot_artifact_id() -> String {
 }
 
 fn file_uri(path: &Path) -> String {
-    format!("file://{}", path.display())
+    let path = path.to_string_lossy().replace('\\', "/");
+    let mut encoded = String::with_capacity(path.len());
+
+    for byte in path.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' | b':' => {
+                encoded.push(byte as char)
+            }
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+
+    if encoded.starts_with('/') {
+        format!("file://{encoded}")
+    } else {
+        format!("file:///{encoded}")
+    }
 }
 
 fn screenshot_artifact_filename(id: &str, format: ScreenshotFormat) -> String {
@@ -547,6 +563,16 @@ mod tests {
         assert_eq!(
             std::fs::read(&path).expect("original artifact should remain readable"),
             b"first"
+        );
+    }
+
+    #[test]
+    fn screenshot_artifact_uri_percent_encodes_url_sensitive_paths() {
+        let path = Path::new("/tmp/chromewright shots/shot #1?100%.png");
+
+        assert_eq!(
+            file_uri(path),
+            "file:///tmp/chromewright%20shots/shot%20%231%3F100%25.png"
         );
     }
 
