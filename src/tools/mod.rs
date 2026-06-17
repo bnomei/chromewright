@@ -139,7 +139,7 @@ mod tests {
     }
 
     #[test]
-    fn test_build_document_envelope_records_snapshot_operation_metrics() {
+    fn test_build_document_envelope_records_measured_operation_metrics_output_bytes() {
         let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
         let dom = sample_dom();
         let mut context = ToolContext::with_dom(&session, dom);
@@ -155,9 +155,12 @@ mod tests {
             metrics.contains_key("snapshot_render_micros"),
             "snapshot render timing should be recorded"
         );
+        let output_bytes = metrics["output_bytes"]
+            .as_u64()
+            .expect("snapshot envelope should record exact serialized output bytes");
         assert!(
-            !metrics.contains_key("output_bytes"),
-            "output_bytes should be omitted when exact sizing is not requested"
+            output_bytes > 0,
+            "measured snapshot output_bytes should be positive"
         );
     }
 
