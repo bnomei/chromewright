@@ -189,6 +189,15 @@ mod tests {
     }
 
     #[test]
+    fn test_browser_session_default_includes_operator_tools() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+
+        assert!(session.tool_registry().has("evaluate"));
+        assert!(session.tool_registry().has("screenshot"));
+        assert!(session.tool_registry().has("set_viewport"));
+    }
+
+    #[test]
     fn test_all_tools_registry_includes_operator_tools() {
         let registry = ToolRegistry::with_all_tools();
 

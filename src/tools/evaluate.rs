@@ -70,6 +70,28 @@ mod tests {
     use crate::tools::{OPERATION_METRICS_METADATA_KEY, Tool, ToolContext};
 
     #[test]
+    fn test_evaluate_tool_requires_confirm_unsafe() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        let tool = EvaluateTool;
+        let mut context = ToolContext::new(&session);
+
+        let err = tool
+            .execute_typed(
+                EvaluateParams {
+                    code: "document.readyState".to_string(),
+                    await_promise: false,
+                    confirm_unsafe: false,
+                },
+                &mut context,
+            )
+            .expect_err("evaluate should reject missing unsafe confirmation");
+
+        assert!(
+            matches!(err, BrowserError::InvalidArgument(message) if message == "evaluate requires confirm_unsafe=true")
+        );
+    }
+
+    #[test]
     fn test_evaluate_tool_records_browser_evaluation_metrics() {
         let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
         let tool = EvaluateTool;

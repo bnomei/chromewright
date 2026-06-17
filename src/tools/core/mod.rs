@@ -937,7 +937,7 @@ impl ToolRegistry {
         registry
     }
 
-    /// Create a registry with the default high-level agent tools plus advanced operator tools.
+    /// Create a registry with the normal production tool surface, including operator tools.
     pub fn with_all_tools() -> Self {
         let mut registry = Self::with_defaults();
         registry.register_operator_tools();
@@ -977,7 +977,10 @@ impl ToolRegistry {
         self.register(close::CloseTool);
     }
 
-    /// Register advanced operator tools such as raw JavaScript evaluation.
+    /// Register operator tools such as raw JavaScript evaluation.
+    ///
+    /// Operator tools are normal production tools; higher-risk behavior is guarded
+    /// by per-tool confirmations such as `confirm_unsafe`, not a global flag.
     pub fn register_operator_tools(&mut self) {
         self.register(evaluate::EvaluateTool);
     }
