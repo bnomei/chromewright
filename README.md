@@ -196,15 +196,16 @@ Chromewright also carries a few small but important contract details:
 
 ## Default Tool Surface
 
-The default Chromewright MCP server exposes 22 high-level tools:
+The default Chromewright MCP server exposes 23 high-level and operator tools:
 
 - navigation: `navigate`, `go_back`, `go_forward`, `wait`
 - interaction and viewport: `click`, `input`, `select`, `hover`, `press_key`, `scroll`, `set_viewport`
 - tabs and lifecycle: `new_tab`, `tab_list`, `switch_tab`, `close_tab`, `close`
 - reading and inspection: `snapshot`, `inspect_node`, `get_markdown`, `extract`, `read_links`
 - managed artifacts: `screenshot`
+- operator diagnostics: `evaluate`
 
-The default surface intentionally excludes the raw-JavaScript operator tool `evaluate`.
+The raw-JavaScript operator tool `evaluate` is part of the normal production MCP surface because it is useful for diagnostics and escape-hatch inspection when bounded tools such as `inspect_node`, `extract`, or `get_markdown` cannot answer a page-specific question. Chromewright does not use a separate global enable flag for operator tools; instead, higher-risk tools keep their guardrails in their own input contracts.
 
 High-level action tools return compact follow-up metadata by default. Use `snapshot` when you need the scoped YAML snapshot plus actionable-node list, with `viewport` as the default, `delta` for session-local changes, and `full` for exhaustive rereads. For targeted reads, use `snapshot` to choose a node and reuse its `cursor`, then call `inspect_node`; when you need to inspect a non-actionable DOM node such as a heading or image, `inspect_node` also accepts selector-based reads with an optional `cursor`, and stale cursor replay may selector-rebound before the final `target` settles. After revision-changing actions, rerun `snapshot` before more precise target reuse. Public DOM follow-up calls should use `target.kind = "cursor"` whenever a fresh cursor is available and fall back to `target.kind = "selector"` when only selector continuity remains.
 
@@ -235,9 +236,10 @@ cargo test --locked --all-features operation_metrics
 
 - Chromewright drives a real Chrome or Chromium instance through CDP. In attach mode, it sees the tabs, cookies, and authenticated state of the browser profile you give it.
 - Use a dedicated browser profile for agent work when you do not want automation attached to your personal session.
-- The default tool surface excludes raw JavaScript evaluation; `screenshot` remains part of the bounded default surface and returns managed artifact metadata.
+- The normal tool surface includes the raw-JavaScript operator tool `evaluate`; callers must pass `confirm_unsafe = true` for each invocation because it executes arbitrary JavaScript in the active page. `screenshot` remains part of the bounded default surface and returns managed artifact metadata.
 - `screenshot` does not accept caller-chosen output paths or `confirm_unsafe`; use `mode = "full_page"` instead of a legacy `full_page = true` flag, and use `scale = "css"` only when you want CSS-pixel-normalized output instead of raw device pixels.
-- `navigate` and `new_tab` reject unsafe schemes such as `data:` and `file:` unless the caller passes `allow_unsafe = true`.
+- `navigate` and `new_tab` reject unsafe schemes such as `data:` and `file:` unless the caller passes `allow_unsafe = true` on that specific request.
+- Destructive tab lifecycle operations use per-tool confirmation fields: `close_tab` requires `confirm_destructive = true` before closing an unmanaged active tab in a connected session, and `close` requires the same confirmation before expanding connected-session cleanup from managed tabs to all tabs.
 - `cursor` and `node_ref` targets are revision-scoped. After a DOM-changing action, stale `cursor` replay may selector-rebound, but precise follow-up work should still be refreshed from a new `snapshot`.
 
 ## License

@@ -325,7 +325,7 @@ impl BrowserSession {
             backend: Arc::new(backend),
             origin,
             managed_tab_ids: Mutex::new(managed_tab_ids),
-            tool_registry: ToolRegistry::with_defaults(),
+            tool_registry: ToolRegistry::with_all_tools(),
             markdown_cache: Mutex::new(None),
             snapshot_cache: Mutex::new(None),
             screenshot_artifacts: Mutex::new(VecDeque::new()),

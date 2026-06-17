@@ -519,27 +519,14 @@ mod tests {
     }
 
     #[test]
-    fn test_mcp_surface_reflects_operator_tool_registration() {
-        let default_tool_names: Vec<String> = BrowserServer::from_session(
+    fn test_mcp_surface_includes_operator_tools_by_default() {
+        let tool_names: Vec<String> = BrowserServer::from_session(
             BrowserSession::with_test_backend(FakeSessionBackend::new()),
         )
         .list_mcp_tools()
         .into_iter()
         .map(|tool| tool.name.to_string())
         .collect();
-
-        assert!(!default_tool_names.iter().any(|name| name == "evaluate"));
-        assert!(default_tool_names.iter().any(|name| name == "screenshot"));
-        assert!(default_tool_names.iter().any(|name| name == "set_viewport"));
-
-        let mut session = BrowserSession::with_test_backend(FakeSessionBackend::new());
-        session.tool_registry_mut().register_operator_tools();
-
-        let tool_names: Vec<String> = BrowserServer::from_session(session)
-            .list_mcp_tools()
-            .into_iter()
-            .map(|tool| tool.name.to_string())
-            .collect();
 
         assert!(tool_names.iter().any(|name| name == "evaluate"));
         assert!(tool_names.iter().any(|name| name == "screenshot"));
