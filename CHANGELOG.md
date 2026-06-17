@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.6.0 - 2026-06-17
+
+### Added
+
+- Expose operator tools in the normal production MCP surface.
+- Add CI quality gates for rustfmt, clippy, MSRV, cargo check, tests, and package verification.
+- Add a local browser smoke workflow via `scripts/browser-smoke.sh`.
+
+### Changed
+
+- Set practical screenshot viewport caps and document the large-canvas override.
+- Clarify that operation metrics output byte counts are optional.
+- Update repository identity references to `bnomei/chromewright`.
+
+### Fixed
+
+- Percent-encode screenshot artifact file URLs.
+- Stabilize browser smoke tab workflow assertions against runtime tab IDs.
+
 ## 0.5.1 - 2026-06-10
 
 ### Fixed
