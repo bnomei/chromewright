@@ -37,6 +37,7 @@ pub(crate) struct OperationMetrics {
     pub snapshot_render_micros: u64,
     pub handoff_rebuilds: u64,
     pub handoff_rebuild_micros: u64,
+    /// Exact serialized output size in bytes when the tool path measured it; omitted otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_bytes: Option<usize>,
 }
@@ -137,6 +138,10 @@ impl<'a> ToolContext<'a> {
     pub(crate) fn record_handoff_rebuild_micros(&mut self, micros: u64) {
         self.metrics.handoff_rebuilds += 1;
         self.metrics.handoff_rebuild_micros += micros;
+    }
+
+    pub(crate) fn record_output_bytes(&mut self, byte_count: usize) {
+        self.metrics.output_bytes = Some(byte_count);
     }
 
     pub(crate) fn finish(&self, mut result: ToolResult) -> ToolResult {
@@ -723,6 +728,7 @@ pub(crate) fn build_document_envelope(
                 output_bytes += serde_json::to_vec(&projection_output.current.nodes)?.len();
             }
             validate_snapshot_output_bytes(output_bytes)?;
+            context.record_output_bytes(output_bytes);
 
             if let Some(cache_projection) = projection_output.cache_projection.as_ref() {
                 session.store_snapshot_cache(Arc::new(snapshot_cache_entry_from_projection(

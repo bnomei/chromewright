@@ -216,14 +216,14 @@ Read-oriented tools are intentionally distinct: `get_markdown` is the broad read
 
 ## Operation Metrics
 
-Finished tool results include `operation_metrics` metadata. Every finished result includes serialized output size, and measured hot paths add the relevant counters below:
+Finished tool results include `operation_metrics` metadata when a tool records non-zero metrics. Agents must treat `operation_metrics.output_bytes` as optional: it is present only when a tool path measures the exact serialized output size, and it is omitted when exact sizing was not measured. Measured hot paths add the relevant counters below:
 
 - browser evaluation count
 - poll iterations
 - DOM extraction count and extraction time
 - snapshot render time
 - handoff rebuild count and time
-- serialized output size
+- optional serialized output size (`output_bytes`)
 
 The lightweight validation surface for these metrics is in the normal test suite:
 
