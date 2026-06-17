@@ -20,6 +20,28 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Run clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+  msrv:
+    name: MSRV Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Rust 1.88
+        uses: dtolnay/rust-toolchain@1.88
+      - name: Run cargo check with MSRV
+        run: cargo check --all-targets --all-features --locked
+
   check:
     name: Cargo Check
     runs-on: ubuntu-latest
