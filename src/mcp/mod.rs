@@ -160,7 +160,7 @@ pub(crate) fn mcp_internal_error(error: impl std::fmt::Display) -> McpError {
 mod tests {
     use super::{convert_result, convert_tool_outcome};
     use crate::browser::BrowserSession;
-    use crate::browser::backend::{FakeSessionBackend, VIEWPORT_DIMENSION_MAX};
+    use crate::browser::backend::{FakeSessionBackend, VIEWPORT_LARGE_DIMENSION_MAX};
     use crate::error::BrowserError;
     use crate::mcp::BrowserServer;
     use crate::tools::{
@@ -679,9 +679,17 @@ mod tests {
         assert!(params.get("height").is_some());
         assert!(params.get("reset").is_some());
         assert_schema_number(&params["width"], "minimum", 1.0);
-        assert_schema_number(&params["width"], "maximum", VIEWPORT_DIMENSION_MAX as f64);
+        assert_schema_number(
+            &params["width"],
+            "maximum",
+            VIEWPORT_LARGE_DIMENSION_MAX as f64,
+        );
         assert_schema_number(&params["height"], "minimum", 1.0);
-        assert_schema_number(&params["height"], "maximum", VIEWPORT_DIMENSION_MAX as f64);
+        assert_schema_number(
+            &params["height"],
+            "maximum",
+            VIEWPORT_LARGE_DIMENSION_MAX as f64,
+        );
         assert_schema_number(&params["device_scale_factor"], "exclusiveMinimum", 0.0);
         assert!(
             schema_contains_text(&params["reset"], "only tab_id"),

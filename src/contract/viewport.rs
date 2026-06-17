@@ -43,6 +43,8 @@ pub struct ViewportEmulationRequest {
     pub orientation: Option<ViewportOrientation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tab_id: Option<String>,
+    #[serde(default)]
+    pub allow_large_viewport: bool,
 }
 
 impl ViewportEmulationRequest {

@@ -656,6 +656,7 @@ mod tests {
                 touch: true,
                 orientation: Some(ViewportOrientation::PortraitPrimary),
                 tab_id: None,
+                allow_large_viewport: false,
             })
             .expect("viewport emulation should succeed");
 
@@ -709,6 +710,7 @@ mod tests {
                 touch: false,
                 orientation: None,
                 tab_id: Some(first_tab_id.clone()),
+                allow_large_viewport: false,
             })
             .expect("targeted viewport emulation should succeed");
 
@@ -747,6 +749,7 @@ mod tests {
                 touch: false,
                 orientation: None,
                 tab_id: None,
+                allow_large_viewport: false,
             })
             .expect("viewport emulation should succeed");
 
@@ -775,6 +778,7 @@ mod tests {
                 touch: false,
                 orientation: None,
                 tab_id: None,
+                allow_large_viewport: false,
             })
             .expect("viewport emulation should succeed");
         seed_snapshot_cache(&session);
@@ -802,15 +806,34 @@ mod tests {
         let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
 
         let oversize = session.apply_viewport_emulation(ViewportEmulationRequest {
-            width: 10_000_001,
+            width: 10_001,
             height: 600,
             device_scale_factor: 1.0,
             mobile: false,
             touch: false,
             orientation: None,
             tab_id: None,
+            allow_large_viewport: false,
         });
         assert!(matches!(oversize, Err(BrowserError::InvalidArgument(_))));
+        assert_eq!(read_viewport_metrics(&session, None), (800.0, 600.0, 2.0));
+
+        session
+            .apply_viewport_emulation(ViewportEmulationRequest {
+                width: 10_001,
+                height: 600,
+                device_scale_factor: 1.0,
+                mobile: false,
+                touch: false,
+                orientation: None,
+                tab_id: None,
+                allow_large_viewport: true,
+            })
+            .expect("intentional large viewport override should succeed");
+        assert_eq!(read_viewport_metrics(&session, None), (10001.0, 600.0, 1.0));
+        session
+            .reset_viewport_emulation(ViewportResetRequest::default())
+            .expect("viewport reset after large override should succeed");
         assert_eq!(read_viewport_metrics(&session, None), (800.0, 600.0, 2.0));
 
         let empty_tab_id = session.apply_viewport_emulation(ViewportEmulationRequest {
@@ -821,6 +844,7 @@ mod tests {
             touch: false,
             orientation: None,
             tab_id: Some("   ".to_string()),
+            allow_large_viewport: false,
         });
         assert!(matches!(
             empty_tab_id,
@@ -836,6 +860,7 @@ mod tests {
             touch: false,
             orientation: None,
             tab_id: Some("missing-tab".to_string()),
+            allow_large_viewport: false,
         });
         assert!(matches!(
             unknown_tab,
@@ -1162,6 +1187,7 @@ mod tests {
                 touch: true,
                 orientation: Some(ViewportOrientation::PortraitPrimary),
                 tab_id: None,
+                allow_large_viewport: false,
             })
             .expect("viewport emulation should apply");
 

@@ -1048,8 +1048,11 @@ mod tests {
                 touch: false,
                 orientation: None,
                 tab_id: None,
+                allow_large_viewport: true,
             })
-            .expect("oversized test viewport should be accepted by viewport limits");
+            .expect(
+                "oversized test viewport should be accepted by explicit large viewport override",
+            );
 
         let result = session
             .execute_tool(
