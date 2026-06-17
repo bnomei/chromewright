@@ -145,6 +145,25 @@ If you need a non-default attach target, add `--ws-endpoint` explicitly. If you 
 
 The exact file name and field names vary by client. The important part is that the client connects to a running Chromewright service at that URL.
 
+
+## Local Browser Smoke Checks
+
+Browser launch and attach smoke checks are intended to be run manually on a maintainer workstation, not as a required Linux CI gate. The CI workflow covers Rust formatting, clippy, MSRV, cargo check, tests, and packaging without requiring a Linux browser launch or DevTools attach target.
+
+To run the focused browser smoke suite locally from the repository root:
+
+```bash
+scripts/browser-smoke.sh
+```
+
+The script runs:
+
+```bash
+cargo test --test browser_smoke -- --nocapture
+```
+
+For attach-mode experiments, start Chrome or Chromium with DevTools enabled as shown in the Quickstart section, then run Chromewright against that endpoint. macOS is the primary local target for visible browser smoke checks; Linux browser launch or attach is optional local validation rather than a pull-request requirement.
+
 ## How Chromewright Uses Your Browser
 
 - attach mode connects to an existing Chrome or Chromium session and can see the tabs, cookies, and authenticated state already present in that profile
