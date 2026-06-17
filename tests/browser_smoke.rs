@@ -220,7 +220,18 @@ fn smoke_tab_workflow() {
         tab_data["count"].as_u64().unwrap_or_default() >= 2,
         "expected at least two tabs"
     );
-    let first_tab_id = tab_data["tabs"][0]["tab_id"]
+    let tabs = tab_data["tabs"]
+        .as_array()
+        .expect("tab_list should include tabs");
+    let first_tab = tabs
+        .iter()
+        .find(|tab| {
+            tab["url"]
+                .as_str()
+                .is_some_and(|url| url.contains("First%20Tab"))
+        })
+        .expect("tab_list should include the first tab");
+    let first_tab_id = first_tab["tab_id"]
         .as_str()
         .expect("tab_list should expose stable tab ids")
         .to_string();
@@ -230,10 +241,13 @@ fn smoke_tab_workflow() {
         .expect("switch_tab should execute");
     assert!(switched.success);
     let switched_data = switched.data.expect("switch_tab should include data");
-    assert_eq!(switched_data["tab"]["tab_id"].as_str(), Some("tab-1"));
+    assert_eq!(
+        switched_data["tab"]["tab_id"].as_str(),
+        Some(first_tab_id.as_str())
+    );
     assert_eq!(
         switched_data["active_tab"]["tab_id"].as_str(),
-        Some("tab-1")
+        Some(first_tab_id.as_str())
     );
 
     common::wait_for_url_contains(session, "First%20Tab").expect("first tab should become active");
@@ -245,7 +259,7 @@ fn smoke_tab_workflow() {
     let close_tab_data = close_tab.data.expect("close_tab should include data");
     assert_eq!(
         close_tab_data["closed_tab"]["tab_id"].as_str(),
-        Some("tab-1")
+        Some(first_tab_id.as_str())
     );
 
     let close = session

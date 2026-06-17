@@ -1,4 +1,4 @@
-use crate::browser::backend::VIEWPORT_DIMENSION_MAX;
+use crate::browser::backend::VIEWPORT_LARGE_DIMENSION_MAX;
 use crate::browser::{
     ViewportEmulation, ViewportEmulationRequest, ViewportMetrics, ViewportOperationResult,
     ViewportOrientation, ViewportResetRequest,
@@ -37,8 +37,12 @@ pub struct SetViewportParams {
     /// Optional stable tab identifier. Omit to target the active tab.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tab_id: Option<String>,
+    /// Explicitly allow viewport dimensions above the normal automation cap, up to the large-canvas cap.
+    /// Use only for intentional large-canvas or regression-capture workloads.
+    #[serde(default)]
+    pub allow_large_viewport: bool,
     /// Reset viewport emulation. When true, only tab_id may also be supplied; omit width, height,
-    /// device_scale_factor, mobile, touch, and orientation.
+    /// device_scale_factor, mobile, touch, orientation, and allow_large_viewport.
     #[serde(default)]
     pub reset: bool,
 }
@@ -54,11 +58,11 @@ impl JsonSchema for SetViewportParams {
         #[allow(dead_code)]
         struct SetViewportParamsSchema {
             /// Viewport width in CSS pixels. Required unless reset is true.
-            #[schemars(range(min = 1, max = VIEWPORT_DIMENSION_MAX))]
+            #[schemars(range(min = 1, max = VIEWPORT_LARGE_DIMENSION_MAX))]
             #[serde(skip_serializing_if = "Option::is_none")]
             width: Option<u32>,
             /// Viewport height in CSS pixels. Required unless reset is true.
-            #[schemars(range(min = 1, max = VIEWPORT_DIMENSION_MAX))]
+            #[schemars(range(min = 1, max = VIEWPORT_LARGE_DIMENSION_MAX))]
             #[serde(skip_serializing_if = "Option::is_none")]
             height: Option<u32>,
             /// Device scale factor; must be a finite number greater than zero.
@@ -78,8 +82,11 @@ impl JsonSchema for SetViewportParams {
             /// Optional stable tab identifier. Omit to target the active tab.
             #[serde(skip_serializing_if = "Option::is_none")]
             tab_id: Option<String>,
+            /// Explicitly allow viewport dimensions above the normal automation cap of 10000 CSS pixels, up to 10000000 CSS pixels.
+            #[serde(default)]
+            allow_large_viewport: bool,
             /// Reset viewport emulation. When true, only tab_id may also be supplied; omit width,
-            /// height, device_scale_factor, mobile, touch, and orientation.
+            /// height, device_scale_factor, mobile, touch, orientation, and allow_large_viewport.
             #[serde(default)]
             reset: bool,
         }
@@ -119,7 +126,7 @@ impl Tool for SetViewportTool {
     }
 
     fn description(&self) -> &str {
-        "Simulate breakpoints per tab; set width/height or reset; returns viewport_metrics_after."
+        "Simulate/reset breakpoints; allow_large_viewport lifts CSS caps; returns viewport_metrics_after."
     }
 
     fn execute_typed(
@@ -163,9 +170,10 @@ fn normalize_request(params: SetViewportParams) -> Result<SetViewportRequest> {
             || params.mobile.is_some()
             || params.touch.is_some()
             || params.orientation.is_some()
+            || params.allow_large_viewport
         {
             return Err(BrowserError::InvalidArgument(
-                "reset=true only accepts tab_id; omit width, height, and other emulation fields"
+                "reset=true only accepts tab_id; omit width, height, allow_large_viewport, and other emulation fields"
                     .to_string(),
             ));
         }
@@ -192,6 +200,7 @@ fn normalize_request(params: SetViewportParams) -> Result<SetViewportRequest> {
         touch: params.touch.unwrap_or(false),
         orientation: params.orientation,
         tab_id: params.tab_id,
+        allow_large_viewport: params.allow_large_viewport,
     }))
 }
 
@@ -252,6 +261,7 @@ mod tests {
                     touch: Some(true),
                     orientation: Some(ViewportOrientation::PortraitPrimary),
                     tab_id: None,
+                    allow_large_viewport: false,
                     reset: false,
                 },
                 &mut context,
@@ -299,6 +309,7 @@ mod tests {
                 touch: true,
                 orientation: Some(ViewportOrientation::PortraitPrimary),
                 tab_id: None,
+                allow_large_viewport: false,
             })
             .expect("viewport emulation should seed");
         let tool = SetViewportTool;

@@ -24,7 +24,8 @@ pub(crate) const DEBUG_PORT_END: u16 = 59_999;
 pub(crate) const ATTACH_PAGE_TARGET_LOST_CODE: &str = "attach_page_target_lost";
 pub(crate) const ATTACH_SESSION_PAGE_TARGET_LOSS_KIND: &str = "page_target_lost";
 const ATTACH_SESSION_RECOVERY_HINT: &str = "Run tab_list, then switch_tab to reacquire an active page target. If page actions still fail, reconnect the attach session and rerun snapshot.";
-pub(crate) const VIEWPORT_DIMENSION_MAX: u32 = 10_000_000;
+pub(crate) const VIEWPORT_DIMENSION_MAX: u32 = 10_000;
+pub(crate) const VIEWPORT_LARGE_DIMENSION_MAX: u32 = 10_000_000;
 static DEBUG_PORT_COUNTER: AtomicU16 = AtomicU16::new(DEBUG_PORT_START);
 
 fn session_close_result(total_tabs: usize, failures: Vec<String>) -> Result<()> {
@@ -180,9 +181,19 @@ impl ViewportEmulationRequest {
                 "viewport width must be greater than zero".to_string(),
             ));
         }
-        if self.width > VIEWPORT_DIMENSION_MAX {
+        let dimension_max = if self.allow_large_viewport {
+            VIEWPORT_LARGE_DIMENSION_MAX
+        } else {
+            VIEWPORT_DIMENSION_MAX
+        };
+        if self.width > dimension_max {
+            let override_hint = if self.allow_large_viewport {
+                ""
+            } else {
+                "; set allow_large_viewport=true only for intentional large-canvas or regression-capture workloads"
+            };
             return Err(BrowserError::InvalidArgument(format!(
-                "viewport width must be less than or equal to {VIEWPORT_DIMENSION_MAX}"
+                "viewport width must be less than or equal to {dimension_max} CSS pixels{override_hint}"
             )));
         }
 
@@ -191,9 +202,14 @@ impl ViewportEmulationRequest {
                 "viewport height must be greater than zero".to_string(),
             ));
         }
-        if self.height > VIEWPORT_DIMENSION_MAX {
+        if self.height > dimension_max {
+            let override_hint = if self.allow_large_viewport {
+                ""
+            } else {
+                "; set allow_large_viewport=true only for intentional large-canvas or regression-capture workloads"
+            };
             return Err(BrowserError::InvalidArgument(format!(
-                "viewport height must be less than or equal to {VIEWPORT_DIMENSION_MAX}"
+                "viewport height must be less than or equal to {dimension_max} CSS pixels{override_hint}"
             )));
         }
 

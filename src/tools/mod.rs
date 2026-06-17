@@ -80,7 +80,7 @@ pub(crate) use core::{
 mod tests {
     use super::*;
     use crate::browser::BrowserSession;
-    use crate::browser::backend::{FakeSessionBackend, VIEWPORT_DIMENSION_MAX};
+    use crate::browser::backend::{FakeSessionBackend, VIEWPORT_LARGE_DIMENSION_MAX};
     use crate::dom::{AriaChild, AriaNode, DomTree};
     use crate::error::BrowserError;
     use serde_json::Value;
@@ -245,9 +245,17 @@ mod tests {
         assert!(params.get("tab_id").is_some());
         assert!(params.get("reset").is_some());
         assert_schema_number(&params["width"], "minimum", 1.0);
-        assert_schema_number(&params["width"], "maximum", VIEWPORT_DIMENSION_MAX as f64);
+        assert_schema_number(
+            &params["width"],
+            "maximum",
+            VIEWPORT_LARGE_DIMENSION_MAX as f64,
+        );
         assert_schema_number(&params["height"], "minimum", 1.0);
-        assert_schema_number(&params["height"], "maximum", VIEWPORT_DIMENSION_MAX as f64);
+        assert_schema_number(
+            &params["height"],
+            "maximum",
+            VIEWPORT_LARGE_DIMENSION_MAX as f64,
+        );
         assert_schema_number(&params["device_scale_factor"], "exclusiveMinimum", 0.0);
         assert!(
             schema_contains_text(&params["reset"], "only tab_id"),
