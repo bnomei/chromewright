@@ -1,7 +1,7 @@
 # chromewright
 
 [![Crates.io Version](https://img.shields.io/crates/v/chromewright)](https://crates.io/crates/chromewright)
-[![Build Status](https://github.com/bnomei/browser-use-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/bnomei/browser-use-rs/actions/workflows/ci.yml)
+[![Build Status](https://github.com/bnomei/chromewright/actions/workflows/ci.yml/badge.svg)](https://github.com/bnomei/chromewright/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 Chromewright is a local-first browser automation MCP server built on Chrome DevTools Protocol (CDP). It can attach to an existing Chrome or Chromium session or launch its own browser, then expose a bounded, agent-oriented tool surface for navigation, reading, tab management, and interaction without a Node.js runtime.
@@ -42,11 +42,11 @@ Download a prebuilt archive or source package from GitHub Releases, extract it, 
 
 ### From source
 
-The published package and binary are named `chromewright`. The repository is currently hosted as `browser-use-rs`.
+The published package, binary, and repository are named `chromewright`.
 
 ```bash
-git clone https://github.com/bnomei/browser-use-rs.git
-cd browser-use-rs
+git clone https://github.com/bnomei/chromewright.git
+cd chromewright
 cargo install --path .
 ```
 
