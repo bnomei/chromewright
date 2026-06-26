@@ -364,6 +364,31 @@ function resolveTargetMatch(config, options) {
         ? selectorSearch.match
         : selectorSearch;
     if (selectorMatch && selectorMatch.element && selectorMatch.element.isConnected) {
+      // When the caller passes target_index alongside the selector, the index is
+      // the disambiguator for *which* of several matching actionable nodes to act
+      // on. Selectors are not guaranteed unique (duplicate ids, colliding
+      // :nth-child paths), and querySelectorAcrossScopes returns the first match
+      // in document order. If the first selector match is a main-frame actionable
+      // node whose actionable index differs from the requested target_index,
+      // honor the index instead so the action lands on the intended node rather
+      // than silently on the first collision. Matches inside iframes (frame_depth
+      // > 0) are trusted as-is because the actionable index is main-frame scoped.
+      if (
+        typeof config.target_index === 'number' &&
+        (selectorMatch.frame_depth || 0) === 0
+      ) {
+        const selectorActionableIndex = findActionableIndexForElement(selectorMatch.element);
+        if (selectorActionableIndex !== config.target_index) {
+          const indexedMatch = searchActionableIndex(config.target_index);
+          if (indexedMatch && indexedMatch.element && indexedMatch.element.isConnected) {
+            return {
+              match: indexedMatch,
+              selector_search: selectorSearch
+            };
+          }
+        }
+      }
+
       return {
         match: selectorMatch,
         selector_search: selectorSearch
