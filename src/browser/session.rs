@@ -121,6 +121,11 @@ impl BrowserSession {
         self.backend.document_metadata()
     }
 
+    /// Read document metadata from a specific tab without activating it.
+    pub(crate) fn document_metadata_for_tab(&self, tab_id: &str) -> Result<DocumentMetadata> {
+        self.backend.document_metadata_for_tab(tab_id)
+    }
+
     /// Wait for navigation to complete
     pub fn wait_for_navigation(&self) -> Result<()> {
         self.backend.wait_for_navigation()

@@ -4,10 +4,7 @@ use crate::browser::{
     ViewportOrientation, ViewportResetRequest,
 };
 use crate::error::{BrowserError, Result};
-use crate::tools::{
-    DocumentActionResult, DocumentEnvelopeOptions, Tool, ToolContext, ToolResult,
-    build_document_envelope,
-};
+use crate::tools::{DocumentActionResult, Tool, ToolContext, ToolResult};
 use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
@@ -146,10 +143,17 @@ impl Tool for SetViewportTool {
         };
 
         context.invalidate_dom();
-        let envelope = build_document_envelope(context, None, DocumentEnvelopeOptions::minimal())?;
+        // The emulation may have targeted an inactive tab via tab_id. Source the
+        // document envelope from that same tab so the response's document
+        // identity (document_id/revision/url) describes the emulated tab rather
+        // than whichever tab happens to be active.
+        context.record_browser_evaluation();
+        let document = context
+            .session
+            .document_metadata_for_tab(&operation.tab_id)?;
 
         Ok(context.finish(ToolResult::success_with(SetViewportOutput {
-            result: DocumentActionResult::new("set_viewport", envelope.document),
+            result: DocumentActionResult::new("set_viewport", document),
             tab_id: operation.tab_id.clone(),
             reset,
             emulation: operation.emulation.clone(),
@@ -333,6 +337,42 @@ mod tests {
         assert_eq!(data["viewport_after"]["width"].as_f64(), Some(800.0));
         assert_eq!(data["viewport_after"]["height"].as_f64(), Some(600.0));
         assert_eq!(read_viewport_metrics(&session), (800.0, 600.0, 2.0));
+    }
+
+    #[test]
+    fn test_set_viewport_tool_returns_targeted_tab_document_not_active_tab() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        let first_tab_id = session.list_tabs().expect("tabs should list")[0].id.clone();
+        let second_tab = session
+            .open_tab_entry("https://second.example")
+            .expect("second tab should open");
+        // Opening the second tab makes it active; the first tab is now inactive.
+
+        let tool = SetViewportTool;
+        let mut context = ToolContext::new(&session);
+        let result = tool
+            .execute_typed(
+                SetViewportParams {
+                    width: Some(375),
+                    height: Some(812),
+                    tab_id: Some(first_tab_id.clone()),
+                    ..SetViewportParams::default()
+                },
+                &mut context,
+            )
+            .expect("set_viewport against inactive tab should succeed");
+
+        assert!(result.success);
+        let data = result.data.expect("set_viewport should include data");
+        assert_eq!(data["tab_id"].as_str(), Some(first_tab_id.as_str()));
+        // The document envelope must describe the emulated (first) tab, not the
+        // active (second) tab.
+        assert_eq!(
+            data["document"]["document_id"].as_str(),
+            Some(first_tab_id.as_str())
+        );
+        assert_eq!(data["document"]["url"].as_str(), Some("about:blank"));
+        assert_ne!(data["document"]["document_id"].as_str(), Some(second_tab.id.as_str()));
     }
 
     #[test]

@@ -629,6 +629,12 @@ impl SessionBackend for FakeSessionBackend {
         Ok(Self::fake_dom(&Self::current_document(&state)?))
     }
 
+    fn document_metadata_for_tab(&self, tab_id: &str) -> Result<DocumentMetadata> {
+        let state = self.lock_state()?;
+        let tab = Self::tab_from_state(&state, tab_id)?;
+        Self::document_for_tab(&state, tab)
+    }
+
     fn extract_dom_for_tab(&self, tab_id: &str) -> Result<DomTree> {
         let state = self.lock_state()?;
         let tab = Self::tab_from_state(&state, tab_id)?;

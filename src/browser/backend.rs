@@ -584,6 +584,18 @@ pub(crate) trait SessionBackend: Send + Sync {
     fn wait_for_navigation(&self) -> Result<()>;
     fn wait_for_document_ready_with_timeout(&self, timeout: Duration) -> Result<()>;
     fn document_metadata(&self) -> Result<DocumentMetadata>;
+    fn document_metadata_for_tab(&self, tab_id: &str) -> Result<DocumentMetadata> {
+        if self.active_tab()?.id == tab_id {
+            return self.document_metadata();
+        }
+
+        Err(BrowserError::BackendUnsupported(
+            BackendUnsupportedDetails::new(
+                "document_metadata_for_tab",
+                "document_metadata_for_tab",
+            ),
+        ))
+    }
     fn extract_dom(&self) -> Result<DomTree>;
     fn extract_dom_for_tab(&self, tab_id: &str) -> Result<DomTree> {
         if self.active_tab()?.id == tab_id {
@@ -1168,6 +1180,10 @@ impl SessionBackend for ChromeSessionBackend {
 
     fn document_metadata(&self) -> Result<DocumentMetadata> {
         self.with_active_tab_operation("document_metadata", DocumentMetadata::from_tab)
+    }
+
+    fn document_metadata_for_tab(&self, tab_id: &str) -> Result<DocumentMetadata> {
+        self.with_specific_tab_operation("document_metadata", tab_id, DocumentMetadata::from_tab)
     }
 
     fn extract_dom(&self) -> Result<DomTree> {
