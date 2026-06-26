@@ -311,6 +311,14 @@ impl FakeSessionBackend {
             }));
         }
 
+        if script.contains("__devana_no_value__") {
+            return Some(Ok(ScriptEvaluation {
+                value: None,
+                description: Some("undefined".to_string()),
+                type_name: Some("Undefined".to_string()),
+            }));
+        }
+
         if script.contains("window.history.back()") || script.contains("window.history.forward()") {
             return Some(Ok(ScriptEvaluation {
                 value: Some(serde_json::json!(true)),
