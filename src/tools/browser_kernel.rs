@@ -75,6 +75,10 @@ mod tests {
         assert!(
             rendered.contains("const indexedMatch = searchActionableIndex(config.target_index)")
         );
+        assert!(
+            !rendered.contains("(selectorMatch.frame_depth || 0) === 0"),
+            "target_index reconciliation must also apply to same-origin iframe matches"
+        );
         assert!(!rendered.contains("__BROWSER_KERNEL__"));
         assert!(!rendered.contains("__CONFIG__"));
     }

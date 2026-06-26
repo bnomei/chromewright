@@ -149,6 +149,26 @@ unless the same finding moved. Add dated notes below.
   that is the underlying cause but the resolver reconciliation makes it
   non-harmful for indexed targeting, so a buildSelector-uniqueness change is left
   as a separate improvement.
+- 2026-06-26: reopened by audit. The main-frame duplicate-selector counterexample
+  is blocked, but the fix does not cover same-origin iframe duplicates. The
+  resolver only reconciles `target_index` when `(selectorMatch.frame_depth || 0)
+  === 0`; iframe selector matches (`frame_depth > 0`) are returned selector-first.
+  Current DOM extraction/search code does include same-origin iframe contents in
+  the actionable index space (`extract_dom.js` keeps a shared `currentIndex` while
+  expanding iframe content, and `searchActionableIndex` descends into iframes), so
+  the fixed-note assumption that actionable indices are main-frame scoped is not
+  supported. Concrete remaining path: a same-origin iframe contains two
+  `<button id="save">` nodes and a cursor targets the second one; `#save` resolves
+  to the first iframe match, skips index reconciliation because `frame_depth === 1`,
+  and click/input/select/hover act on the first collision.
+- 2026-06-26: fixed. Removed the `frame_depth === 0` gate from
+  `resolveTargetMatch` so every connected selector match with a `target_index` is
+  reconciled against `findActionableIndexForElement`, including elements inside
+  same-origin iframes. The indexed fallback already uses `searchActionableIndex`,
+  which walks the same main-document plus same-origin iframe tree, so the reopened
+  iframe duplicate case now falls back from the first iframe `#save` collision to
+  the requested actionable index. Added a kernel regression assertion that
+  reconciliation is not gated to main-frame matches.
 
 DEVANA-KEY: src/tools/browser_kernel.js:357 | interaction-selector-first-wrong-node
-DEVANA-SUMMARY: fixed | P2 | high | resolveTargetMatch now reconciles a non-unique selector match against target_index, so click/input/select/hover act on the indexed node instead of the first selector collision.
+DEVANA-SUMMARY: fixed | P2 | high | resolveTargetMatch now reconciles target_index for selector collisions in both the main document and same-origin iframe scopes.

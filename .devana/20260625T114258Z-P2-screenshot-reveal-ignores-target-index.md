@@ -60,6 +60,23 @@ After working this report, preserve the original finding body. Update line 2 `DE
   payload (scroll_y_before/after, visible_in_viewport, success/code) is
   preserved for failure reporting. Added a unit test asserting the reveal JS
   embeds the kernel and target_index and no longer uses plain querySelector.
+- 2026-06-26: reopened by audit. The reveal-specific `document.querySelector`
+  mismatch is fixed: reveal and inspect now share `resolveTargetMatch` with
+  `{selector, target_index}`. A residual same-origin iframe duplicate-selector path
+  remains because the shared resolver trusts iframe selector matches without
+  checking their actionable index. For an offscreen second `<button id="save">`
+  inside a same-origin iframe, reveal and inspect can both resolve the first iframe
+  `#save` collision while reporting/using the requested `target_index`, because
+  `resolveTargetMatch` skips reconciliation for `frame_depth > 0` and
+  `inspect_node.js` reports `config.target_index` for iframe matches instead of
+  computing the resolved element's actual actionable index.
+- 2026-06-26: fixed. The shared `resolveTargetMatch` now reconciles
+  `target_index` for selector matches regardless of `frame_depth`, so
+  screenshot reveal and inspect both inherit the same iframe-aware disambiguation.
+  The reopened offscreen second-`#save` same-origin iframe path is blocked: the
+  first iframe selector match is compared to the requested actionable index and
+  falls back to `searchActionableIndex(target_index)` on mismatch before reveal or
+  inspect uses the element.
 
 DEVANA-KEY: src/tools/screenshot.rs:385 | screenshot-reveal-ignores-target-index
-DEVANA-SUMMARY: fixed | P2 | high | element screenshot reveal now resolves via the shared kernel (target_index + iframe scopes), matching inspect_node resolution.
+DEVANA-SUMMARY: fixed | P2 | high | element screenshot reveal uses the shared kernel, whose target_index reconciliation now covers same-origin iframe selector collisions too.
