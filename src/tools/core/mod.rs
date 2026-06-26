@@ -1,3 +1,8 @@
+//! Tool framework: registry, execution context, target resolution, and document envelopes.
+//!
+//! Every MCP tool implements `Tool`; outcomes pass through `ToolContext` so operation
+//! metrics and DOM cache invalidation stay consistent across mutations.
+
 use crate::browser::BrowserSession;
 use crate::browser::backend::{ATTACH_PAGE_TARGET_LOST_CODE, ATTACH_SESSION_PAGE_TARGET_LOSS_KIND};
 use crate::contract::ViewportMetrics;
@@ -60,12 +65,11 @@ pub(crate) fn duration_micros(duration: std::time::Duration) -> u64 {
     duration.as_micros().min(u128::from(u64::MAX)) as u64
 }
 
-/// Tool execution context
+/// Per-invocation state for one tool call: session access, DOM cache, and operation metrics.
 pub struct ToolContext<'a> {
-    /// Browser session
     pub session: &'a BrowserSession,
 
-    /// Optional DOM tree (extracted on demand)
+    /// Lazily extracted DOM tree; invalidated after page mutations.
     pub dom_tree: Option<DomTree>,
 
     metrics: OperationMetrics,
@@ -788,7 +792,7 @@ pub(crate) fn build_document_envelope(
     })
 }
 
-/// Trait for browser automation tools with associated parameter types
+/// Typed MCP tool contract: name, schemas, safety hints, and synchronous execution.
 pub trait Tool: Send + Sync + Default {
     /// Associated parameter type for this tool
     type Params: serde::Serialize + for<'de> serde::Deserialize<'de> + schemars::JsonSchema;
@@ -917,7 +921,7 @@ fn tool_safety_annotations(name: &str) -> ToolSafetyAnnotations {
         .unwrap_or_else(|| ToolSafetyAnnotations::mutating(true, false))
 }
 
-/// Tool registry for managing and accessing tools
+/// Name-indexed collection of registered tools with default and operator subsets.
 pub struct ToolRegistry {
     tools: HashMap<String, Arc<dyn DynTool>>,
 }

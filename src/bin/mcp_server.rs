@@ -1,7 +1,7 @@
-//! Chromewright MCP Server
+//! `chromewright` CLI entrypoint: MCP server over stdio or loopback HTTP.
 //!
-//! This binary provides a Model Context Protocol (MCP) server for browser automation.
-//! It exposes browser automation tools that can be used by AI assistants and other MCP clients.
+//! Defaults to attach mode against `http://127.0.0.1:9222`; launch flags start a local browser.
+//! The `serve` subcommand exposes streamable HTTP for shared local MCP sessions.
 
 use chromewright::{BrowserServer, ConnectionOptions, LaunchOptions};
 use clap::{Parser, Subcommand};

@@ -1,6 +1,8 @@
+//! URL normalization and navigation safety checks for high-level browser tools.
+
 use crate::error::{BrowserError, Result};
 
-/// Normalize an incomplete URL by adding missing protocol and handling common patterns
+/// Normalize an incomplete URL by adding a protocol when the input looks like a host or domain.
 pub fn normalize_url(url: &str) -> String {
     let trimmed = url.trim();
 
@@ -48,12 +50,6 @@ fn has_absolute_scheme(url: &str) -> bool {
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '+' | '-' | '.'))
 }
 
-/// A URL is protocol-relative when its first two significant characters are
-/// slashes (`//host`). Browsers also normalize backslashes to slashes for
-/// special schemes, so `/\host`, `\/host`, and `\\host` are equivalent. Such
-/// targets inherit the current page's scheme and origin, smuggling an external
-/// origin (or an unsafe scheme on a `file:`/`data:` page) past the
-/// absolute-scheme gate, so they are treated like unsafe absolute schemes.
 fn is_protocol_relative(url: &str) -> bool {
     let trimmed = url.trim_start();
     let mut chars = trimmed.chars();
@@ -70,9 +66,6 @@ pub fn validate_navigation_url(url: &str, allow_unsafe: bool) -> Result<String> 
         return Ok(normalized);
     }
 
-    // Check the raw input as well as the normalized form: backslash variants
-    // can be mangled by `normalize_url`, but `//host` and `/\host` survive
-    // unchanged in its relative-path branch.
     if is_protocol_relative(url) || is_protocol_relative(&normalized) {
         return Err(BrowserError::InvalidArgument(format!(
             "Protocol-relative navigation target '{}' is blocked by default; pass allow_unsafe=true or use an absolute http(s) URL.",

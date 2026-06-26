@@ -101,6 +101,7 @@ impl JsonSchema for InputParams {
     }
 }
 
+/// Types into an editable element after actionability checks succeed.
 #[derive(Default)]
 pub struct InputTool;
 

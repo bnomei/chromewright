@@ -1,3 +1,4 @@
+// Target probe for identity, layout, accessibility, and form state fields.
 (() => {
   const config = __INSPECT_CONFIG__;
 

@@ -92,6 +92,7 @@ impl JsonSchema for SetViewportParams {
     }
 }
 
+/// Applies or resets CDP viewport emulation for responsive breakpoint testing.
 #[derive(Default)]
 pub struct SetViewportTool;
 
@@ -143,10 +144,6 @@ impl Tool for SetViewportTool {
         };
 
         context.invalidate_dom();
-        // The emulation may have targeted an inactive tab via tab_id. Source the
-        // document envelope from that same tab so the response's document
-        // identity (document_id/revision/url) describes the emulated tab rather
-        // than whichever tab happens to be active.
         context.record_browser_evaluation();
         let document = context
             .session
@@ -346,7 +343,6 @@ mod tests {
         let second_tab = session
             .open_tab_entry("https://second.example")
             .expect("second tab should open");
-        // Opening the second tab makes it active; the first tab is now inactive.
 
         let tool = SetViewportTool;
         let mut context = ToolContext::new(&session);
@@ -365,8 +361,6 @@ mod tests {
         assert!(result.success);
         let data = result.data.expect("set_viewport should include data");
         assert_eq!(data["tab_id"].as_str(), Some(first_tab_id.as_str()));
-        // The document envelope must describe the emulated (first) tab, not the
-        // active (second) tab.
         assert_eq!(
             data["document"]["document_id"].as_str(),
             Some(first_tab_id.as_str())

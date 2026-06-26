@@ -1,3 +1,4 @@
+// Shared in-page runtime: visibility, selector identity, and cross-frame DOM helpers.
 function getDocumentView(doc) {
   return doc.defaultView || window;
 }
@@ -364,16 +365,6 @@ function resolveTargetMatch(config, options) {
         ? selectorSearch.match
         : selectorSearch;
     if (selectorMatch && selectorMatch.element && selectorMatch.element.isConnected) {
-      // When the caller passes target_index alongside the selector, the index is
-      // the disambiguator for *which* of several matching actionable nodes to act
-      // on. Selectors are not guaranteed unique (duplicate ids, colliding
-      // :nth-child paths), and querySelectorAcrossScopes returns the first match
-      // in document order. If the first selector match's actionable index differs
-      // from the requested target_index, honor the index instead so the action
-      // lands on the intended node rather than silently on the first collision.
-      // Actionable indices span same-origin iframe contents too, and
-      // findActionableIndexForElement/searchActionableIndex both walk that same
-      // tree, so iframe matches must be reconciled as well.
       if (typeof config.target_index === 'number') {
         const selectorActionableIndex = findActionableIndexForElement(selectorMatch.element);
         if (selectorActionableIndex !== config.target_index) {

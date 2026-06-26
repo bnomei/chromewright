@@ -1,20 +1,8 @@
-/// HTML to Markdown conversion utilities
-///
-/// This module provides functionality to convert HTML content to clean Markdown format.
+//! HTML-to-Markdown conversion used after Readability main-content extraction.
+
 use html2md;
 
-/// Convert HTML content to Markdown format
-///
-/// This function uses the html2md library to convert HTML to Markdown.
-/// It handles common HTML elements like headings, lists, tables, code blocks, etc.
-///
-/// # Arguments
-///
-/// * `html` - The HTML content as a string
-///
-/// # Returns
-///
-/// A String containing the Markdown representation of the HTML
+/// Converts extracted article HTML into Markdown via the `html2md` parser.
 pub fn convert_html_to_markdown(html: &str) -> String {
     if html.is_empty() {
         return String::new();

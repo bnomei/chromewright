@@ -1,9 +1,7 @@
-//! DOM extraction and manipulation module
+//! Accessibility-tree extraction and snapshot indexing for actionable page elements.
 //!
-//! This module provides functionality for extracting and working with the DOM structure
-//! of web pages. It includes:
-//! - ElementNode: Representation of DOM elements
-//! - DomTree: Complete DOM tree with indexing for interactive elements
+//! `DomTree` captures an ARIA snapshot with revision-scoped `NodeRef` and `Cursor`
+//! handoffs that downstream tools use for target resolution and stale detection.
 
 pub mod element;
 pub mod tree;

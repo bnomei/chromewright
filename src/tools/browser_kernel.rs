@@ -1,3 +1,5 @@
+//! Template shell that inlines the shared browser-kernel script into tool-specific probes.
+
 use serde_json::Value;
 use std::sync::OnceLock;
 
@@ -69,8 +71,6 @@ mod tests {
 
         assert!(rendered.contains(r##"const config = {"selector":"#save"};"##));
         assert!(rendered.contains("function resolveTargetMatch(config, options)"));
-        // resolveTargetMatch must reconcile a non-unique selector match against
-        // the disambiguating target_index instead of acting on the first match.
         assert!(rendered.contains("findActionableIndexForElement(selectorMatch.element)"));
         assert!(
             rendered.contains("const indexedMatch = searchActionableIndex(config.target_index)")

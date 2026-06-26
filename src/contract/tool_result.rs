@@ -1,7 +1,9 @@
+//! Internal tool execution result before MCP envelope conversion.
+
 use serde_json::Value;
 use std::collections::HashMap;
 
-/// Result of tool execution
+/// Success or failure payload produced by a tool, with optional structured data and metadata.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ToolResult {
     /// Whether the tool execution was successful

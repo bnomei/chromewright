@@ -9,9 +9,6 @@ use serde::{Deserialize, Serialize};
 /// Parameters for the go_back tool
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct GoBackParams {
-    /// Allow history navigation to land on non-http(s) destinations (e.g.
-    /// `file:`, `data:`, `chrome:`). Defaults to false, mirroring the
-    /// `navigate`/`new_tab` safety gate.
     #[serde(default)]
     pub allow_unsafe: bool,
 }

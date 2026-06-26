@@ -1,3 +1,4 @@
+// Hover interaction script compiled with browser-kernel and target config.
 JSON.stringify(
   (function () {
     const config = __HOVER_CONFIG__;

@@ -1,8 +1,11 @@
+//! Element targeting input and resolution metadata for MCP tools.
+
 use crate::dom::{Cursor, NodeRef};
 use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::de::Deserializer;
 use std::borrow::Cow;
 
+/// Resolved target handed between tools, including stale-cursor recovery status.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct TargetEnvelope {
     pub method: String,
@@ -24,6 +27,7 @@ fn default_target_resolution_status() -> String {
     "exact".to_string()
 }
 
+/// MCP tool input for targeting an element by selector or revision-scoped cursor.
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PublicTarget {
@@ -83,6 +87,7 @@ impl PublicTarget {
     }
 }
 
+/// Whether an interaction left the resolved target unchanged, rebound, or detached.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum TargetStatus {

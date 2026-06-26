@@ -1,3 +1,5 @@
+//! Revision-keyed markdown and snapshot caches plus managed screenshot artifact storage.
+
 use super::BrowserSession;
 use crate::browser::backend::{
     ScreenshotCapture, ScreenshotClip, ScreenshotFormat, ScreenshotMode,
@@ -214,11 +216,6 @@ impl BrowserSession {
             })?;
 
         Ok(guard.as_ref().and_then(|entry| {
-            // The `revision` counter only advances on observed DOM mutations, so
-            // an SPA `history.pushState`/`replaceState` can change the live URL
-            // while `(document_id, revision)` stay fixed. Without the URL in the
-            // key, a cache hit would serve stale markdown/url for the new route,
-            // so match the live URL too and force re-extraction when it differs.
             (entry.document_id == document.document_id
                 && entry.revision == document.revision
                 && entry.url == document.url)
@@ -489,7 +486,6 @@ mod tests {
     #[test]
     fn markdown_cache_misses_when_url_changes_without_revision_bump() {
         let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
-        // SPA pushState: same document_id and revision, different live URL.
         let stored = markdown_document("doc-1", "main:42", "https://app.example/list");
         let after_pushstate = markdown_document("doc-1", "main:42", "https://app.example/item/99");
 

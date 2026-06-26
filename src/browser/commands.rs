@@ -1,3 +1,8 @@
+//! In-page script command model compiled from browser-kernel templates.
+//!
+//! Interaction, actionability, and selector-identity probes render once per command
+//! and execute through the active CDP tab.
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::OnceLock;
@@ -165,11 +170,6 @@ impl BrowserCommand {
         }
     }
 
-    /// Whether this command is safe to auto-replay after a recoverable
-    /// page-target loss. Probes only read DOM state, so re-running them is
-    /// harmless. Interaction commands (click/input/hover/select) dispatch
-    /// page-side events and are non-idempotent, so a replay could double-commit
-    /// the effect.
     pub(crate) fn is_idempotent(&self) -> bool {
         match self {
             Self::ActionabilityProbe(_) | Self::SelectorIdentityProbe(_) => true,

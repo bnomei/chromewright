@@ -1,7 +1,7 @@
-//! Browser automation tools module
+//! MCP browser automation tools and the registry that dispatches them.
 //!
-//! This module provides a framework for browser automation tools and
-//! includes implementations of common browser operations.
+//! Each tool implements the shared `Tool` trait; operator tools such as `evaluate`
+//! are registered only on full server sessions, not the default registry.
 
 pub(crate) mod actionability;
 pub(crate) mod browser_kernel;

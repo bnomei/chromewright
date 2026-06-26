@@ -1,6 +1,6 @@
-//! MCP (Model Context Protocol) server implementation for browser automation
+//! MCP adapter: maps internal tool results to rmcp `CallToolResult` envelopes.
 //!
-//! This module provides rmcp-compatible tools by wrapping the existing tool implementations.
+//! Structured tool failures preserve document, target, and recovery fields expected by MCP clients.
 
 pub mod handler;
 pub use handler::BrowserServer;
@@ -117,7 +117,7 @@ fn with_metadata(
     result.with_meta(Some(Meta(metadata.into_iter().collect())))
 }
 
-/// Convert internal ToolResult to MCP CallToolResult
+/// Maps an internal `ToolResult` into rmcp structured success or error content.
 pub(crate) fn convert_result(result: InternalToolResult) -> Result<CallToolResult, McpError> {
     let InternalToolResult {
         success,

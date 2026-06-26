@@ -1,3 +1,4 @@
+// Evaluates actionability predicates (visible, enabled, stable, etc.) for a target.
 (() => {
   const config = __ACTIONABILITY_CONFIG__;
   const requested = new Set(config.predicates || []);

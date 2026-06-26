@@ -1,3 +1,5 @@
+//! `wait` condition validation and polling loop shared by the wait tool.
+
 use crate::error::{BrowserError, Result};
 use crate::tools::{
     DocumentEnvelopeOptions, ToolContext, ToolResult,

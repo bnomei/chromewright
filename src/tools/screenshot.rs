@@ -81,6 +81,7 @@ pub struct ScreenshotParams {
     pub region: Option<ScreenshotRegion>,
 }
 
+/// Captures managed screenshot artifacts by viewport, full page, element, or region.
 #[derive(Default)]
 pub struct ScreenshotTool;
 
@@ -671,14 +672,11 @@ mod tests {
     #[test]
     fn test_build_reveal_target_js_routes_through_kernel_with_target_index() {
         let reveal_js = super::build_reveal_target_js("#actions > button:nth-child(1)", Some(5));
-        // Resolution must go through the shared kernel (honors target_index and
-        // cross-frame lookup), matching how inspect_target_payload resolves.
         assert!(reveal_js.contains("const element = resolveTargetElement(config);"));
         assert!(reveal_js.contains("function resolveTargetMatch(config, options)"));
         assert!(reveal_js.contains("\"target_index\":5"));
         assert!(!reveal_js.contains("__BROWSER_KERNEL__"));
         assert!(!reveal_js.contains("__REVEAL_CONFIG__"));
-        // The legacy plain-querySelector resolution must be gone.
         assert!(!reveal_js.contains("document.querySelector(selector)"));
     }
 

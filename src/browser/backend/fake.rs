@@ -1,3 +1,5 @@
+//! Deterministic in-memory `SessionBackend` for unit tests without a live browser.
+
 use super::{
     ScreenshotCapture, ScreenshotImageMetrics, ScreenshotRequest, ScreenshotScale,
     ScriptEvaluation, SessionBackend, TabDescriptor,

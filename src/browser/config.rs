@@ -1,3 +1,7 @@
+//! Launch and attach configuration for local Chrome instances.
+//!
+//! Connect mode accepts either a browser-scoped WebSocket URL or a stable DevTools HTTP origin.
+
 use crate::error::{BrowserError, Result};
 use serde::Deserialize;
 use std::path::PathBuf;

@@ -1,3 +1,8 @@
+//! ARIA node model aligned with Playwright accessibility snapshots.
+//!
+//! `AriaNode` and related types represent the in-memory tree produced by in-page
+//! extraction before indexing, YAML rendering, and cursor handoff.
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -5,8 +10,7 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
-/// Represents an ARIA node in the accessibility tree
-/// Based on Playwright's AriaNode structure
+/// One node in the accessibility tree extracted from the live DOM.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AriaNode {
     /// ARIA role (e.g., "button", "link", "textbox", "generic", "iframe", "fragment")

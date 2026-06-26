@@ -1,3 +1,5 @@
+//! Interaction target resolution, actionability polling, and post-action handoff envelopes.
+
 use crate::browser::BrowserSession;
 use crate::browser::commands::{
     BrowserCommand, BrowserCommandResult, SelectorIdentityProbeRequest, SelectorIdentityProbeResult,

@@ -1,3 +1,4 @@
+// Click interaction script compiled with browser-kernel and target config.
 (() => {
   const config = __CLICK_CONFIG__;
 

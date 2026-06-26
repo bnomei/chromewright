@@ -1,3 +1,4 @@
+// Input interaction script compiled with browser-kernel and target config.
 (() => {
   const config = __INPUT_CONFIG__;
 

@@ -1,3 +1,4 @@
+// Lightweight presence check used by wait and selector-identity probes.
 (() => {
   const config = __TARGET_EXISTS_CONFIG__;
 

@@ -139,12 +139,6 @@ impl Tool for ScrollTool {
         };
 
         context.invalidate_dom();
-        // Scrolling changes which nodes are viewport-local without bumping the
-        // document revision (scroll is not a DOM mutation). The snapshot cache is
-        // keyed on document_id only, so a later snapshot(mode=delta) would diff
-        // against a pre-scroll viewport base and silently drop newly visible or
-        // removed nodes. Drop the base here, matching the navigate/history/
-        // set_viewport seams, so the next delta rebuilds from the current view.
         context.session.invalidate_snapshot_cache()?;
         let envelope = build_document_envelope(context, None, DocumentEnvelopeOptions::minimal())?;
 
@@ -514,8 +508,6 @@ mod tests {
             .expect("scroll should succeed against the fake backend");
         assert!(result.success);
 
-        // The pre-scroll viewport base must be dropped so the next
-        // snapshot(mode=delta) rebuilds from the current scroll position.
         assert!(
             session
                 .snapshot_cache_for_test()

@@ -55,6 +55,7 @@ impl GetMarkdownParams {
     }
 }
 
+/// Extracts paginated main-content Markdown via Readability with session cache reuse.
 #[derive(Default)]
 pub struct GetMarkdownTool;
 

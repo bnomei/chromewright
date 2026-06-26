@@ -18,29 +18,16 @@ pub struct EvaluateParams {
     pub confirm_unsafe: bool,
 }
 
+/// Operator tool that runs arbitrary JavaScript in the active page after `confirm_unsafe`.
 #[derive(Default)]
 pub struct EvaluateTool;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct EvaluateOutput {
-    /// JSON value returned by the evaluation. `null` when the script returned
-    /// JavaScript `null` *or* when no value was produced; use `value_present`
-    /// to distinguish the two cases.
     pub result: Value,
-
-    /// `true` when the browser returned an actual value payload. `false` means
-    /// the evaluation produced no value (e.g. JavaScript `undefined`, a
-    /// by-reference object, or a destroyed/detached context), in which case
-    /// `result` is `null` as a placeholder and should not be read as a real
-    /// `null` result.
     pub value_present: bool,
-
-    /// CDP remote object type (e.g. `Undefined`, `Object`, `Number`) when
-    /// available. Lets callers tell `undefined` apart from `null` results.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub type_name: Option<String>,
-
-    /// CDP remote object description when available.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
 }

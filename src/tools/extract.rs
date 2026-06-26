@@ -87,6 +87,7 @@ fn parse_extract_format(format: &str) -> Result<ExtractFormat> {
     }
 }
 
+/// Extracts text or HTML from the page or a scoped selector with size limits.
 #[derive(Default)]
 pub struct ExtractContentTool;
 

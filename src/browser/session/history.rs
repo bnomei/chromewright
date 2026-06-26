@@ -1,3 +1,5 @@
+//! History navigation with document-settle polling for back and forward tools.
+
 use super::BrowserSession;
 use crate::error::{BrowserError, Result};
 use std::time::{Duration, Instant};
@@ -74,11 +76,6 @@ impl BrowserSession {
         self.invalidate_snapshot_cache()?;
         let settle_metrics = self.wait_for_history_settle(&previous_url, Duration::from_secs(5))?;
 
-        // History navigation can land on entries with unsafe schemes (file:,
-        // data:, chrome:, ...) that the forward `navigate`/`new_tab` gate would
-        // refuse without `allow_unsafe`. Apply the same posture here, then undo
-        // the move so a blocked destination is not left loaded for downstream
-        // reading tools to exfiltrate.
         let landed_url = self.document_metadata()?.url;
         if !allow_unsafe && is_unsafe_history_scheme(&landed_url) {
             let reverse = direction.reverse();
@@ -144,15 +141,8 @@ impl HistoryDirection {
     }
 }
 
-/// Mirror `validate_navigation_url`: a destination is unsafe unless it has no
-/// absolute scheme (relative URL) or its scheme is http/https. `about:` (e.g.
-/// the initial `about:blank` entry) is also treated as safe here because such
-/// pages carry no document content to exfiltrate and routinely appear in
-/// history, unlike the `navigate`/`new_tab` surface where loading them is an
-/// explicit caller request.
 fn is_unsafe_history_scheme(url: &str) -> bool {
     let Some((scheme, _rest)) = url.split_once(':') else {
-        // No scheme separator: treat as relative/same-origin, which is safe.
         return false;
     };
 

@@ -1,3 +1,5 @@
+//! Tab listing, activation, and managed-tab ownership in launch and attach modes.
+
 use super::{BrowserSession, ClosedTabSummary, ManagedTabsCloseSummary, TabInfo};
 use crate::browser::backend::TabDescriptor;
 #[cfg(test)]

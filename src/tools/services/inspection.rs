@@ -1,3 +1,5 @@
+//! `inspect_node` orchestration: target resolution, in-page probe, and envelope assembly.
+
 use crate::error::Result;
 use crate::tools::ResolvedTarget;
 use crate::tools::TargetEnvelope;
