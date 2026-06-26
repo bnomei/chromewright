@@ -156,10 +156,7 @@ mod tests {
             .expect("evaluate should succeed");
 
         assert!(result.success);
-        let output = result
-            .data
-            .as_ref()
-            .expect("evaluate should emit data");
+        let output = result.data.as_ref().expect("evaluate should emit data");
         assert_eq!(output["value_present"].as_bool(), Some(false));
         assert!(output["result"].is_null());
         assert_eq!(output["type_name"].as_str(), Some("Undefined"));
@@ -182,10 +179,7 @@ mod tests {
             )
             .expect("evaluate should succeed");
 
-        let output = result
-            .data
-            .as_ref()
-            .expect("evaluate should emit data");
+        let output = result.data.as_ref().expect("evaluate should emit data");
         assert_eq!(output["value_present"].as_bool(), Some(true));
         assert_eq!(output["result"].as_str(), Some("complete"));
     }

@@ -282,9 +282,7 @@ mod tests {
 
     #[test]
     fn is_unsafe_history_scheme_matches_navigate_gate() {
-        assert!(!super::is_unsafe_history_scheme(
-            "https://example.com/page"
-        ));
+        assert!(!super::is_unsafe_history_scheme("https://example.com/page"));
         assert!(!super::is_unsafe_history_scheme("http://localhost:3000"));
         assert!(!super::is_unsafe_history_scheme("about:blank"));
         assert!(!super::is_unsafe_history_scheme("/relative/path"));

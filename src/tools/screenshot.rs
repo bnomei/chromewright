@@ -4,6 +4,7 @@ use crate::browser::{
     ScreenshotRequest,
 };
 use crate::error::{BrowserError, Result};
+use crate::tools::browser_kernel::{BrowserKernelTemplateShell, render_browser_kernel_script};
 use crate::tools::core::{
     PublicTarget, StaleCursorPolicy, TargetResolution, resolve_target_with_cursor,
     structured_tool_failure,
@@ -12,7 +13,6 @@ use crate::tools::inspect_node::{
     InspectBoundingBox, InspectLayout, InspectNodeProbePayload, build_inspect_node_js,
     decode_probe_payload,
 };
-use crate::tools::browser_kernel::{BrowserKernelTemplateShell, render_browser_kernel_script};
 use crate::tools::limits::validate_screenshot_css_size;
 use crate::tools::{Tool, ToolContext, ToolResult};
 use schemars::JsonSchema;

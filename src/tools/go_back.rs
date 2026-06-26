@@ -32,20 +32,14 @@ impl Tool for GoBackTool {
         "Go back in history. Next: wait or snapshot."
     }
 
-    fn execute_typed(
-        &self,
-        params: GoBackParams,
-        context: &mut ToolContext,
-    ) -> Result<ToolResult> {
+    fn execute_typed(&self, params: GoBackParams, context: &mut ToolContext) -> Result<ToolResult> {
         let metrics = context
             .session
             .go_back_with_metrics(params.allow_unsafe)
-            .map_err(|e| {
-            BrowserError::ToolExecutionFailed {
+            .map_err(|e| BrowserError::ToolExecutionFailed {
                 tool: "go_back".to_string(),
                 reason: e.to_string(),
-            }
-        })?;
+            })?;
         context.record_browser_evaluations(metrics.browser_evaluations);
         context.record_poll_iterations(metrics.poll_iterations);
 

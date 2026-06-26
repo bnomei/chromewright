@@ -372,7 +372,10 @@ mod tests {
             Some(first_tab_id.as_str())
         );
         assert_eq!(data["document"]["url"].as_str(), Some("about:blank"));
-        assert_ne!(data["document"]["document_id"].as_str(), Some(second_tab.id.as_str()));
+        assert_ne!(
+            data["document"]["document_id"].as_str(),
+            Some(second_tab.id.as_str())
+        );
     }
 
     #[test]

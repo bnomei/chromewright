@@ -40,12 +40,10 @@ impl Tool for GoForwardTool {
         let metrics = context
             .session
             .go_forward_with_metrics(params.allow_unsafe)
-            .map_err(|e| {
-            BrowserError::ToolExecutionFailed {
+            .map_err(|e| BrowserError::ToolExecutionFailed {
                 tool: "go_forward".to_string(),
                 reason: e.to_string(),
-            }
-        })?;
+            })?;
         context.record_browser_evaluations(metrics.browser_evaluations);
         context.record_poll_iterations(metrics.poll_iterations);
 
