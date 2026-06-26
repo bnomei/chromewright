@@ -731,6 +731,17 @@ pub(crate) struct ChromeSessionBackend {
     page_target_degraded: AtomicBool,
 }
 
+/// Retry posture for an active-tab operation after a recoverable page-target
+/// loss in attach mode.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TabOpRetry {
+    /// Idempotent read/query: safe to recover the tab handle and re-run.
+    ReplaySafe,
+    /// Non-idempotent mutation: surface the loss instead of re-running, since
+    /// the first attempt may have already committed page-side.
+    Mutation,
+}
+
 impl ChromeSessionBackend {
     pub(crate) fn launch(options: LaunchOptions) -> Result<Self> {
         let launch_opts = build_launch_options(options);
@@ -933,6 +944,33 @@ impl ChromeSessionBackend {
     fn with_active_tab_operation<T, F>(
         &self,
         operation_name: &'static str,
+        operation: F,
+    ) -> Result<T>
+    where
+        F: FnMut(&Arc<Tab>) -> Result<T>,
+    {
+        self.with_active_tab_operation_retry(operation_name, TabOpRetry::ReplaySafe, operation)
+    }
+
+    /// Like [`with_active_tab_operation`] but for non-idempotent mutations: a
+    /// recoverable page-target loss is surfaced to the caller instead of being
+    /// replayed, because the first attempt may have already committed the effect
+    /// page-side (e.g. a click that submits and then navigates away).
+    fn with_active_tab_mutation<T, F>(
+        &self,
+        operation_name: &'static str,
+        operation: F,
+    ) -> Result<T>
+    where
+        F: FnMut(&Arc<Tab>) -> Result<T>,
+    {
+        self.with_active_tab_operation_retry(operation_name, TabOpRetry::Mutation, operation)
+    }
+
+    fn with_active_tab_operation_retry<T, F>(
+        &self,
+        operation_name: &'static str,
+        retry: TabOpRetry,
         mut operation: F,
     ) -> Result<T>
     where
@@ -947,6 +985,17 @@ impl ChromeSessionBackend {
                     || !self.browser_inventory_available()
                 {
                     Err(error)
+                } else if retry == TabOpRetry::Mutation {
+                    // Non-idempotent operation: do not replay. The first attempt
+                    // may have already committed page-side, so re-running would
+                    // risk a duplicate effect (double submit, double navigate).
+                    Err(attach_session_page_target_loss(
+                        operation_name,
+                        format!(
+                            "Attached browser session lost its active page target during {operation_name}. This operation is non-idempotent and may have already committed page-side, so it was not retried to avoid a duplicate effect: {}",
+                            browser_error_detail(&error)
+                        ),
+                    ))
                 } else {
                     match self.recover_active_tab_handle() {
                         Ok(recovered_tab) => match operation(&recovered_tab) {
@@ -1155,7 +1204,7 @@ fn is_recoverable_page_target_loss(error: &BrowserError) -> bool {
 
 impl SessionBackend for ChromeSessionBackend {
     fn navigate(&self, url: &str) -> Result<()> {
-        self.with_active_tab_operation("navigate", |tab| {
+        self.with_active_tab_mutation("navigate", |tab| {
             tab.navigate_to(url).map_err(|e| {
                 BrowserError::NavigationFailed(format!("Failed to navigate to {}: {}", url, e))
             })?;
@@ -1233,7 +1282,10 @@ impl SessionBackend for ChromeSessionBackend {
 
     fn execute_command(&self, command: BrowserCommand) -> Result<BrowserCommandResult> {
         let operation = command.operation();
-        self.with_active_tab_operation(operation, |tab| {
+        // Probes are idempotent reads and may be replayed after a recoverable
+        // page-target loss; interaction commands are non-idempotent and must not
+        // be auto-retried, since the first attempt may have already committed.
+        let run = |tab: &Arc<Tab>| {
             let script = command.render_script();
             let result = tab
                 .evaluate(&script, false)
@@ -1282,7 +1334,13 @@ impl SessionBackend for ChromeSessionBackend {
                     Ok(BrowserCommandResult::Interaction(result))
                 }
             }
-        })
+        };
+
+        if command.is_idempotent() {
+            self.with_active_tab_operation(operation, run)
+        } else {
+            self.with_active_tab_mutation(operation, run)
+        }
     }
 
     fn capture_screenshot(&self, full_page: bool) -> Result<Vec<u8>> {
@@ -1418,7 +1476,7 @@ impl SessionBackend for ChromeSessionBackend {
     }
 
     fn press_key(&self, key: &str) -> Result<()> {
-        self.with_active_tab_operation("press_key", |tab| {
+        self.with_active_tab_mutation("press_key", |tab| {
             tab.press_key(key)
                 .map_err(|e| BrowserError::ToolExecutionFailed {
                     tool: "press_key".to_string(),
@@ -1626,6 +1684,40 @@ mod tests {
         }
     }
 
+    /// Mirrors the `TabOpRetry::Mutation` branch of
+    /// `with_active_tab_operation_retry`: a recoverable page-target loss is
+    /// surfaced as a degraded attach-session error WITHOUT re-running the
+    /// operation, so a non-idempotent mutation cannot double-commit.
+    fn simulate_attach_recovery_mutation<T, Op>(
+        attach_mode: bool,
+        operation_name: &'static str,
+        mut operation: Op,
+        inventory_available: bool,
+    ) -> Result<T>
+    where
+        Op: FnMut() -> Result<T>,
+    {
+        match operation() {
+            Ok(value) => Ok(value),
+            Err(error) => {
+                if !attach_mode
+                    || recoverable_page_target_loss_details(operation_name, &error).is_none()
+                    || !inventory_available
+                {
+                    return Err(error);
+                }
+
+                Err(attach_session_page_target_loss(
+                    operation_name,
+                    format!(
+                        "Attached browser session lost its active page target during {operation_name}. This operation is non-idempotent and may have already committed page-side, so it was not retried to avoid a duplicate effect: {}",
+                        browser_error_detail(&error)
+                    ),
+                ))
+            }
+        }
+    }
+
     fn closed_connection_error() -> BrowserError {
         BrowserError::EvaluationFailed(
             "Unable to make method calls because underlying connection is closed".to_string(),
@@ -1713,6 +1805,32 @@ mod tests {
         assert_eq!(result.expect("retry should recover"), "ok");
         assert_eq!(attempts.get(), 2);
         assert_eq!(recoveries.get(), 1);
+    }
+
+    #[test]
+    fn attach_recovery_does_not_replay_non_idempotent_mutation() {
+        let attempts = Cell::new(0usize);
+
+        let result: Result<&str> = simulate_attach_recovery_mutation(
+            true,
+            "navigate",
+            || {
+                attempts.set(attempts.get() + 1);
+                // The mutation committed page-side, then the transport dropped.
+                Err(closed_connection_error())
+            },
+            true,
+        );
+
+        let error = result.expect_err("non-idempotent mutation must not be auto-retried");
+        // The operation ran exactly once: no replay that could double-commit.
+        assert_eq!(attempts.get(), 1);
+        let BrowserError::PageTargetLost(details) = error else {
+            panic!("expected a structured page-target-loss error, got {error}");
+        };
+        assert!(details.is_attach_session_degraded());
+        assert!(!details.recoverable);
+        assert!(details.detail.contains("non-idempotent"));
     }
 
     #[test]
