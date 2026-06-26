@@ -266,14 +266,20 @@ impl BrowserSession {
         self.backend.press_key(key)
     }
 
-    /// Navigate back in browser history
+    /// Navigate back in browser history.
+    ///
+    /// This low-level wrapper does not apply the non-http(s) scheme gate; like
+    /// [`BrowserSession::navigate`], the safety posture is enforced at the tool
+    /// surface (`GoBackTool`). Callers that need the gate must pass
+    /// `allow_unsafe = false` via [`BrowserSession::go_back_with_metrics`].
     pub fn go_back(&self) -> Result<()> {
-        self.go_back_with_metrics().map(|_| ())
+        self.go_back_with_metrics(true).map(|_| ())
     }
 
-    /// Navigate forward in browser history
+    /// Navigate forward in browser history. See [`BrowserSession::go_back`] for
+    /// the scheme-gate caveat.
     pub fn go_forward(&self) -> Result<()> {
-        self.go_forward_with_metrics().map(|_| ())
+        self.go_forward_with_metrics(true).map(|_| ())
     }
 
     /// Close all open tabs in the current session backend.

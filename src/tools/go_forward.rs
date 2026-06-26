@@ -6,9 +6,15 @@ use crate::tools::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// Parameters for the go_forward tool (no parameters needed)
+/// Parameters for the go_forward tool
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct GoForwardParams {}
+pub struct GoForwardParams {
+    /// Allow history navigation to land on non-http(s) destinations (e.g.
+    /// `file:`, `data:`, `chrome:`). Defaults to false, mirroring the
+    /// `navigate`/`new_tab` safety gate.
+    #[serde(default)]
+    pub allow_unsafe: bool,
+}
 
 /// Tool for navigating forward in browser history
 #[derive(Default)]
@@ -28,10 +34,13 @@ impl Tool for GoForwardTool {
 
     fn execute_typed(
         &self,
-        _params: GoForwardParams,
+        params: GoForwardParams,
         context: &mut ToolContext,
     ) -> Result<ToolResult> {
-        let metrics = context.session.go_forward_with_metrics().map_err(|e| {
+        let metrics = context
+            .session
+            .go_forward_with_metrics(params.allow_unsafe)
+            .map_err(|e| {
             BrowserError::ToolExecutionFailed {
                 tool: "go_forward".to_string(),
                 reason: e.to_string(),
