@@ -1,3 +1,5 @@
+//! Template shell that inlines the shared browser-kernel script into tool-specific probes.
+
 use serde_json::Value;
 use std::sync::OnceLock;
 
@@ -69,6 +71,14 @@ mod tests {
 
         assert!(rendered.contains(r##"const config = {"selector":"#save"};"##));
         assert!(rendered.contains("function resolveTargetMatch(config, options)"));
+        assert!(rendered.contains("findActionableIndexForElement(selectorMatch.element)"));
+        assert!(
+            rendered.contains("const indexedMatch = searchActionableIndex(config.target_index)")
+        );
+        assert!(
+            !rendered.contains("(selectorMatch.frame_depth || 0) === 0"),
+            "target_index reconciliation must also apply to same-origin iframe matches"
+        );
         assert!(!rendered.contains("__BROWSER_KERNEL__"));
         assert!(!rendered.contains("__CONFIG__"));
     }

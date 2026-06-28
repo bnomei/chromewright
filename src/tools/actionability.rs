@@ -1,3 +1,5 @@
+//! Actionability probe bridge from tools to compiled in-page predicate scripts.
+
 use crate::browser::BrowserSession;
 pub(crate) use crate::browser::commands::{
     ActionabilityDiagnostics, ActionabilityPredicate, ActionabilityProbeRequest,

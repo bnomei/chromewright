@@ -1,3 +1,4 @@
+// Scrolls a resolved target into the viewport for interaction tools.
 (() => {
   const config = __SCROLL_TARGET_CONFIG__;
 

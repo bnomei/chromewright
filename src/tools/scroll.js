@@ -1,3 +1,4 @@
+// Page or element scroll script with before/after scroll position reporting.
 (async function () {
   const config = __SCROLL_CONFIG__;
   const beforeScrollY = window.scrollY;

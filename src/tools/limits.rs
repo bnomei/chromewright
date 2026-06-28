@@ -1,3 +1,5 @@
+//! Resource budgets enforced before DOM extraction, snapshots, screenshots, and waits.
+
 use crate::error::{BrowserError, Result};
 
 pub(crate) const MAX_WAIT_TIMEOUT_MS: u64 = 120_000;

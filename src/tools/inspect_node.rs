@@ -91,6 +91,7 @@ impl JsonSchema for InspectNodeParams {
     }
 }
 
+/// Probes a resolved target for identity, layout, accessibility, and form state.
 #[derive(Default)]
 pub struct InspectNodeTool;
 

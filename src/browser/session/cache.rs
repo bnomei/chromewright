@@ -1,3 +1,5 @@
+//! Revision-keyed markdown and snapshot caches plus managed screenshot artifact storage.
+
 use super::BrowserSession;
 use crate::browser::backend::{
     ScreenshotCapture, ScreenshotClip, ScreenshotFormat, ScreenshotMode,
@@ -214,7 +216,9 @@ impl BrowserSession {
             })?;
 
         Ok(guard.as_ref().and_then(|entry| {
-            (entry.document_id == document.document_id && entry.revision == document.revision)
+            (entry.document_id == document.document_id
+                && entry.revision == document.revision
+                && entry.url == document.url)
                 .then_some(Arc::clone(entry))
         }))
     }
@@ -437,6 +441,65 @@ mod tests {
                 global_interactive_count: Some(1),
             },
         })
+    }
+
+    fn markdown_document(document_id: &str, revision: &str, url: &str) -> DocumentMetadata {
+        DocumentMetadata {
+            document_id: document_id.to_string(),
+            revision: revision.to_string(),
+            url: url.to_string(),
+            title: "Document".to_string(),
+            ready_state: "complete".to_string(),
+            frames: Vec::new(),
+        }
+    }
+
+    fn sample_markdown_entry(document: &DocumentMetadata) -> Arc<MarkdownCacheEntry> {
+        Arc::new(MarkdownCacheEntry::new(
+            MarkdownCacheMetadata {
+                document_id: document.document_id.clone(),
+                revision: document.revision.clone(),
+                title: document.title.clone(),
+                url: document.url.clone(),
+                byline: String::new(),
+                excerpt: String::new(),
+                site_name: String::new(),
+            },
+            Arc::<str>::from("body"),
+        ))
+    }
+
+    #[test]
+    fn markdown_cache_hits_for_matching_document_revision_and_url() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        let document = markdown_document("doc-1", "main:42", "https://app.example/list");
+        session
+            .store_markdown_cache(sample_markdown_entry(&document))
+            .expect("markdown cache should store");
+
+        let cached = session
+            .markdown_cache_entry(&document)
+            .expect("markdown cache lookup should succeed");
+        assert!(cached.is_some(), "matching url should hit cache");
+    }
+
+    #[test]
+    fn markdown_cache_misses_when_url_changes_without_revision_bump() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        let stored = markdown_document("doc-1", "main:42", "https://app.example/list");
+        let after_pushstate = markdown_document("doc-1", "main:42", "https://app.example/item/99");
+
+        session
+            .store_markdown_cache(sample_markdown_entry(&stored))
+            .expect("markdown cache should store");
+
+        let cached = session
+            .markdown_cache_entry(&after_pushstate)
+            .expect("markdown cache lookup should succeed");
+        assert!(
+            cached.is_none(),
+            "url change without revision bump must force re-extraction"
+        );
     }
 
     #[test]

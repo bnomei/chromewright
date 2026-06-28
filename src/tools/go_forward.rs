@@ -6,9 +6,12 @@ use crate::tools::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// Parameters for the go_forward tool (no parameters needed)
+/// Parameters for the go_forward tool
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct GoForwardParams {}
+pub struct GoForwardParams {
+    #[serde(default)]
+    pub allow_unsafe: bool,
+}
 
 /// Tool for navigating forward in browser history
 #[derive(Default)]
@@ -28,15 +31,16 @@ impl Tool for GoForwardTool {
 
     fn execute_typed(
         &self,
-        _params: GoForwardParams,
+        params: GoForwardParams,
         context: &mut ToolContext,
     ) -> Result<ToolResult> {
-        let metrics = context.session.go_forward_with_metrics().map_err(|e| {
-            BrowserError::ToolExecutionFailed {
+        let metrics = context
+            .session
+            .go_forward_with_metrics(params.allow_unsafe)
+            .map_err(|e| BrowserError::ToolExecutionFailed {
                 tool: "go_forward".to_string(),
                 reason: e.to_string(),
-            }
-        })?;
+            })?;
         context.record_browser_evaluations(metrics.browser_evaluations);
         context.record_poll_iterations(metrics.poll_iterations);
 

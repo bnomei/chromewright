@@ -19,6 +19,7 @@ pub struct Link {
     pub resolved_url: String,
 }
 
+/// Lists anchor links on the page with resolved absolute URLs for navigation planning.
 #[derive(Default)]
 pub struct ReadLinksTool;
 

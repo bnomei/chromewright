@@ -1,8 +1,4 @@
-/// Mozilla Readability.js library (minified)
-///
-/// This is the complete Readability algorithm from Mozilla, used to extract
-/// the main content from web pages while filtering out navigation, ads, sidebars, etc.
-///
-/// Source: https://github.com/mozilla/readability
-/// License: Apache-2.0
+//! Embedded Mozilla Readability script for main-content extraction in `get_markdown`.
+
+/// Minified Readability bundle evaluated in-page before HTML-to-Markdown conversion.
 pub const READABILITY_SCRIPT: &str = include_str!("Readability.min.js");

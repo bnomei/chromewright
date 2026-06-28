@@ -139,6 +139,7 @@ impl Tool for ScrollTool {
         };
 
         context.invalidate_dom();
+        context.session.invalidate_snapshot_cache()?;
         let envelope = build_document_envelope(context, None, DocumentEnvelopeOptions::minimal())?;
 
         Ok(context.finish(ToolResult::success_with(build_scroll_output(
@@ -466,5 +467,53 @@ mod tests {
 
     fn empty_result() -> DocumentActionResult {
         DocumentActionResult::new("scroll", crate::dom::DocumentMetadata::default())
+    }
+
+    #[test]
+    fn test_scroll_invalidates_snapshot_cache() {
+        use crate::browser::backend::FakeSessionBackend;
+        use crate::browser::{SnapshotCacheEntry, SnapshotCacheScope};
+        use std::sync::Arc;
+
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        let document = session
+            .document_metadata()
+            .expect("document metadata should be available");
+        session
+            .store_snapshot_cache(Arc::new(SnapshotCacheEntry {
+                document,
+                snapshot: Arc::<str>::from("button \"Fake target\""),
+                nodes: Arc::<[crate::dom::SnapshotNode]>::from(Vec::new()),
+                scope: SnapshotCacheScope {
+                    mode: "viewport".to_string(),
+                    fallback_mode: None,
+                    viewport_biased: true,
+                    returned_node_count: 0,
+                    unavailable_frame_count: 0,
+                    global_interactive_count: Some(1),
+                },
+            }))
+            .expect("snapshot cache should store");
+        assert!(
+            session
+                .snapshot_cache_for_test()
+                .expect("snapshot cache should be readable")
+                .is_some()
+        );
+
+        let tool = ScrollTool;
+        let mut context = ToolContext::new(&session);
+        let result = tool
+            .execute_typed(ScrollParams { amount: Some(400) }, &mut context)
+            .expect("scroll should succeed against the fake backend");
+        assert!(result.success);
+
+        assert!(
+            session
+                .snapshot_cache_for_test()
+                .expect("snapshot cache should be readable")
+                .is_none(),
+            "scroll must invalidate the snapshot delta base"
+        );
     }
 }

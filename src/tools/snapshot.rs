@@ -15,7 +15,7 @@ pub struct SnapshotParams {
     pub mode: SnapshotMode,
 }
 
-/// Tool for getting an ARIA snapshot of the page in YAML format
+/// Returns an ARIA snapshot in YAML with viewport, delta, or full-document scope.
 #[derive(Default)]
 pub struct SnapshotTool;
 

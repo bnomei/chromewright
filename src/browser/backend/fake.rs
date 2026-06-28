@@ -1,3 +1,5 @@
+//! Deterministic in-memory `SessionBackend` for unit tests without a live browser.
+
 use super::{
     ScreenshotCapture, ScreenshotImageMetrics, ScreenshotRequest, ScreenshotScale,
     ScriptEvaluation, SessionBackend, TabDescriptor,
@@ -311,6 +313,14 @@ impl FakeSessionBackend {
             }));
         }
 
+        if script.contains("__devana_no_value__") {
+            return Some(Ok(ScriptEvaluation {
+                value: None,
+                description: Some("undefined".to_string()),
+                type_name: Some("Undefined".to_string()),
+            }));
+        }
+
         if script.contains("window.history.back()") || script.contains("window.history.forward()") {
             return Some(Ok(ScriptEvaluation {
                 value: Some(serde_json::json!(true)),
@@ -619,6 +629,12 @@ impl SessionBackend for FakeSessionBackend {
     fn extract_dom(&self) -> Result<DomTree> {
         let state = self.lock_state()?;
         Ok(Self::fake_dom(&Self::current_document(&state)?))
+    }
+
+    fn document_metadata_for_tab(&self, tab_id: &str) -> Result<DocumentMetadata> {
+        let state = self.lock_state()?;
+        let tab = Self::tab_from_state(&state, tab_id)?;
+        Self::document_for_tab(&state, tab)
     }
 
     fn extract_dom_for_tab(&self, tab_id: &str) -> Result<DomTree> {

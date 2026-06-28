@@ -1,5 +1,11 @@
+//! Unified error taxonomy for browser, tool, and resource-limit failures.
+//!
+//! `BrowserError` is the single propagation type from CDP through tools to MCP;
+//! structured detail structs carry recovery hints for attach-session degradation.
+
 use thiserror::Error;
 
+/// Structured context when the active CDP page target is lost or attach mode degrades.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PageTargetLostDetails {
     pub operation: String,
@@ -46,6 +52,7 @@ impl std::fmt::Display for PageTargetLostDetails {
     }
 }
 
+/// Capability gap reported when the active `SessionBackend` cannot honor a command.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BackendUnsupportedDetails {
     pub capability: String,
@@ -71,6 +78,7 @@ impl std::fmt::Display for BackendUnsupportedDetails {
     }
 }
 
+/// Budget violation for DOM, snapshot, screenshot, or extraction size limits.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResourceLimitDetails {
     pub resource: String,

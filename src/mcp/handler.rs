@@ -1,4 +1,4 @@
-//! ServerHandler implementation for BrowserSession
+//! rmcp `ServerHandler` that dispatches registered browser tools on a shared session.
 
 use crate::browser::{BrowserSession, ConnectionOptions};
 use crate::mcp::{convert_result, mcp_internal_error};

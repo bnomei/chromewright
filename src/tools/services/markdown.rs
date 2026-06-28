@@ -1,3 +1,5 @@
+//! Readability-based main-content extraction, markdown conversion, and session cache reuse.
+
 use crate::browser::{MarkdownCacheEntry, MarkdownCacheMetadata};
 use crate::error::{BrowserError, Result};
 use crate::tools::html_to_markdown::convert_html_to_markdown;

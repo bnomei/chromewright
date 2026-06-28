@@ -305,6 +305,7 @@ fn default_timeout() -> u64 {
     30000
 }
 
+/// Polls document or target conditions until they hold or a timeout elapses.
 #[derive(Default)]
 pub struct WaitTool;
 

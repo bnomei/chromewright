@@ -1,5 +1,4 @@
-// ARIA Snapshot DOM Extraction
-// Based on Playwright's ariaSnapshot.ts - generates ARIA-tree structure for AI consumption
+// ARIA accessibility-tree extraction aligned with Playwright ariaSnapshot semantics.
 JSON.stringify((function() {
     'use strict';
 

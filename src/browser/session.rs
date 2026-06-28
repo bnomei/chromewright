@@ -1,3 +1,7 @@
+//! Browser session state: backend handle, tool registry, and revision-keyed caches.
+//!
+//! Session helpers for tabs, history, and cache invalidation live in sibling modules.
+
 use crate::browser::backend::{
     ChromeSessionBackend, ScreenshotCapture, ScreenshotRequest, ScriptEvaluation, SessionBackend,
 };
@@ -28,7 +32,7 @@ pub use cache::ScreenshotArtifact;
 pub(crate) use cache::SnapshotCacheScope;
 pub(crate) use cache::{MarkdownCacheEntry, SnapshotCacheEntry};
 
-/// Browser session that manages a Chrome/Chromium instance
+/// Owns the CDP backend, per-session caches, managed tabs, and default tool registry.
 pub struct BrowserSession {
     backend: Arc<dyn SessionBackend>,
 
@@ -64,6 +68,7 @@ pub(crate) enum SessionOrigin {
     Connected,
 }
 
+/// Snapshot of one browser tab for `tab_list` and tab-management tools.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TabInfo {
     pub id: String,
@@ -72,6 +77,7 @@ pub struct TabInfo {
     pub active: bool,
 }
 
+/// Metadata returned when a tab is closed, including its index before removal.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ClosedTabSummary {
     pub index: usize,
@@ -119,6 +125,10 @@ impl BrowserSession {
     /// Read document metadata from the active tab without rebuilding the full DOM snapshot.
     pub fn document_metadata(&self) -> Result<DocumentMetadata> {
         self.backend.document_metadata()
+    }
+
+    pub(crate) fn document_metadata_for_tab(&self, tab_id: &str) -> Result<DocumentMetadata> {
+        self.backend.document_metadata_for_tab(tab_id)
     }
 
     /// Wait for navigation to complete
@@ -266,14 +276,12 @@ impl BrowserSession {
         self.backend.press_key(key)
     }
 
-    /// Navigate back in browser history
     pub fn go_back(&self) -> Result<()> {
-        self.go_back_with_metrics().map(|_| ())
+        self.go_back_with_metrics(true).map(|_| ())
     }
 
-    /// Navigate forward in browser history
     pub fn go_forward(&self) -> Result<()> {
-        self.go_forward_with_metrics().map(|_| ())
+        self.go_forward_with_metrics(true).map(|_| ())
     }
 
     /// Close all open tabs in the current session backend.

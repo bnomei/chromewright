@@ -1,6 +1,8 @@
+//! URL normalization and navigation safety checks for high-level browser tools.
+
 use crate::error::{BrowserError, Result};
 
-/// Normalize an incomplete URL by adding missing protocol and handling common patterns
+/// Normalize an incomplete URL by adding a protocol when the input looks like a host or domain.
 pub fn normalize_url(url: &str) -> String {
     let trimmed = url.trim();
 
@@ -48,10 +50,30 @@ fn has_absolute_scheme(url: &str) -> bool {
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '+' | '-' | '.'))
 }
 
+fn is_protocol_relative(url: &str) -> bool {
+    let trimmed = url.trim_start();
+    let mut chars = trimmed.chars();
+    matches!(
+        (chars.next(), chars.next()),
+        (Some('/' | '\\'), Some('/' | '\\'))
+    )
+}
+
 /// Validate a high-level navigation target. Unsafe absolute schemes require explicit opt-in.
 pub fn validate_navigation_url(url: &str, allow_unsafe: bool) -> Result<String> {
     let normalized = normalize_url(url);
-    if allow_unsafe || !has_absolute_scheme(&normalized) {
+    if allow_unsafe {
+        return Ok(normalized);
+    }
+
+    if is_protocol_relative(url) || is_protocol_relative(&normalized) {
+        return Err(BrowserError::InvalidArgument(format!(
+            "Protocol-relative navigation target '{}' is blocked by default; pass allow_unsafe=true or use an absolute http(s) URL.",
+            normalized
+        )));
+    }
+
+    if !has_absolute_scheme(&normalized) {
         return Ok(normalized);
     }
 
@@ -151,5 +173,40 @@ mod tests {
         let normalized = validate_navigation_url("data:text/html,<h1>Test</h1>", true)
             .expect("explicit opt-in should allow data: navigation");
         assert_eq!(normalized, "data:text/html,<h1>Test</h1>");
+    }
+
+    #[test]
+    fn test_validate_navigation_url_blocks_protocol_relative_by_default() {
+        for target in [
+            "//evil.example/phish",
+            "  //evil.example/phish",
+            "/\\evil.example/phish",
+            "\\\\evil.example/phish",
+            "\\/evil.example/phish",
+        ] {
+            let err = validate_navigation_url(target, false)
+                .err()
+                .unwrap_or_else(|| panic!("protocol-relative target {target:?} should be blocked"));
+            assert!(
+                matches!(err, BrowserError::InvalidArgument(_)),
+                "unexpected error for {target:?}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_validate_navigation_url_allows_protocol_relative_with_opt_in() {
+        let normalized = validate_navigation_url("//cdn.example/app.js", true)
+            .expect("explicit opt-in should allow protocol-relative navigation");
+        assert_eq!(normalized, "//cdn.example/app.js");
+    }
+
+    #[test]
+    fn test_validate_navigation_url_allows_same_origin_relative_paths() {
+        for target in ["/settings", "./relative", "../parent", "/path/to/page"] {
+            let normalized = validate_navigation_url(target, false)
+                .unwrap_or_else(|err| panic!("relative path {target:?} should pass: {err}"));
+            assert_eq!(normalized, target);
+        }
     }
 }

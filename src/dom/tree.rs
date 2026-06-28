@@ -1,3 +1,8 @@
+//! Indexed DOM tree, document metadata, and revision-scoped node references.
+//!
+//! `DomTree` owns the actionable index, selector map, and cursor lookup used when
+//! tools resolve targets against a recent `snapshot`.
+
 use crate::dom::element::{AriaChild, AriaNode};
 use crate::error::{BrowserError, Result};
 use crate::tools::limits::{
@@ -63,8 +68,7 @@ pub struct SnapshotNode {
     pub name: String,
 }
 
-/// Represents the ARIA snapshot of a web page
-/// Based on Playwright's AriaSnapshot structure
+/// Indexed accessibility snapshot for one document revision with actionable node lookup.
 #[derive(Debug, Clone)]
 pub struct DomTree {
     /// Metadata for the extracted document.
@@ -1015,7 +1019,7 @@ mod tests {
     #[test]
     fn test_document_metadata_script_returns_a_json_string_expression() {
         let script = include_str!("document_metadata.js").trim_start();
-        assert!(script.starts_with("JSON.stringify(("));
+        assert!(script.contains("JSON.stringify((function()"));
     }
 
     #[test]

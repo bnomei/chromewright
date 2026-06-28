@@ -1,3 +1,8 @@
+//! In-page script command model compiled from browser-kernel templates.
+//!
+//! Interaction, actionability, and selector-identity probes render once per command
+//! and execute through the active CDP tab.
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::OnceLock;
@@ -162,6 +167,13 @@ impl BrowserCommand {
             Self::ActionabilityProbe(_) => "actionability_probe",
             Self::SelectorIdentityProbe(_) => "selector_identity_probe",
             Self::Interaction(command) => command.operation(),
+        }
+    }
+
+    pub(crate) fn is_idempotent(&self) -> bool {
+        match self {
+            Self::ActionabilityProbe(_) | Self::SelectorIdentityProbe(_) => true,
+            Self::Interaction(_) => false,
         }
     }
 
@@ -527,5 +539,49 @@ mod tests {
         assert!(input.contains("\"clear\":true"));
         assert!(hover.contains("const element = resolveTargetElement(config);"));
         assert!(select.contains("\"value\":\"choice\""));
+    }
+
+    #[test]
+    fn probes_are_idempotent_but_interactions_are_not() {
+        let target = TargetedInteractionRequest {
+            selector: "#save".to_string(),
+            target_index: Some(1),
+        };
+
+        assert!(
+            BrowserCommand::ActionabilityProbe(ActionabilityProbeRequest {
+                selector: "#save".to_string(),
+                target_index: Some(1),
+                predicates: vec![ActionabilityPredicate::Present],
+                expected_text: None,
+                expected_value: None,
+            })
+            .is_idempotent()
+        );
+        assert!(
+            BrowserCommand::SelectorIdentityProbe(SelectorIdentityProbeRequest {
+                selector: "#save".to_string(),
+            })
+            .is_idempotent()
+        );
+
+        for interaction in [
+            InteractionCommand::Click(target.clone()),
+            InteractionCommand::Input(InputInteractionRequest {
+                target: target.clone(),
+                text: "hi".to_string(),
+                clear: false,
+            }),
+            InteractionCommand::Hover(target.clone()),
+            InteractionCommand::Select(SelectInteractionRequest {
+                target: target.clone(),
+                value: "choice".to_string(),
+            }),
+        ] {
+            assert!(
+                !BrowserCommand::Interaction(interaction).is_idempotent(),
+                "interaction commands must be non-idempotent"
+            );
+        }
     }
 }

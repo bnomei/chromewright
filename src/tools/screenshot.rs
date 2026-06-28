@@ -4,6 +4,7 @@ use crate::browser::{
     ScreenshotRequest,
 };
 use crate::error::{BrowserError, Result};
+use crate::tools::browser_kernel::{BrowserKernelTemplateShell, render_browser_kernel_script};
 use crate::tools::core::{
     PublicTarget, StaleCursorPolicy, TargetResolution, resolve_target_with_cursor,
     structured_tool_failure,
@@ -17,6 +18,10 @@ use crate::tools::{Tool, ToolContext, ToolResult};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::sync::OnceLock;
+
+const REVEAL_TARGET_TEMPLATE_JS: &str = include_str!("screenshot_reveal_target.js");
+static REVEAL_TARGET_SHELL: OnceLock<BrowserKernelTemplateShell> = OnceLock::new();
 
 #[derive(
     Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq, PartialOrd, Ord,
@@ -76,6 +81,7 @@ pub struct ScreenshotParams {
     pub region: Option<ScreenshotRegion>,
 }
 
+/// Captures managed screenshot artifacts by viewport, full page, element, or region.
 #[derive(Default)]
 pub struct ScreenshotTool;
 
@@ -356,11 +362,7 @@ fn inspect_element_target(
         }
     };
 
-    let target_index = target
-        .cursor
-        .as_ref()
-        .map(|cursor| cursor.index)
-        .or(target.index);
+    let target_index = target.browser_command_target_index();
     let mut payload =
         inspect_target_payload(&target.selector, target_index, tab_id.as_deref(), context)?;
     let mut layout = match extract_target_layout_or_failure(&target, &payload)? {
@@ -382,7 +384,8 @@ fn inspect_element_target(
             )));
         }
 
-        let reveal = reveal_target_in_viewport(&target.selector, tab_id.as_deref(), context)?;
+        let reveal =
+            reveal_target_in_viewport(&target.selector, target_index, tab_id.as_deref(), context)?;
         if !reveal.success {
             let error = reveal
                 .error
@@ -492,10 +495,11 @@ fn extract_target_layout_or_failure(
 
 fn reveal_target_in_viewport(
     selector: &str,
+    target_index: Option<usize>,
     tab_id: Option<&str>,
     context: &mut ToolContext<'_>,
 ) -> Result<RevealTargetPayload> {
-    let reveal_js = build_reveal_target_js(selector);
+    let reveal_js = build_reveal_target_js(selector, target_index);
     context.record_browser_evaluation();
     let evaluation = match tab_id {
         Some(tab_id) => context.session.evaluate_on_tab(tab_id, &reveal_js, false),
@@ -505,49 +509,16 @@ fn reveal_target_in_viewport(
     decode_reveal_payload(evaluation.value)
 }
 
-fn build_reveal_target_js(selector: &str) -> String {
-    let selector_json = serde_json::to_string(selector).unwrap_or_else(|_| "\"\"".to_string());
-    format!(
-        r#"(() => {{
-            const selector = {selector_json};
-            let element = null;
-            try {{
-                element = document.querySelector(selector);
-            }} catch (_error) {{
-                if (selector.startsWith('#')) {{
-                    element = document.getElementById(selector.slice(1));
-                }}
-            }}
-
-            if (!element) {{
-                return JSON.stringify({{
-                    success: false,
-                    code: 'target_not_found',
-                    error: 'Element not found for screenshot reveal'
-                }});
-            }}
-
-            const scrollYBefore = window.scrollY || 0;
-            if (typeof element.scrollIntoView === 'function') {{
-                element.scrollIntoView({{
-                    block: 'center',
-                    inline: 'center',
-                    behavior: 'auto'
-                }});
-            }}
-
-            const rect = element.getBoundingClientRect();
-            return JSON.stringify({{
-                success: true,
-                scroll_y_before: scrollYBefore,
-                scroll_y_after: window.scrollY || 0,
-                visible_in_viewport:
-                    rect.bottom > 0 &&
-                    rect.right > 0 &&
-                    rect.top < window.innerHeight &&
-                    rect.left < window.innerWidth
-            }});
-        }})()"#
+fn build_reveal_target_js(selector: &str, target_index: Option<usize>) -> String {
+    let config = json!({
+        "selector": selector,
+        "target_index": target_index,
+    });
+    render_browser_kernel_script(
+        &REVEAL_TARGET_SHELL,
+        REVEAL_TARGET_TEMPLATE_JS,
+        "__REVEAL_CONFIG__",
+        &config,
     )
 }
 
@@ -692,6 +663,17 @@ mod tests {
         let height =
             u32::from_be_bytes(bytes[20..24].try_into().expect("height bytes should exist"));
         Ok((width, height))
+    }
+
+    #[test]
+    fn test_build_reveal_target_js_routes_through_kernel_with_target_index() {
+        let reveal_js = super::build_reveal_target_js("#actions > button:nth-child(1)", Some(5));
+        assert!(reveal_js.contains("const element = resolveTargetElement(config);"));
+        assert!(reveal_js.contains("function resolveTargetMatch(config, options)"));
+        assert!(reveal_js.contains("\"target_index\":5"));
+        assert!(!reveal_js.contains("__BROWSER_KERNEL__"));
+        assert!(!reveal_js.contains("__REVEAL_CONFIG__"));
+        assert!(!reveal_js.contains("document.querySelector(selector)"));
     }
 
     #[test]

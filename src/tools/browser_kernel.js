@@ -1,3 +1,4 @@
+// Shared in-page runtime: visibility, selector identity, and cross-frame DOM helpers.
 function getDocumentView(doc) {
   return doc.defaultView || window;
 }
@@ -364,6 +365,19 @@ function resolveTargetMatch(config, options) {
         ? selectorSearch.match
         : selectorSearch;
     if (selectorMatch && selectorMatch.element && selectorMatch.element.isConnected) {
+      if (typeof config.target_index === 'number') {
+        const selectorActionableIndex = findActionableIndexForElement(selectorMatch.element);
+        if (selectorActionableIndex !== config.target_index) {
+          const indexedMatch = searchActionableIndex(config.target_index);
+          if (indexedMatch && indexedMatch.element && indexedMatch.element.isConnected) {
+            return {
+              match: indexedMatch,
+              selector_search: selectorSearch
+            };
+          }
+        }
+      }
+
       return {
         match: selectorMatch,
         selector_search: selectorSearch

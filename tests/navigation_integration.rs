@@ -38,7 +38,7 @@ fn test_go_back_tool() {
 
     // Execute the tool to go back
     let result = tool
-        .execute_typed(GoBackParams {}, &mut context)
+        .execute_typed(GoBackParams { allow_unsafe: true }, &mut context)
         .expect("Failed to execute go_back tool");
 
     // Verify the result
@@ -98,7 +98,7 @@ fn test_go_forward_tool() {
 
     // Execute the tool to go forward
     let result = tool
-        .execute_typed(GoForwardParams {}, &mut context)
+        .execute_typed(GoForwardParams { allow_unsafe: true }, &mut context)
         .expect("Failed to execute go_forward tool");
 
     // Verify the result
@@ -165,7 +165,7 @@ fn test_navigation_workflow() {
     // Go back to page 2
     let mut context = ToolContext::new(session);
     let result = go_back_tool
-        .execute_typed(GoBackParams {}, &mut context)
+        .execute_typed(GoBackParams { allow_unsafe: true }, &mut context)
         .expect("Failed to go back");
 
     assert!(result.success);
@@ -176,7 +176,7 @@ fn test_navigation_workflow() {
     // Go back to page 1
     let mut context = ToolContext::new(session);
     let result = go_back_tool
-        .execute_typed(GoBackParams {}, &mut context)
+        .execute_typed(GoBackParams { allow_unsafe: true }, &mut context)
         .expect("Failed to go back");
 
     assert!(result.success);
@@ -191,7 +191,7 @@ fn test_navigation_workflow() {
     // Go forward to page 2
     let mut context = ToolContext::new(session);
     let result = go_forward_tool
-        .execute_typed(GoForwardParams {}, &mut context)
+        .execute_typed(GoForwardParams { allow_unsafe: true }, &mut context)
         .expect("Failed to go forward");
 
     assert!(result.success);
@@ -279,7 +279,7 @@ fn test_go_back_on_first_page() {
 
     // Execute the tool - should succeed but do nothing
     let result = tool
-        .execute_typed(GoBackParams {}, &mut context)
+        .execute_typed(GoBackParams { allow_unsafe: true }, &mut context)
         .expect("Failed to execute go_back tool");
 
     assert!(
@@ -314,7 +314,7 @@ fn test_go_forward_on_last_page() {
 
     // Execute the tool - should succeed but do nothing
     let result = tool
-        .execute_typed(GoForwardParams {}, &mut context)
+        .execute_typed(GoForwardParams { allow_unsafe: true }, &mut context)
         .expect("Failed to execute go_forward tool");
 
     assert!(

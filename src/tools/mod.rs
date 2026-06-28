@@ -1,7 +1,7 @@
-//! Browser automation tools module
+//! MCP browser automation tools and the registry that dispatches them.
 //!
-//! This module provides a framework for browser automation tools and
-//! includes implementations of common browser operations.
+//! Each tool implements the shared `Tool` trait; operator tools such as `evaluate`
+//! are registered only on full server sessions, not the default registry.
 
 pub(crate) mod actionability;
 pub(crate) mod browser_kernel;
@@ -469,6 +469,7 @@ mod tests {
                     }
                 );
                 assert_eq!(target.method, "index");
+                assert_eq!(target.browser_command_target_index(), Some(1));
                 let envelope = target.to_target_envelope();
                 assert_eq!(
                     envelope
@@ -502,6 +503,7 @@ mod tests {
                 assert_eq!(target.method, "cursor");
                 assert_eq!(target.selector, "#submit");
                 assert_eq!(target.cursor.as_ref(), Some(&cursor));
+                assert_eq!(target.browser_command_target_index(), Some(1));
                 let envelope = target.to_target_envelope();
                 assert_eq!(envelope.method, "cursor");
                 assert_eq!(envelope.resolution_status, "exact");
@@ -530,6 +532,7 @@ mod tests {
                 assert_eq!(target.method, "css");
                 assert_eq!(target.selector, "#submit");
                 assert!(target.cursor.is_some());
+                assert_eq!(target.browser_command_target_index(), None);
             }
             TargetResolution::Failure(failure) => panic!("unexpected failure: {:?}", failure),
         }

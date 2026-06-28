@@ -1,6 +1,9 @@
+//! Document and snapshot result envelopes shared by read and mutation tools.
+
 use crate::contract::{TargetEnvelope, TargetStatus, ViewportMetrics};
 use crate::dom::{DocumentMetadata, SnapshotNode};
 
+/// Snapshot rendering mode: viewport-biased tree, delta against cache, or full document.
 #[derive(
     Debug,
     Clone,
@@ -20,6 +23,7 @@ pub enum SnapshotMode {
     Full,
 }
 
+/// Combined document metadata with optional snapshot YAML, node list, and scope summary.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct DocumentEnvelope {
     pub document: DocumentMetadata,
@@ -95,6 +99,7 @@ impl TargetedActionResult {
     }
 }
 
+/// Describes how a snapshot was scoped, including viewport bias and locality fallbacks.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema, PartialEq)]
 pub struct SnapshotScope {
     pub mode: SnapshotMode,

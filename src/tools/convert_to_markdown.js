@@ -1,6 +1,4 @@
-// Enhanced JavaScript code to convert HTML to markdown using Mozilla Readability
-// Based on UI-TARS implementation
-// Returns JSON string with title, HTML content, and metadata
+// In-page Readability extraction returning title, HTML, and article metadata as JSON.
 
 (function() {
     try {

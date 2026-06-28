@@ -1,3 +1,5 @@
+//! Viewport-biased snapshot projection and delta encoding against the session snapshot cache.
+
 use super::duration_micros;
 use crate::browser::{SnapshotCacheEntry, SnapshotCacheScope};
 use crate::contract::{SnapshotMode, SnapshotScope};

@@ -1,3 +1,4 @@
+// Document metadata probe: URL, title, ready state, and revision identifiers.
 JSON.stringify((function() {
     'use strict';
 

@@ -1,3 +1,8 @@
+//! Chrome DevTools Protocol adapter for session-scoped browser operations.
+//!
+//! `SessionBackend` is the boundary between Rust session logic and headless_chrome;
+//! attach-mode sessions can degrade when the active page target is lost.
+
 use crate::browser::commands::{
     BrowserCommand, BrowserCommandResult, InteractionCommand, InteractionCommandResult,
 };
@@ -579,11 +584,24 @@ pub(crate) struct ScriptEvaluation {
     pub type_name: Option<String>,
 }
 
+/// Session-scoped CDP operations: navigation, DOM extraction, tabs, viewport, and screenshots.
 pub(crate) trait SessionBackend: Send + Sync {
     fn navigate(&self, url: &str) -> Result<()>;
     fn wait_for_navigation(&self) -> Result<()>;
     fn wait_for_document_ready_with_timeout(&self, timeout: Duration) -> Result<()>;
     fn document_metadata(&self) -> Result<DocumentMetadata>;
+    fn document_metadata_for_tab(&self, tab_id: &str) -> Result<DocumentMetadata> {
+        if self.active_tab()?.id == tab_id {
+            return self.document_metadata();
+        }
+
+        Err(BrowserError::BackendUnsupported(
+            BackendUnsupportedDetails::new(
+                "document_metadata_for_tab",
+                "document_metadata_for_tab",
+            ),
+        ))
+    }
     fn extract_dom(&self) -> Result<DomTree>;
     fn extract_dom_for_tab(&self, tab_id: &str) -> Result<DomTree> {
         if self.active_tab()?.id == tab_id {
@@ -717,6 +735,12 @@ pub(crate) struct ChromeSessionBackend {
     attach_mode: bool,
     active_tab_hint: RwLock<Option<String>>,
     page_target_degraded: AtomicBool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TabOpRetry {
+    ReplaySafe,
+    Mutation,
 }
 
 impl ChromeSessionBackend {
@@ -921,6 +945,29 @@ impl ChromeSessionBackend {
     fn with_active_tab_operation<T, F>(
         &self,
         operation_name: &'static str,
+        operation: F,
+    ) -> Result<T>
+    where
+        F: FnMut(&Arc<Tab>) -> Result<T>,
+    {
+        self.with_active_tab_operation_retry(operation_name, TabOpRetry::ReplaySafe, operation)
+    }
+
+    fn with_active_tab_mutation<T, F>(
+        &self,
+        operation_name: &'static str,
+        operation: F,
+    ) -> Result<T>
+    where
+        F: FnMut(&Arc<Tab>) -> Result<T>,
+    {
+        self.with_active_tab_operation_retry(operation_name, TabOpRetry::Mutation, operation)
+    }
+
+    fn with_active_tab_operation_retry<T, F>(
+        &self,
+        operation_name: &'static str,
+        retry: TabOpRetry,
         mut operation: F,
     ) -> Result<T>
     where
@@ -935,6 +982,14 @@ impl ChromeSessionBackend {
                     || !self.browser_inventory_available()
                 {
                     Err(error)
+                } else if retry == TabOpRetry::Mutation {
+                    Err(attach_session_page_target_loss(
+                        operation_name,
+                        format!(
+                            "Attached browser session lost its active page target during {operation_name}. This operation is non-idempotent and may have already committed page-side, so it was not retried to avoid a duplicate effect: {}",
+                            browser_error_detail(&error)
+                        ),
+                    ))
                 } else {
                     match self.recover_active_tab_handle() {
                         Ok(recovered_tab) => match operation(&recovered_tab) {
@@ -1143,7 +1198,7 @@ fn is_recoverable_page_target_loss(error: &BrowserError) -> bool {
 
 impl SessionBackend for ChromeSessionBackend {
     fn navigate(&self, url: &str) -> Result<()> {
-        self.with_active_tab_operation("navigate", |tab| {
+        self.with_active_tab_mutation("navigate", |tab| {
             tab.navigate_to(url).map_err(|e| {
                 BrowserError::NavigationFailed(format!("Failed to navigate to {}: {}", url, e))
             })?;
@@ -1168,6 +1223,10 @@ impl SessionBackend for ChromeSessionBackend {
 
     fn document_metadata(&self) -> Result<DocumentMetadata> {
         self.with_active_tab_operation("document_metadata", DocumentMetadata::from_tab)
+    }
+
+    fn document_metadata_for_tab(&self, tab_id: &str) -> Result<DocumentMetadata> {
+        self.with_specific_tab_operation("document_metadata", tab_id, DocumentMetadata::from_tab)
     }
 
     fn extract_dom(&self) -> Result<DomTree> {
@@ -1217,7 +1276,7 @@ impl SessionBackend for ChromeSessionBackend {
 
     fn execute_command(&self, command: BrowserCommand) -> Result<BrowserCommandResult> {
         let operation = command.operation();
-        self.with_active_tab_operation(operation, |tab| {
+        let run = |tab: &Arc<Tab>| {
             let script = command.render_script();
             let result = tab
                 .evaluate(&script, false)
@@ -1266,7 +1325,13 @@ impl SessionBackend for ChromeSessionBackend {
                     Ok(BrowserCommandResult::Interaction(result))
                 }
             }
-        })
+        };
+
+        if command.is_idempotent() {
+            self.with_active_tab_operation(operation, run)
+        } else {
+            self.with_active_tab_mutation(operation, run)
+        }
     }
 
     fn capture_screenshot(&self, full_page: bool) -> Result<Vec<u8>> {
@@ -1402,7 +1467,7 @@ impl SessionBackend for ChromeSessionBackend {
     }
 
     fn press_key(&self, key: &str) -> Result<()> {
-        self.with_active_tab_operation("press_key", |tab| {
+        self.with_active_tab_mutation("press_key", |tab| {
             tab.press_key(key)
                 .map_err(|e| BrowserError::ToolExecutionFailed {
                     tool: "press_key".to_string(),
@@ -1610,6 +1675,36 @@ mod tests {
         }
     }
 
+    fn simulate_attach_recovery_mutation<T, Op>(
+        attach_mode: bool,
+        operation_name: &'static str,
+        mut operation: Op,
+        inventory_available: bool,
+    ) -> Result<T>
+    where
+        Op: FnMut() -> Result<T>,
+    {
+        match operation() {
+            Ok(value) => Ok(value),
+            Err(error) => {
+                if !attach_mode
+                    || recoverable_page_target_loss_details(operation_name, &error).is_none()
+                    || !inventory_available
+                {
+                    return Err(error);
+                }
+
+                Err(attach_session_page_target_loss(
+                    operation_name,
+                    format!(
+                        "Attached browser session lost its active page target during {operation_name}. This operation is non-idempotent and may have already committed page-side, so it was not retried to avoid a duplicate effect: {}",
+                        browser_error_detail(&error)
+                    ),
+                ))
+            }
+        }
+    }
+
     fn closed_connection_error() -> BrowserError {
         BrowserError::EvaluationFailed(
             "Unable to make method calls because underlying connection is closed".to_string(),
@@ -1697,6 +1792,30 @@ mod tests {
         assert_eq!(result.expect("retry should recover"), "ok");
         assert_eq!(attempts.get(), 2);
         assert_eq!(recoveries.get(), 1);
+    }
+
+    #[test]
+    fn attach_recovery_does_not_replay_non_idempotent_mutation() {
+        let attempts = Cell::new(0usize);
+
+        let result: Result<&str> = simulate_attach_recovery_mutation(
+            true,
+            "navigate",
+            || {
+                attempts.set(attempts.get() + 1);
+                Err(closed_connection_error())
+            },
+            true,
+        );
+
+        let error = result.expect_err("non-idempotent mutation must not be auto-retried");
+        assert_eq!(attempts.get(), 1);
+        let BrowserError::PageTargetLost(details) = error else {
+            panic!("expected a structured page-target-loss error, got {error}");
+        };
+        assert!(details.is_attach_session_degraded());
+        assert!(!details.recoverable);
+        assert!(details.detail.contains("non-idempotent"));
     }
 
     #[test]

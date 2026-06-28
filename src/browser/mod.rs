@@ -1,7 +1,7 @@
-//! Browser management module
+//! Browser session lifecycle: launch, attach, tabs, caches, and CDP command dispatch.
 //!
-//! This module provides functionality for launching and managing Chrome/Chromium browser instances.
-//! It includes configuration options, session management, and browser lifecycle control.
+//! `BrowserSession` is the runtime anchor for tool execution; launch mode owns a disposable
+//! browser while attach mode connects to an existing DevTools endpoint.
 
 pub(crate) mod backend;
 pub(crate) mod commands;

@@ -1,3 +1,8 @@
+//! Shared structured envelopes and JSON schemas for MCP tool inputs and outputs.
+//!
+//! Types here define the cross-tool contract for document metadata, element targeting,
+//! snapshot scope, and viewport emulation so tools and the MCP adapter serialize consistently.
+
 mod document;
 mod target;
 mod tool_result;

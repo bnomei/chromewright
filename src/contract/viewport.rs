@@ -1,3 +1,6 @@
+//! Viewport emulation requests and post-operation metrics for breakpoint testing.
+
+/// Measured viewport size and device pixel ratio after emulation or reset.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct ViewportMetrics {
     pub width: f64,
@@ -5,6 +8,7 @@ pub struct ViewportMetrics {
     pub device_pixel_ratio: f64,
 }
 
+/// Active CDP viewport emulation settings after `set_viewport` applies them.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct ViewportEmulation {
     pub width: u32,
@@ -29,6 +33,7 @@ pub enum ViewportOrientation {
     LandscapeSecondary,
 }
 
+/// Input for applying viewport emulation on a tab, including large-canvas opt-in.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ViewportEmulationRequest {
     pub width: u32,
@@ -59,6 +64,7 @@ pub struct ViewportResetRequest {
     pub tab_id: Option<String>,
 }
 
+/// Post-operation viewport state returned by `set_viewport`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ViewportOperationResult {
     pub tab_id: String,

@@ -1,3 +1,4 @@
+// Select-option interaction script compiled with browser-kernel and target config.
 JSON.stringify(
   (function () {
     const config = __SELECT_CONFIG__;

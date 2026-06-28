@@ -1,5 +1,7 @@
-// YAML rendering utilities for ARIA snapshots
-// Based on Playwright's yaml.ts and renderAriaTree logic
+//! YAML quoting helpers for ARIA snapshot rendering.
+//!
+//! Escaping rules follow Playwright's `renderAriaTree` conventions so snapshot
+//! output stays parseable when roles, names, or values contain YAML-significant characters.
 
 /// Check if a YAML string needs quotes
 pub fn yaml_string_needs_quotes(s: &str) -> bool {
