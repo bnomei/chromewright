@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.7.1 - 2026-06-28
+
+### Changed
+
+- Keep public history helpers safe by default; unsafe history destinations still require an explicit per-tool `allow_unsafe` opt-in.
+- Align synthetic text input with native typing semantics by dispatching `input` without an immediate synthetic `change`.
+
+### Fixed
+
+- Reveal and capture same-origin iframe screenshot targets using frame-aware viewport geometry.
+- Invalidate scroll snapshot cache state before parsing scroll results so malformed payloads cannot preserve stale delta bases.
+- Quote YAML `~` scalar values so snapshot text round-trips as a string instead of YAML null.
+- Preserve missing-value `evaluate` descriptions in test coverage.
+
 ## 0.7.0 - 2026-06-28
 
 ### Added
