@@ -27,7 +27,6 @@
 
   const dispatchInput = () => {
     element.dispatchEvent(new Event('input', { bubbles: true }));
-    element.dispatchEvent(new Event('change', { bubbles: true }));
   };
 
   if ('value' in element) {

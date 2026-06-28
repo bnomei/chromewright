@@ -249,6 +249,52 @@ fn rect_for_selector(session: &BrowserSession, selector: &str) -> (f64, f64, f64
     )
 }
 
+fn rect_for_selector_in_same_origin_frame(
+    session: &BrowserSession,
+    frame_selector: &str,
+    selector: &str,
+) -> (f64, f64, f64, f64) {
+    let frame_selector_json =
+        serde_json::to_string(frame_selector).expect("frame selector should serialize");
+    let selector_json = serde_json::to_string(selector).expect("selector should serialize");
+    let value = common::evaluate(
+        session,
+        &format!(
+            r#"(() => {{
+                const frame = document.querySelector({frame_selector_json});
+                if (!frame || !frame.contentDocument) {{
+                    return null;
+                }}
+
+                const element = frame.contentDocument.querySelector({selector_json});
+                if (!element) {{
+                    return null;
+                }}
+
+                const frameRect = frame.getBoundingClientRect();
+                const rect = element.getBoundingClientRect();
+                return [
+                    frameRect.x + frame.clientLeft + rect.x,
+                    frameRect.y + frame.clientTop + rect.y,
+                    rect.width,
+                    rect.height
+                ];
+            }})()"#
+        ),
+    )
+    .expect("iframe bounding box should be readable");
+
+    let rect = value
+        .as_array()
+        .expect("iframe bounding box evaluation should return an array");
+    (
+        rect[0].as_f64().expect("x should be numeric"),
+        rect[1].as_f64().expect("y should be numeric"),
+        rect[2].as_f64().expect("width should be numeric"),
+        rect[3].as_f64().expect("height should be numeric"),
+    )
+}
+
 fn viewport_metrics(session: &BrowserSession) -> (f64, f64, f64, f64) {
     let value = common::evaluate(
         session,
@@ -890,6 +936,83 @@ fn test_screenshot_tool_reveals_offscreen_element_before_capture() {
     assert!(
         scroll_y > 0.0,
         "element capture should scroll the target into view"
+    );
+
+    remove_artifact(&artifact_path);
+}
+
+#[test]
+#[ignore]
+fn test_screenshot_tool_reveals_same_origin_iframe_element_before_capture() {
+    let Some(browser) = common::browser_or_skip() else {
+        return;
+    };
+    let session = browser.session();
+
+    common::navigate_encoded_html(
+        session,
+        r#"
+            <!DOCTYPE html>
+            <html>
+            <body style="margin: 0; min-height: 2400px;">
+                <iframe
+                    id="shot-frame"
+                    style="position: absolute; top: 1500px; left: 40px; width: 360px; height: 180px; border: 0;"
+                    srcdoc="<html><body style='margin:0; min-height:900px;'><button id='inside-frame-button' style='position:absolute; top:620px; left:28px; width:150px; height:38px;'>Inside frame</button></body></html>"
+                ></iframe>
+            </body>
+            </html>
+        "#,
+    )
+    .expect("Failed to navigate");
+
+    let data = execute_screenshot(
+        session,
+        json!({
+            "mode": "element",
+            "target": {
+                "kind": "selector",
+                "selector": "#inside-frame-button",
+            },
+        }),
+    );
+    let artifact_path = common::assert_png_screenshot_artifact(&data);
+    let (clip_x, clip_y, clip_width, clip_height) = clip_rect(&data);
+    let (expected_x, expected_y, expected_width, expected_height) =
+        rect_for_selector_in_same_origin_frame(session, "#shot-frame", "#inside-frame-button");
+    let (_inner_width, _inner_height, dpr, _scroll_height) = viewport_metrics(session);
+
+    assert_eq!(data["mode"].as_str(), Some("element"));
+    assert_eq!(data["revealed_from_offscreen"].as_bool(), Some(true));
+    assert_screenshot_scale_metadata(&data, "device", clip_width, clip_height, dpr, dpr, 2.0);
+    assert_close(clip_x, expected_x, 1.0, "iframe element clip x");
+    assert_close(clip_y, expected_y, 1.0, "iframe element clip y");
+    assert_close(clip_width, expected_width, 1.0, "iframe element clip width");
+    assert_close(
+        clip_height,
+        expected_height,
+        1.0,
+        "iframe element clip height",
+    );
+
+    let scrolls = common::evaluate(
+        session,
+        r#"(() => {
+            const frame = document.querySelector('#shot-frame');
+            return [window.scrollY, frame.contentWindow.scrollY];
+        })()"#,
+    )
+    .expect("scroll offsets should be readable");
+    let scrolls = scrolls
+        .as_array()
+        .expect("scroll offsets should return an array");
+    assert!(
+        scrolls[0].as_f64().unwrap_or_default() > 0.0,
+        "element capture should scroll the top-level page"
+    );
+    assert!(
+        scrolls[1].as_f64().unwrap_or_default() > 0.0,
+        "element capture should scroll the iframe document"
     );
 
     remove_artifact(&artifact_path);

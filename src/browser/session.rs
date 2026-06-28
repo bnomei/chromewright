@@ -277,11 +277,11 @@ impl BrowserSession {
     }
 
     pub fn go_back(&self) -> Result<()> {
-        self.go_back_with_metrics(true).map(|_| ())
+        self.go_back_with_metrics(false).map(|_| ())
     }
 
     pub fn go_forward(&self) -> Result<()> {
-        self.go_forward_with_metrics(true).map(|_| ())
+        self.go_forward_with_metrics(false).map(|_| ())
     }
 
     /// Close all open tabs in the current session backend.

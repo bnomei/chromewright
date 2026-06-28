@@ -147,6 +147,7 @@ mod tests {
         assert_eq!(output["value_present"].as_bool(), Some(false));
         assert!(output["result"].is_null());
         assert_eq!(output["type_name"].as_str(), Some("Undefined"));
+        assert_eq!(output["description"].as_str(), Some("undefined"));
     }
 
     #[test]

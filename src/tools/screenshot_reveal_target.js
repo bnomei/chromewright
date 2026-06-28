@@ -13,24 +13,33 @@
     });
   }
 
-  const scrollYBefore = window.scrollY || 0;
-  if (typeof element.scrollIntoView === 'function') {
-    element.scrollIntoView({
-      block: 'center',
-      inline: 'center',
-      behavior: 'auto'
-    });
+  const topViewBefore = getTopLevelViewForElement(element);
+  const scrollYBefore = topViewBefore.scrollY || 0;
+  let current = element;
+  while (current) {
+    if (typeof current.scrollIntoView === 'function') {
+      current.scrollIntoView({
+        block: 'center',
+        inline: 'center',
+        behavior: 'auto'
+      });
+    }
+
+    const currentView = getDocumentView(current.ownerDocument);
+    const frameElement = getFrameElementForView(currentView);
+    current = frameElement && frameElement.isConnected ? frameElement : null;
   }
 
-  const rect = element.getBoundingClientRect();
+  const topViewAfter = getTopLevelViewForElement(element);
+  const rect = computeViewportRect(element);
   return JSON.stringify({
     success: true,
     scroll_y_before: scrollYBefore,
-    scroll_y_after: window.scrollY || 0,
+    scroll_y_after: topViewAfter.scrollY || 0,
     visible_in_viewport:
       rect.bottom > 0 &&
       rect.right > 0 &&
-      rect.top < window.innerHeight &&
-      rect.left < window.innerWidth
+      rect.top < topViewAfter.innerHeight &&
+      rect.left < topViewAfter.innerWidth
   });
 })()

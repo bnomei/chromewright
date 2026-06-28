@@ -259,6 +259,36 @@ mod tests {
     }
 
     #[test]
+    fn public_go_back_blocks_unsafe_scheme_by_default() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        session
+            .navigate("file:///Users/agent/secrets.txt")
+            .expect("fake navigate should set the active tab url");
+
+        let err = session
+            .go_back()
+            .expect_err("public go_back should be safe by default");
+        let message = err.to_string();
+        assert!(message.contains("allow_unsafe=true"));
+        assert!(message.contains("file:///Users/agent/secrets.txt"));
+    }
+
+    #[test]
+    fn public_go_forward_blocks_unsafe_scheme_by_default() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        session
+            .navigate("file:///Users/agent/secrets.txt")
+            .expect("fake navigate should set the active tab url");
+
+        let err = session
+            .go_forward()
+            .expect_err("public go_forward should be safe by default");
+        let message = err.to_string();
+        assert!(message.contains("allow_unsafe=true"));
+        assert!(message.contains("file:///Users/agent/secrets.txt"));
+    }
+
+    #[test]
     fn go_back_allows_unsafe_scheme_with_opt_in() {
         let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
         session

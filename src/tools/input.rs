@@ -260,6 +260,8 @@ mod tests {
         assert!(input_js.contains("const element = resolveTargetElement(config);"));
         assert!(input_js.contains("querySelectorAcrossScopes("));
         assert!(input_js.contains("searchActionableIndex(config.target_index)"));
+        assert!(input_js.contains("new Event('input'"));
+        assert!(!input_js.contains("new Event('change'"));
     }
 
     #[test]

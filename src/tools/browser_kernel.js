@@ -3,6 +3,57 @@ function getDocumentView(doc) {
   return doc.defaultView || window;
 }
 
+function getFrameElementForView(view) {
+  try {
+    return view && view.frameElement ? view.frameElement : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function getTopLevelViewForElement(element) {
+  let view = getDocumentView(element.ownerDocument);
+
+  while (true) {
+    const frameElement = getFrameElementForView(view);
+    if (!frameElement) {
+      return view;
+    }
+
+    view = getDocumentView(frameElement.ownerDocument);
+  }
+}
+
+function computeViewportRect(element) {
+  const rect = element.getBoundingClientRect();
+  let left = rect.left;
+  let top = rect.top;
+  let view = getDocumentView(element.ownerDocument);
+
+  while (true) {
+    const frameElement = getFrameElementForView(view);
+    if (!frameElement) {
+      break;
+    }
+
+    const frameRect = frameElement.getBoundingClientRect();
+    left += frameRect.left + (frameElement.clientLeft || 0);
+    top += frameRect.top + (frameElement.clientTop || 0);
+    view = getDocumentView(frameElement.ownerDocument);
+  }
+
+  return {
+    x: left,
+    y: top,
+    left,
+    top,
+    right: left + rect.width,
+    bottom: top + rect.height,
+    width: rect.width,
+    height: rect.height
+  };
+}
+
 function isElementHiddenForAria(element) {
   const tagName = element.tagName;
   if (['STYLE', 'SCRIPT', 'NOSCRIPT', 'TEMPLATE'].includes(tagName)) {
@@ -29,10 +80,11 @@ function isElementVisible(element) {
 function computeBox(element) {
   const view = getDocumentView(element.ownerDocument);
   const style = view.getComputedStyle(element);
-  const rect = element.getBoundingClientRect();
+  const localRect = element.getBoundingClientRect();
+  const rect = computeViewportRect(element);
   return {
     rect,
-    visible: rect.width > 0 && rect.height > 0,
+    visible: localRect.width > 0 && localRect.height > 0,
     cursor: style.cursor,
     inline: style.display === 'inline',
     pointerEvents: style.pointerEvents

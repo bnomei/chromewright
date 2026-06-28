@@ -124,6 +124,51 @@ fn test_go_forward_tool() {
 
 #[test]
 #[ignore]
+fn test_history_tools_reject_unsafe_data_urls_by_default_and_revert() {
+    let Some(browser) = common::browser_or_skip() else {
+        return;
+    };
+    let session = browser.session();
+
+    common::navigate_and_wait(
+        session,
+        "data:text/html,<html><body><h1>Page 1</h1></body></html>",
+    )
+    .expect("Failed to navigate to page 1");
+    common::navigate_and_wait(
+        session,
+        "data:text/html,<html><body><h1>Page 2</h1></body></html>",
+    )
+    .expect("Failed to navigate to page 2");
+    common::navigate_and_wait(
+        session,
+        "data:text/html,<html><body><h1>Page 3</h1></body></html>",
+    )
+    .expect("Failed to navigate to page 3");
+
+    let back_err = session
+        .execute_tool("go_back", serde_json::json!({}))
+        .expect_err("go_back should reject data: history by default");
+    assert!(back_err.to_string().contains("allow_unsafe=true"));
+    common::wait_for_url_contains(session, "Page 3")
+        .expect("go_back rejection should revert to page 3");
+
+    let back_result = session
+        .execute_tool("go_back", serde_json::json!({ "allow_unsafe": true }))
+        .expect("explicit unsafe opt-in should allow going back");
+    assert!(back_result.success);
+    common::wait_for_url_contains(session, "Page 2").expect("Should return to page 2");
+
+    let forward_err = session
+        .execute_tool("go_forward", serde_json::json!({}))
+        .expect_err("go_forward should reject data: history by default");
+    assert!(forward_err.to_string().contains("allow_unsafe=true"));
+    common::wait_for_url_contains(session, "Page 2")
+        .expect("go_forward rejection should revert to page 2");
+}
+
+#[test]
+#[ignore]
 fn test_navigation_workflow() {
     // Test a complete workflow: navigate to multiple pages, go back, go forward
     let Some(browser) = common::browser_or_skip() else {

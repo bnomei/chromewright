@@ -240,7 +240,7 @@
   }
 
   function inspectElement(element, frameDepth, actionableIndex) {
-    const view = getDocumentView(element.ownerDocument);
+    const view = getTopLevelViewForElement(element);
     const box = computeBox(element);
     const rect = box.rect;
     const role = getAriaRole(element);

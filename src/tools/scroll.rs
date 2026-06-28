@@ -120,6 +120,9 @@ impl Tool for ScrollTool {
                 other => other,
             })?;
 
+        context.invalidate_dom();
+        context.session.invalidate_snapshot_cache()?;
+
         let result_json = match parse_raw_scroll_output(result.value) {
             Ok(result_json) => result_json,
             Err((reason, received_type)) => {
@@ -138,8 +141,6 @@ impl Tool for ScrollTool {
             }
         };
 
-        context.invalidate_dom();
-        context.session.invalidate_snapshot_cache()?;
         let envelope = build_document_envelope(context, None, DocumentEnvelopeOptions::minimal())?;
 
         Ok(context.finish(ToolResult::success_with(build_scroll_output(
@@ -434,7 +435,32 @@ mod tests {
 
     #[test]
     fn test_scroll_tool_returns_structured_failure_for_invalid_payload() {
+        use crate::browser::{SnapshotCacheEntry, SnapshotCacheScope};
+        use std::sync::Arc;
+
         let session = BrowserSession::with_test_backend(InvalidScrollPayloadBackend);
+        session
+            .store_snapshot_cache(Arc::new(SnapshotCacheEntry {
+                document: DocumentMetadata::default(),
+                snapshot: Arc::<str>::from("button \"Stale target\""),
+                nodes: Arc::<[crate::dom::SnapshotNode]>::from(Vec::new()),
+                scope: SnapshotCacheScope {
+                    mode: "viewport".to_string(),
+                    fallback_mode: None,
+                    viewport_biased: true,
+                    returned_node_count: 0,
+                    unavailable_frame_count: 0,
+                    global_interactive_count: Some(1),
+                },
+            }))
+            .expect("snapshot cache should store before invalid payload");
+        assert!(
+            session
+                .snapshot_cache_for_test()
+                .expect("snapshot cache should be readable")
+                .is_some()
+        );
+
         let tool = ScrollTool;
         let mut context = ToolContext::new(&session);
 
@@ -463,6 +489,13 @@ mod tests {
             .as_object()
             .expect("metrics metadata should be present on failures");
         assert_eq!(metrics["browser_evaluations"].as_u64(), Some(1));
+        assert!(
+            session
+                .snapshot_cache_for_test()
+                .expect("snapshot cache should be readable")
+                .is_none(),
+            "scroll must invalidate the snapshot delta base before parsing"
+        );
     }
 
     fn empty_result() -> DocumentActionResult {

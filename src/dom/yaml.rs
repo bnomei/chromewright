@@ -63,7 +63,7 @@ pub fn yaml_string_needs_quotes(s: &str) -> bool {
     let lower = s.to_lowercase();
     if matches!(
         lower.as_str(),
-        "y" | "n" | "yes" | "no" | "true" | "false" | "on" | "off" | "null"
+        "y" | "n" | "yes" | "no" | "true" | "false" | "on" | "off" | "null" | "~"
     ) {
         return true;
     }
@@ -129,6 +129,7 @@ mod tests {
         assert!(yaml_string_needs_quotes("foo: bar")); // contains colon-space
         assert!(yaml_string_needs_quotes("foo #bar")); // contains space-hash
         assert!(yaml_string_needs_quotes("true")); // boolean
+        assert!(yaml_string_needs_quotes("~")); // YAML null shorthand
         assert!(yaml_string_needs_quotes("123")); // number
         assert!(yaml_string_needs_quotes("[array]")); // starts with bracket
 
