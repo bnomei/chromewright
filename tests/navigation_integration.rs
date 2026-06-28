@@ -84,8 +84,11 @@ fn test_go_forward_tool() {
     )
     .expect("Failed to navigate to page 2");
 
-    // Go back to page 1
-    session.go_back().expect("Failed to go back");
+    // Go back to page 1 with explicit opt-in for the unsafe data: URL used by the test fixture.
+    let setup_back = session
+        .execute_tool("go_back", serde_json::json!({ "allow_unsafe": true }))
+        .expect("Failed to go back");
+    assert!(setup_back.success);
     common::wait_for_url_contains(session, "Page 1").expect("Should return to page 1");
 
     // Verify we're on page 1

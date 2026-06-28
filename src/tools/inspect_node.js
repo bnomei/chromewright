@@ -240,7 +240,6 @@
   }
 
   function inspectElement(element, frameDepth, actionableIndex) {
-    const view = getTopLevelViewForElement(element);
     const box = computeBox(element);
     const rect = box.rect;
     const role = getAriaRole(element);
@@ -282,11 +281,7 @@
           height: rect.height
         },
         visible: box.visible,
-        visible_in_viewport:
-          rect.bottom > 0 &&
-          rect.right > 0 &&
-          rect.top < view.innerHeight &&
-          rect.left < view.innerWidth,
+        visible_in_viewport: isElementVisibleInViewport(element),
         receives_pointer_events: receivesPointerEvents(element),
         pointer_events: box.pointerEvents,
         cursor: box.cursor || null

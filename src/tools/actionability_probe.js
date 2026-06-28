@@ -103,14 +103,10 @@
   }
 
   if (requested.has('in_viewport')) {
-    const view = getDocumentView(element.ownerDocument);
     setPredicate(
       result,
       'in_viewport',
-      rect.bottom > 0 &&
-        rect.right > 0 &&
-        rect.top < view.innerHeight &&
-        rect.left < view.innerWidth
+      isElementVisibleInViewport(element)
     );
   }
 

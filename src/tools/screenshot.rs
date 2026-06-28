@@ -672,6 +672,7 @@ mod tests {
         assert!(reveal_js.contains("function resolveTargetMatch(config, options)"));
         assert!(reveal_js.contains("function computeViewportRect(element)"));
         assert!(reveal_js.contains("function getFrameElementForView(view)"));
+        assert!(reveal_js.contains("function isElementVisibleInViewport(element)"));
         assert!(reveal_js.contains("\"target_index\":5"));
         assert!(!reveal_js.contains("__BROWSER_KERNEL__"));
         assert!(!reveal_js.contains("__REVEAL_CONFIG__"));

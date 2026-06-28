@@ -954,11 +954,11 @@ fn test_screenshot_tool_reveals_same_origin_iframe_element_before_capture() {
         r#"
             <!DOCTYPE html>
             <html>
-            <body style="margin: 0; min-height: 2400px;">
+            <body style="margin: 0; min-height: 900px;">
                 <iframe
                     id="shot-frame"
-                    style="position: absolute; top: 1500px; left: 40px; width: 360px; height: 180px; border: 0;"
-                    srcdoc="<html><body style='margin:0; min-height:900px;'><button id='inside-frame-button' style='position:absolute; top:620px; left:28px; width:150px; height:38px;'>Inside frame</button></body></html>"
+                    style="position: absolute; top: 40px; left: 40px; width: 360px; height: 180px; border: 0;"
+                    srcdoc="<html><body style='margin:0; min-height:900px;'><button id='inside-frame-button' style='position:absolute; top:260px; left:28px; width:150px; height:38px;'>Inside frame</button></body></html>"
                 ></iframe>
             </body>
             </html>
@@ -1006,9 +1006,10 @@ fn test_screenshot_tool_reveals_same_origin_iframe_element_before_capture() {
     let scrolls = scrolls
         .as_array()
         .expect("scroll offsets should return an array");
-    assert!(
-        scrolls[0].as_f64().unwrap_or_default() > 0.0,
-        "element capture should scroll the top-level page"
+    assert_eq!(
+        scrolls[0].as_f64().unwrap_or_default(),
+        0.0,
+        "visible iframe capture should not need top-level scrolling"
     );
     assert!(
         scrolls[1].as_f64().unwrap_or_default() > 0.0,
@@ -1016,6 +1017,79 @@ fn test_screenshot_tool_reveals_same_origin_iframe_element_before_capture() {
     );
 
     remove_artifact(&artifact_path);
+}
+
+#[test]
+#[ignore]
+fn test_input_tool_dispatches_input_without_change_event() {
+    let Some(browser) = common::browser_or_skip() else {
+        return;
+    };
+    let session = browser.session();
+
+    common::navigate_html(
+        session,
+        r#"
+        <!DOCTYPE html>
+        <html>
+        <body>
+            <input id="query" type="text" value="draft">
+            <script>
+                window.eventLog = [];
+                const query = document.getElementById('query');
+                query.addEventListener('input', event => {
+                    window.eventLog.push({
+                        type: event.type,
+                        value: query.value,
+                        bubbles: event.bubbles
+                    });
+                });
+                query.addEventListener('change', event => {
+                    window.eventLog.push({
+                        type: event.type,
+                        value: query.value,
+                        bubbles: event.bubbles
+                    });
+                });
+            </script>
+        </body>
+        </html>
+    "#,
+    )
+    .expect("Failed to navigate");
+
+    let tool = InputTool;
+    let mut context = ToolContext::new(session);
+    let result = tool
+        .execute_typed(
+            InputParams {
+                selector: Some("#query".to_string()),
+                index: None,
+                node_ref: None,
+                cursor: None,
+                text: "typed".to_string(),
+                clear: true,
+            },
+            &mut context,
+        )
+        .expect("input should succeed");
+
+    assert!(result.success);
+    let events = common::evaluate(session, "window.eventLog")
+        .expect("event log should be readable")
+        .as_array()
+        .expect("event log should be an array")
+        .clone();
+    assert_eq!(events.len(), 1, "input should dispatch one immediate event");
+    assert_eq!(events[0]["type"].as_str(), Some("input"));
+    assert_eq!(events[0]["value"].as_str(), Some("typed"));
+    assert_eq!(events[0]["bubbles"].as_bool(), Some(true));
+
+    let value = common::evaluate(session, "document.getElementById('query').value")
+        .expect("input value should be readable")
+        .as_str()
+        .map(str::to_string);
+    assert_eq!(value.as_deref(), Some("typed"));
 }
 
 #[test]

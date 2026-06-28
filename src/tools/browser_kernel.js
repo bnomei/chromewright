@@ -54,6 +54,32 @@ function computeViewportRect(element) {
   };
 }
 
+function rectIntersectsViewport(rect, view) {
+  return (
+    rect.bottom > 0 &&
+    rect.right > 0 &&
+    rect.top < view.innerHeight &&
+    rect.left < view.innerWidth
+  );
+}
+
+function isElementVisibleInViewport(element) {
+  let current = element;
+
+  while (current) {
+    const view = getDocumentView(current.ownerDocument);
+    const rect = current.getBoundingClientRect();
+    if (!rectIntersectsViewport(rect, view)) {
+      return false;
+    }
+
+    const frameElement = getFrameElementForView(view);
+    current = frameElement && frameElement.isConnected ? frameElement : null;
+  }
+
+  return true;
+}
+
 function isElementHiddenForAria(element) {
   const tagName = element.tagName;
   if (['STYLE', 'SCRIPT', 'NOSCRIPT', 'TEMPLATE'].includes(tagName)) {

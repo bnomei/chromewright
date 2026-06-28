@@ -31,15 +31,10 @@
   }
 
   const topViewAfter = getTopLevelViewForElement(element);
-  const rect = computeViewportRect(element);
   return JSON.stringify({
     success: true,
     scroll_y_before: scrollYBefore,
     scroll_y_after: topViewAfter.scrollY || 0,
-    visible_in_viewport:
-      rect.bottom > 0 &&
-      rect.right > 0 &&
-      rect.top < topViewAfter.innerHeight &&
-      rect.left < topViewAfter.innerWidth
+    visible_in_viewport: isElementVisibleInViewport(element)
   });
 })()
