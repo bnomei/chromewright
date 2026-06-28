@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.7.0 - 2026-06-28
+
+### Added
+
+- Return richer `evaluate` metadata so callers can distinguish missing CDP values from real JSON `null` results.
+- Add shared target-resolution metadata and viewport result contracts across tool outputs.
+
+### Changed
+
+- Apply the unsafe-scheme gate to `go_back` and `go_forward`, reverting rejected history moves unless `allow_unsafe` is set on that request.
+- Preserve explicit CSS selector targets during actionability polling, interaction execution, inspection, waits, and element screenshot reveal, while retaining index reconciliation for cursor/index/node_ref targets.
+- Key markdown and snapshot caches on live document identity details to avoid stale reads after URL, scroll, or viewport changes.
+
+### Fixed
+
+- Avoid stale delta snapshots after scroll operations.
+- Return `set_viewport` results for the targeted tab instead of the previously active tab.
+- Reveal offscreen screenshot targets through the shared browser kernel so target indexes and iframe scopes stay consistent.
+- Prevent automatic attach-session recovery from replaying non-idempotent page mutations.
+
 ## 0.6.0 - 2026-06-17
 
 ### Added
