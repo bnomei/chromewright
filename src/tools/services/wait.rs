@@ -132,11 +132,7 @@ pub(crate) fn execute_wait(params: WaitParams, context: &mut ToolContext) -> Res
                 }
             }
 
-            let target_index = target
-                .cursor
-                .as_ref()
-                .map(|cursor| cursor.index)
-                .or(target.index);
+            let target_index = target.browser_command_target_index();
 
             loop {
                 context.record_poll_iteration();

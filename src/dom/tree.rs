@@ -1019,7 +1019,7 @@ mod tests {
     #[test]
     fn test_document_metadata_script_returns_a_json_string_expression() {
         let script = include_str!("document_metadata.js").trim_start();
-        assert!(script.starts_with("JSON.stringify(("));
+        assert!(script.contains("JSON.stringify((function()"));
     }
 
     #[test]

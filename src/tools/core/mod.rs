@@ -235,6 +235,18 @@ impl ResolvedTarget {
             index: self.index,
         }
     }
+
+    /// Return an index only for handle-like targets that need browser-side reconciliation.
+    pub(crate) fn browser_command_target_index(&self) -> Option<usize> {
+        if self.method == "css" {
+            return None;
+        }
+
+        self.cursor
+            .as_ref()
+            .map(|cursor| cursor.index)
+            .or(self.index)
+    }
 }
 
 #[derive(Debug)]

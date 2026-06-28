@@ -362,11 +362,7 @@ fn inspect_element_target(
         }
     };
 
-    let target_index = target
-        .cursor
-        .as_ref()
-        .map(|cursor| cursor.index)
-        .or(target.index);
+    let target_index = target.browser_command_target_index();
     let mut payload =
         inspect_target_payload(&target.selector, target_index, tab_id.as_deref(), context)?;
     let mut layout = match extract_target_layout_or_failure(&target, &payload)? {

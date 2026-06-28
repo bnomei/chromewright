@@ -291,11 +291,7 @@ pub(crate) fn execute_inspect_node(
         (target, resolved_revision, actionable_fingerprint)
     };
 
-    let target_index = target
-        .cursor
-        .as_ref()
-        .map(|cursor| cursor.index)
-        .or(target.index);
+    let target_index = target.browser_command_target_index();
     let styles = if style_names.is_empty() {
         DEFAULT_STYLE_NAMES
             .iter()

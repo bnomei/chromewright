@@ -169,11 +169,7 @@ impl Tool for InputTool {
                 InputInteractionRequest {
                     target: TargetedInteractionRequest {
                         selector: target.selector.clone(),
-                        target_index: target
-                            .cursor
-                            .as_ref()
-                            .map(|cursor| cursor.index)
-                            .or(target.index),
+                        target_index: target.browser_command_target_index(),
                     },
                     text: text.clone(),
                     clear,

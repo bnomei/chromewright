@@ -76,7 +76,7 @@ pub(crate) fn wait_for_actionability(
             context.session,
             &ActionabilityRequest {
                 selector: &target.selector,
-                target_index: interaction_target_index(target),
+                target_index: target.browser_command_target_index(),
                 predicates: requested_predicates.as_slice(),
                 expected_text: None,
                 expected_value: None,
@@ -231,7 +231,7 @@ fn should_scroll_target_into_view(
 fn scroll_target_into_view(context: &mut ToolContext, target: &ResolvedTarget) -> Result<()> {
     let config = serde_json::json!({
         "selector": target.selector,
-        "target_index": interaction_target_index(target),
+        "target_index": target.browser_command_target_index(),
     });
     let scroll_js = build_scroll_target_into_view_js(&config);
     context.record_browser_evaluation();
@@ -246,14 +246,6 @@ fn scroll_target_into_view(context: &mut ToolContext, target: &ResolvedTarget) -
             other => other,
         })?;
     Ok(())
-}
-
-fn interaction_target_index(target: &ResolvedTarget) -> Option<usize> {
-    target
-        .cursor
-        .as_ref()
-        .map(|cursor| cursor.index)
-        .or(target.index)
 }
 
 fn failed_predicates(

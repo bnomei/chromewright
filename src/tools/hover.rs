@@ -158,11 +158,7 @@ impl Tool for HoverTool {
             .execute_command(BrowserCommand::Interaction(InteractionCommand::Hover(
                 TargetedInteractionRequest {
                     selector: target.selector.clone(),
-                    target_index: target
-                        .cursor
-                        .as_ref()
-                        .map(|cursor| cursor.index)
-                        .or(target.index),
+                    target_index: target.browser_command_target_index(),
                 },
             )))
             .map_err(|e| match e {
