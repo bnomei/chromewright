@@ -4,45 +4,36 @@
 [![Build Status](https://github.com/bnomei/chromewright/actions/workflows/ci.yml/badge.svg)](https://github.com/bnomei/chromewright/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-Chromewright is a local-first browser automation MCP server built on Chrome DevTools Protocol (CDP). It can attach to an existing Chrome or Chromium session or launch its own browser, then expose a bounded, agent-oriented tool surface for navigation, reading, tab management, and interaction without a Node.js runtime.
+Chromewright is a local-first browser automation MCP server built on Chrome DevTools Protocol (CDP). It exposes a real Chrome or Chromium browser to MCP clients over stdio or loopback streamable HTTP, with high-level tools for navigation, page reading, tab management, screenshots, viewport emulation, and bounded interaction.
 
-It is built for the moment when an MCP client needs a real browser, but not an unbounded automation stack. Under the hood, Chromewright combines CDP session control, revision-scoped DOM extraction, cursor-based targeting, and consistent tool-result metadata. It is not a general-purpose end-to-end test runner. It is a browser control layer for AI agents.
+Use Chromewright when an agent needs browser state from a real browser without embedding a Node.js automation stack or writing raw CDP calls. Chromewright is not an end-to-end test runner; it is a browser control layer for AI agents and MCP clients.
 
-## What To Use Chromewright For
+## When to use Chromewright
 
-Use Chromewright when you need browser-aware automation with a stable high-level surface instead of handwritten CDP calls.
-
-- attaching to a running Chrome or Chromium session or launching a disposable browser
-- exposing a real browser to MCP clients over streamable HTTP or stdio
-- reading pages through `snapshot`, `inspect_node`, `get_markdown`, `extract`, and `read_links`
-- driving bounded interactions through `navigate`, `click`, `input`, `select`, `hover`, `press_key`, `scroll`, `wait`, and the tab tools
-- targeting follow-up actions with revision-scoped `cursor` or `node_ref` handles instead of relying only on fragile selectors
+- Attach an MCP client to an existing Chrome or Chromium profile on a DevTools endpoint.
+- Launch a dedicated local browser session for agent work.
+- Read pages through snapshots, markdown extraction, targeted inspection, and link inventory.
+- Drive bounded interactions such as click, input, select, hover, key press, scroll, and wait.
+- Capture managed PNG screenshots without letting callers choose arbitrary output paths.
+- Reuse revision-scoped `cursor` handles from snapshots instead of relying only on CSS selectors.
 
 ## Installation
 
-### Cargo
+Chromewright requires Rust 1.88 or newer when you install or build it with Cargo.
 
-Install the binary from crates.io:
+Install from crates.io:
 
 ```bash
 cargo install chromewright
 ```
 
-Building from source or installing with Cargo requires Rust 1.88 or newer.
-
-### Homebrew
+Install with Homebrew:
 
 ```bash
 brew install bnomei/chromewright/chromewright
 ```
 
-### GitHub Releases
-
-Download a prebuilt archive or source package from GitHub Releases, extract it, and place `chromewright` on your `PATH`.
-
-### From source
-
-The published package, binary, and repository are named `chromewright`.
+Install from source:
 
 ```bash
 git clone https://github.com/bnomei/chromewright.git
@@ -50,19 +41,33 @@ cd chromewright
 cargo install --path .
 ```
 
-If you only want a local release build:
+You can also download prebuilt archives from GitHub Releases and place the `chromewright` binary on your `PATH`.
+
+Verify the binary is available:
 
 ```bash
-cargo build --release
+chromewright --version
+```
+
+Expected output:
+
+```txt
+chromewright <version>
 ```
 
 ## Quickstart
 
-### 1) Prepare Chrome, Chromium or Obscura
+This path starts a visible Chrome profile with DevTools enabled, then serves Chromewright over loopback HTTP at `http://127.0.0.1:3000/mcp`.
 
-The default attach mode expects a browser exposing DevTools on `http://127.0.0.1:9222`.
+### Prerequisites
 
-Recommended macOS launch command for a dedicated visible Chrome profile:
+- `chromewright` on your `PATH`
+- Chrome, Chromium, or another CDP-compatible browser
+- An MCP client that supports streamable HTTP or stdio servers
+
+### 1. Start a dedicated browser profile
+
+On macOS, run:
 
 ```bash
 open -na "Google Chrome" --args \
@@ -70,67 +75,25 @@ open -na "Google Chrome" --args \
   --user-data-dir="$HOME/.chromewright-agent-profile"
 ```
 
-Use a dedicated profile when you do not want agent automation attached to your personal browsing session. If you prefer Chromewright to launch its own browser instead, skip this and pass any launch-mode flag in the next step. Launch mode is headed by default; add `--headless` only when you want a hidden browser.
+Use a dedicated profile when you do not want agent automation attached to your personal browser session. The default Chromewright attach mode expects DevTools at `http://127.0.0.1:9222`.
 
-Or use [Obscura](https://github.com/h4ckf0r0day/obscura) instead of Chrome.
+### 2. Start Chromewright
 
-### 2) Start Chromewright
-
-```bash
-cargo run --bin chromewright
-```
-
-This default mode attaches to Chrome on `127.0.0.1:9222` and serves MCP over stdio.
-
-Other common startup modes:
+Run the streamable HTTP server:
 
 ```bash
-# release build, same defaults
-cargo run --release --bin chromewright
-
-# serve streamable HTTP on 127.0.0.1:3000/mcp
-cargo run --bin chromewright -- serve
-
-# connect to a different DevTools endpoint
-cargo run --bin chromewright -- \
-  --ws-endpoint http://127.0.0.1:9333
-
-# launch a new visible browser instead of attaching to an existing one
-cargo run --bin chromewright -- \
-  --user-data-dir /tmp/chromewright-profile
-
-# launch a new visible browser and serve streamable HTTP
-cargo run --bin chromewright -- \
-  --user-data-dir /tmp/chromewright-profile serve
-
-# launch headless instead of headed
-cargo run --bin chromewright -- \
-  --headless --user-data-dir /tmp/chromewright-profile
+chromewright serve
 ```
 
-### 3) Add Chromewright to your MCP client
+Expected log line:
 
-#### Codex
-
-Recommended stdio configuration:
-
-```toml
-[mcp_servers.chromewright]
-command = "/absolute/path/to/chromewright"
-enabled = true
+```txt
+Ready to accept MCP connections at http://127.0.0.1:3000/mcp
 ```
 
-If you want a long-lived loopback HTTP service instead, start `chromewright serve` separately and point Codex at the running endpoint:
+### 3. Connect an MCP client
 
-```toml
-[mcp_servers.chromewright]
-url = "http://127.0.0.1:3000/mcp"
-enabled = true
-```
-
-If you need a non-default attach target, add `--ws-endpoint` explicitly. If you want Chromewright to launch its own browser from the client command, add a launch-mode flag such as `--user-data-dir /tmp/chromewright-profile`, and add `--headless` only when you do not want a visible browser.
-
-#### Other JSON-configured clients
+For JSON-configured clients that support streamable HTTP:
 
 ```json
 {
@@ -143,123 +106,216 @@ If you need a non-default attach target, add `--ws-endpoint` explicitly. If you 
 }
 ```
 
-The exact file name and field names vary by client. The important part is that the client connects to a running Chromewright service at that URL.
+For Codex over stdio, let the client start the server:
 
-
-## Local Browser Smoke Checks
-
-Browser launch and attach smoke checks are intended to be run manually on a maintainer workstation, not as a required Linux CI gate. The CI workflow covers Rust formatting, clippy, MSRV, cargo check, tests, and packaging without requiring a Linux browser launch or DevTools attach target.
-
-To run the focused browser smoke suite locally from the repository root:
-
-```bash
-scripts/browser-smoke.sh
+```toml
+[mcp_servers.chromewright]
+command = "/absolute/path/to/chromewright"
+enabled = true
 ```
 
-The script runs:
+For Codex against the long-lived HTTP server from step 2:
 
-```bash
-cargo test --test browser_smoke -- --nocapture
+```toml
+[mcp_servers.chromewright]
+url = "http://127.0.0.1:3000/mcp"
+enabled = true
 ```
 
-For attach-mode experiments, start Chrome or Chromium with DevTools enabled as shown in the Quickstart section, then run Chromewright against that endpoint. macOS is the primary local target for visible browser smoke checks; Linux browser launch or attach is optional local validation rather than a pull-request requirement.
+### 4. Verify with the client
 
-## How Chromewright Uses Your Browser
+Use your MCP client to call `tab_list`. A connected session should return at least one tab with a stable `tab_id`. If no active tab is useful, call `new_tab` before calling `snapshot`.
 
-- attach mode connects to an existing Chrome or Chromium session and can see the tabs, cookies, and authenticated state already present in that profile
-- launch mode starts a dedicated browser session and tracks the tabs created under that session
-- in attach mode, `close` defaults to session-managed cleanup and `close_tab` requires `confirm_destructive = true` before closing an unmanaged active tab
-- most high-level tools read and interact through CDP only; `screenshot` is the bounded exception and stores a managed PNG artifact for the caller
-- `screenshot` is part of the default surface and uses `mode`, optional `tab_id`, optional `target`, and `region` instead of caller-chosen `path` or `confirm_unsafe`
+## Browser modes
 
-## Use Cases
+Chromewright has two browser modes:
 
-### Standard MCP browser automation
+| Mode | How to start | What it does |
+| --- | --- | --- |
+| Attach | Run `chromewright` or `chromewright serve` with no launch flags. | Connects to `http://127.0.0.1:9222` by default. |
+| Attach to another endpoint | Pass `--ws-endpoint <URL>`. | Connects to a browser WebSocket URL or a DevTools HTTP origin such as `http://127.0.0.1:9333`. |
+| Launch | Pass any launch flag such as `--user-data-dir`, `--headless`, `--executable-path`, or `--debug-port`. | Starts a local browser session. Launch mode is headed unless you pass `--headless`. |
 
-Once Chromewright is running, the normal workflow is:
+Examples:
 
-1. Use `new_tab` or `tab_list` to establish an active tab. On a fresh session with no active tab, do not call `snapshot` first.
-2. Use `snapshot` to get document metadata plus actionable nodes. `mode = "viewport"` is the default local reread, `mode = "delta"` reuses the prior session base when available, and `mode = "full"` keeps the exhaustive escape hatch. Inline `[index=...]` markers only appear for nodes that still expose a public follow-up handle in that returned scope.
-3. Use `inspect_node` for targeted bounded reads, including selector-based inspection of non-actionable nodes such as headings, images, and overlays. Prefer `cursor` when one is available; stale cursors may selector-rebound, and a successful inspection may still legitimately return `cursor = null` with a selector-only `target`.
-4. Use `screenshot` when you need a managed PNG artifact. `mode = "viewport"` is the default, `mode = "full_page"` captures the whole page, `mode = "element"` requires `target`, and `mode = "region"` requires `region`. `scale = "device"` preserves raw device pixels by default, while `scale = "css"` normalizes output dimensions to CSS pixels. Pass `tab_id` when the capture should target a specific tab without activating it first.
-5. Use `set_viewport` when you need responsive breakpoint simulation on the active tab or a specific `tab_id`; successful calls return canonical `viewport_metrics_after`, and later `snapshot` calls surface the live metrics again at `scope.viewport`.
-6. Use `click`, `input`, `select`, `hover`, `press_key`, `scroll`, `wait`, or the tab tools with `cursor` preferred for follow-up targeting inside a page and stable `tab_id` preferred for multi-tab flows.
-7. Refresh `snapshot` after revision-changing actions. `cursor` and `node_ref` are revision-scoped, so rereads are the normal recovery path.
+```bash
+# Default: attach to http://127.0.0.1:9222 and serve MCP over stdio.
+chromewright
 
-## Workflow Conventions
+# Serve streamable HTTP on the default loopback endpoint.
+chromewright serve
 
-- Fresh sessions: use `new_tab` or `tab_list` before `snapshot` if you do not already have an active tab.
-- Revision-scoped targets: `cursor` and `node_ref` belong to a specific document revision. After navigation or DOM-changing actions, rerun `snapshot`; stale `cursor` replay may selector-rebound, but treat rebound as a signal to reread before more precise chained work.
-- Snapshot modes: default `viewport` is the fast local reread, `delta` reports the changed local surface when a compatible prior base exists and falls back to `viewport` when it does not, and `full` keeps the exhaustive page-wide tree for deep inspection or regression work.
-- Viewport locality: `viewport` and `delta` now demote unchanged sticky/fixed header or footer chrome when stronger local anchors are present. If persistent chrome still wins because nothing stronger exists, `scope.locality_fallback_reason` explains that fallback.
-- Snapshot inline handles: rendered `[index=...]` markers follow the same revision scope as the exposed actionable `nodes` and only advertise follow-up-capable nodes in that returned scope; use them as reread-local hints, not as durable cross-revision IDs.
-- `target_status = same`: the tool still proved the same target, even if the post-action handle downgraded to selector-only because actionability disappeared.
-- `target_status = rebound`: the tool recovered after a revision change; `target_after` may downgrade to selector-only when the same element still exists but no longer has a verified actionable handle, so reread with `snapshot` before more precise chained work.
-- `target_status = detached`: the old target no longer exists, often after navigation; reacquire state from the new page before continuing.
-- `target_status = unknown`: post-action identity stayed ambiguous, usually because multiple matches remained or the selector could not prove the same element.
-- Attach-mode recovery: if a connected session returns `code = attach_page_target_lost`, use `tab_list` to confirm inventory, `switch_tab` to reacquire an active page target, and reconnect the session if DOM-backed tools still fail.
-- Attach-mode safety: use a disposable browser profile for debugging and treat destructive tab tools as explicit actions, especially on connected sessions.
+# Serve streamable HTTP on a custom port and path.
+chromewright serve --port 3333 --http-path /browser
 
-Chromewright also carries a few small but important contract details:
+# Attach to a different DevTools endpoint.
+chromewright --ws-endpoint http://127.0.0.1:9333
 
-- DOM-targeted tools take one public `target` object: `{ "kind": "selector", "selector": "..." }` or `{ "kind": "cursor", "cursor": ... }`.
-- Canonical target examples:
-  - `inspect_node`: `{ "target": { "kind": "selector", "selector": "h1" } }`
-  - `click`: `{ "target": { "kind": "cursor", "cursor": <snapshot cursor> } }`
-- `screenshot` is part of the default surface and uses `mode` plus optional `scale` instead of legacy `full_page = true`; successful calls return managed artifact metadata including `artifact_uri`, `artifact_path`, `mime_type`, `byte_count`, image dimensions, CSS dimensions, DPR metadata, `revealed_from_offscreen`, and optional `clip`. Screenshot CSS limits apply to `css_width`/`css_height` and area before output scaling; `scale = "device"` keeps physical HiDPI pixels using the current device pixel ratio, while `scale = "css"` normalizes output dimensions back to CSS pixels. The PNG byte cap is a separate final artifact-size guard.
-- `set_viewport` is part of the default surface and uses CDP emulation instead of resizing the OS window; width and height must be positive bounded CSS pixels with a practical default cap of 10,000 CSS pixels per dimension, `device_scale_factor` must be greater than zero, `orientation` uses snake_case values such as `portrait_primary` and `landscape_primary`, and `reset = true` only accepts `tab_id`. For unusual large-canvas or regression-capture workloads, pass `allow_large_viewport = true` intentionally to raise the viewport cap to 10,000,000 CSS pixels per dimension; screenshot CSS dimensions, physical HiDPI output size, and PNG byte limits still apply independently. Read the live scoped metrics back from `viewport_metrics_after` or `snapshot.scope.viewport`; `viewport_after` remains a compatibility alias.
-- `switch_tab` accepts stable `tab_id` only on the public MCP surface.
-- Structured tool-local failures use one top-level family: `code`, `error`, optional `document`, optional `target`, optional `recovery`, and optional `details`.
-- `extract` uses `code = element_not_found` for selector misses and reserves `code = invalid_extract_payload` for malformed extraction results.
-- `read_links` returns both the raw `href` attribute and an absolute `resolved_url`.
+# Launch a visible browser with a dedicated profile.
+chromewright --user-data-dir /tmp/chromewright-profile
 
-## Default Tool Surface
+# Launch a headless browser and serve streamable HTTP.
+chromewright --headless --user-data-dir /tmp/chromewright-profile serve
+```
 
-The default Chromewright MCP server exposes 23 high-level and operator tools:
+## CLI reference
 
-- navigation: `navigate`, `go_back`, `go_forward`, `wait`
-- interaction and viewport: `click`, `input`, `select`, `hover`, `press_key`, `scroll`, `set_viewport`
-- tabs and lifecycle: `new_tab`, `tab_list`, `switch_tab`, `close_tab`, `close`
-- reading and inspection: `snapshot`, `inspect_node`, `get_markdown`, `extract`, `read_links`
-- managed artifacts: `screenshot`
-- operator diagnostics: `evaluate`
+| Option or command | Default | Description |
+| --- | --- | --- |
+| `chromewright` | stdio transport | Starts the MCP server over stdio. |
+| `chromewright serve` | `127.0.0.1:3000/mcp` | Starts the MCP server over loopback streamable HTTP. |
+| `serve --port <PORT>`, `serve -p <PORT>` | `3000` | Sets the HTTP port. |
+| `serve --http-path <PATH>` | `/mcp` | Sets the HTTP endpoint path. |
+| `--ws-endpoint <URL>` | `http://127.0.0.1:9222` when no launch flags are present | Connects to an existing browser WebSocket URL or DevTools HTTP origin. This conflicts with launch flags. |
+| `--headless` | `false` | Launches a new browser in headless mode. |
+| `--executable-path <PATH>` | auto-detected by the browser backend | Uses a specific browser executable in launch mode. |
+| `--user-data-dir <DIR>` | backend default | Uses a persistent browser profile directory in launch mode. |
+| `--debug-port <PORT>` | auto-selected | Uses a specific DevTools port for a locally launched browser. |
 
-The raw-JavaScript operator tool `evaluate` is part of the normal production MCP surface because it is useful for diagnostics and escape-hatch inspection when bounded tools such as `inspect_node`, `extract`, or `get_markdown` cannot answer a page-specific question. Chromewright does not use a separate global enable flag for operator tools; instead, higher-risk tools keep their guardrails in their own input contracts.
+Source: [src/bin/mcp_server.rs](src/bin/mcp_server.rs).
 
-High-level action tools return compact follow-up metadata by default. Use `snapshot` when you need the scoped YAML snapshot plus actionable-node list, with `viewport` as the default, `delta` for session-local changes, and `full` for exhaustive rereads. For targeted reads, use `snapshot` to choose a node and reuse its `cursor`, then call `inspect_node`; when you need to inspect a non-actionable DOM node such as a heading or image, `inspect_node` also accepts selector-based reads with an optional `cursor`, and stale cursor replay may selector-rebound before the final `target` settles. After revision-changing actions, rerun `snapshot` before more precise target reuse. Public DOM follow-up calls should use `target.kind = "cursor"` whenever a fresh cursor is available and fall back to `target.kind = "selector"` when only selector continuity remains.
+## Tool workflow
 
-Use `set_viewport` before `snapshot` when you want the DOM reread scoped to a simulated breakpoint. Successful `set_viewport` responses include `viewport_metrics_after`, and snapshot rereads expose the same live metrics under `scope.viewport` without widening unrelated tool outputs. `scroll` reports canonical scroll position under `scroll_after`; legacy `viewport_after` aliases remain for compatibility.
+A typical agent workflow is:
 
-Use `screenshot` when you need a bounded visual artifact from the browser. The public contract is `mode` plus optional `scale`, `tab_id`, `target`, and `region`; callers do not provide `path`, `full_page`, or `confirm_unsafe`. Successful results include `artifact_uri`, `artifact_path`, `mime_type`, `byte_count`, `width`, `height`, `css_width`, `css_height`, `device_pixel_ratio`, `pixel_scale`, `revealed_from_offscreen`, and optional `clip`.
+1. Call `tab_list` or `new_tab` to establish an active tab.
+2. Call `snapshot` to read the current page and collect actionable nodes.
+3. Prefer a fresh `cursor` from `snapshot` or `inspect_node` when targeting follow-up actions.
+4. Use `inspect_node`, `get_markdown`, `extract`, or `read_links` for more focused reads.
+5. Use `click`, `input`, `select`, `hover`, `press_key`, `scroll`, `wait`, or tab tools for bounded interaction.
+6. Call `snapshot` again after navigation, DOM-changing actions, viewport changes, or ambiguous target recovery.
 
-Read-oriented tools are intentionally distinct: `get_markdown` is the broad reading tool, `extract` is for targeted text or HTML, and `read_links` is for link inventory and planning. For multi-tab work, prefer stable `tab_id` handles from `tab_list`, `new_tab`, `switch_tab`, and `close_tab` instead of relying only on tab indices.
+`snapshot` supports these modes:
 
-## Operation Metrics
+| Mode | Use it when |
+| --- | --- |
+| `viewport` | You want the default local reread of the current visible scope. |
+| `delta` | You want the changed local surface when a compatible prior snapshot base exists. |
+| `full` | You need an exhaustive page-wide read. |
 
-Finished tool results include `operation_metrics` metadata when a tool records non-zero metrics. Agents must treat `operation_metrics.output_bytes` as optional: it is present only when a tool path measures the exact serialized output size, and it is omitted when exact sizing was not measured. Measured hot paths add the relevant counters below:
+DOM-targeted tools accept a public `target` object:
+
+```json
+{
+  "target": {
+    "kind": "selector",
+    "selector": "h1"
+  }
+}
+```
+
+or:
+
+```json
+{
+  "target": {
+    "kind": "cursor",
+    "cursor": "<cursor from snapshot or inspect_node>"
+  }
+}
+```
+
+Selector strings are still accepted for compatibility by tools that use the public target type, but the object form is the canonical contract.
+
+## Production MCP tool surface
+
+Production MCP sessions register the default high-level tools plus the guarded operator tool `evaluate`.
+
+| Category | Tools |
+| --- | --- |
+| Navigation | `navigate`, `go_back`, `go_forward`, `wait` |
+| Interaction and viewport | `click`, `input`, `select`, `hover`, `press_key`, `scroll`, `set_viewport` |
+| Tabs and lifecycle | `new_tab`, `tab_list`, `switch_tab`, `close_tab`, `close` |
+| Reading and inspection | `snapshot`, `inspect_node`, `get_markdown`, `extract`, `read_links` |
+| Managed artifacts | `screenshot` |
+| Operator diagnostics | `evaluate` |
+
+`evaluate` executes JavaScript in the active page and requires `confirm_unsafe = true` on each call. It is available for diagnostics and escape-hatch inspection when bounded tools cannot answer a page-specific question.
+
+Source: [src/tools/core/mod.rs](src/tools/core/mod.rs) and [src/browser/session.rs](src/browser/session.rs).
+
+## Screenshots and viewport emulation
+
+Use `screenshot` when a caller needs a managed PNG artifact. The tool accepts:
+
+- `mode`: `viewport`, `full_page`, `element`, or `region`
+- `scale`: `device` or `css`
+- optional `tab_id`
+- optional `target` for `element` captures
+- optional `region` for `region` captures
+
+Successful calls return managed artifact metadata, including `artifact_uri`, `artifact_path`, `mime_type`, `byte_count`, image dimensions, CSS dimensions, device pixel ratio, pixel scale, `revealed_from_offscreen`, and optional clip data. Callers do not provide output paths.
+
+Use `set_viewport` to emulate responsive breakpoints through CDP. Successful calls return `viewport_metrics_after`; later `snapshot` calls expose the live metrics under `scope.viewport`.
+
+## Safety boundaries
+
+- Attach mode can see the tabs, cookies, and authenticated state in the browser profile you connect to.
+- Use a dedicated browser profile for agent work when you do not want automation attached to a personal browser session.
+- `evaluate` requires `confirm_unsafe = true` because it runs arbitrary JavaScript in the active page.
+- `navigate` and `new_tab` reject unsafe schemes such as `data:` and `file:` unless that request passes `allow_unsafe = true`.
+- `go_back` and `go_forward` apply the same unsafe-scheme gate and revert rejected history moves.
+- `close_tab` requires `confirm_destructive = true` before closing an unmanaged active tab in a connected session.
+- `close` requires `confirm_destructive = true` before expanding connected-session cleanup from managed tabs to all tabs.
+- `cursor` and `node_ref` targets are revision-scoped. After navigation or DOM-changing actions, refresh with `snapshot`.
+
+## Operation metrics
+
+Finished tool results include `operation_metrics` metadata when a tool records non-zero metrics. `operation_metrics.output_bytes` is optional; it appears only when a tool path measures the exact serialized output size.
+
+Measured paths may include:
 
 - browser evaluation count
 - poll iterations
 - DOM extraction count and extraction time
+- last DOM node count
 - snapshot render time
 - handoff rebuild count and time
-- optional serialized output size (`output_bytes`)
+- exact serialized output size when measured
 
-The lightweight validation surface for these metrics is in the normal test suite:
+Run the focused operation metrics tests:
 
 ```bash
 cargo test --locked --all-features operation_metrics
 ```
 
-## Safety And Boundaries
+## Local development
 
-- Chromewright drives a real Chrome or Chromium instance through CDP. In attach mode, it sees the tabs, cookies, and authenticated state of the browser profile you give it.
-- Use a dedicated browser profile for agent work when you do not want automation attached to your personal session.
-- The normal tool surface includes the raw-JavaScript operator tool `evaluate`; callers must pass `confirm_unsafe = true` for each invocation because it executes arbitrary JavaScript in the active page. `screenshot` remains part of the bounded default surface and returns managed artifact metadata.
-- `screenshot` does not accept caller-chosen output paths or `confirm_unsafe`; use `mode = "full_page"` instead of a legacy `full_page = true` flag, and use `scale = "css"` only when you want CSS-pixel-normalized output instead of raw device pixels.
-- `navigate` and `new_tab` reject unsafe schemes such as `data:` and `file:` unless the caller passes `allow_unsafe = true` on that specific request. `go_back` and `go_forward` apply the same gate: if a history move lands on a destination outside the default-safe `http:`, `https:`, or `about:` schemes, the move is reverted and the call is rejected unless that request also sets `allow_unsafe = true`.
-- Destructive tab lifecycle operations use per-tool confirmation fields: `close_tab` requires `confirm_destructive = true` before closing an unmanaged active tab in a connected session, and `close` requires the same confirmation before expanding connected-session cleanup from managed tabs to all tabs.
-- `cursor` and `node_ref` targets are revision-scoped. After a DOM-changing action, stale `cursor` replay may selector-rebound, but precise follow-up work should still be refreshed from a new `snapshot`.
+Build from source:
+
+```bash
+cargo build
+```
+
+Run the normal test suite:
+
+```bash
+cargo test
+```
+
+Run the browser smoke suite from the repository root:
+
+```bash
+scripts/browser-smoke.sh
+```
+
+The smoke script runs:
+
+```bash
+cargo test --test browser_smoke -- --nocapture
+```
+
+Browser smoke checks launch a local browser and are intended for maintainer workstations. CI covers formatting, clippy, MSRV, cargo check, tests, and packaging without requiring a live browser attach target.
+
+## Source anchors
+
+- Package metadata and Rust version: [Cargo.toml](Cargo.toml)
+- CLI flags and transports: [src/bin/mcp_server.rs](src/bin/mcp_server.rs)
+- Tool registry: [src/tools/core/mod.rs](src/tools/core/mod.rs)
+- MCP handler: [src/mcp/handler.rs](src/mcp/handler.rs)
+- Public target contract: [src/contract/target.rs](src/contract/target.rs)
+- Screenshot contract: [src/tools/screenshot.rs](src/tools/screenshot.rs)
+- Browser smoke script: [scripts/browser-smoke.sh](scripts/browser-smoke.sh)
 
 ## License
 
