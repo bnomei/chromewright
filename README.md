@@ -309,6 +309,9 @@ Browser smoke checks launch a local browser and are intended for maintainer work
 
 ## Source anchors
 
+The opt-in semantic terminal browser, its Vimari-compatible defaults, and TOML
+configuration precedence are documented in [docs/tui.md](docs/tui.md).
+
 - Package metadata and Rust version: [Cargo.toml](Cargo.toml)
 - CLI flags and transports: [src/bin/mcp_server.rs](src/bin/mcp_server.rs)
 - Tool registry: [src/tools/core/mod.rs](src/tools/core/mod.rs)

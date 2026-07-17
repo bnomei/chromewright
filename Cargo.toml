@@ -30,7 +30,12 @@ required-features = ["mcp-server"]
 
 [features]
 default = ["mcp-server"]
-tui = ["dep:ratatui"]
+tui = [
+    "dep:ratatui",
+    "dep:crossterm",
+    "dep:toml",
+    "dep:base64",
+]
 mcp-handler = ["rmcp/macros", "rmcp/server"]
 mcp-server = [
     "mcp-handler",
@@ -67,10 +72,14 @@ env_logger = { version = "0.11", optional = true }
 html2md = "0.2"
 ureq = "3.3"
 tempfile = "3"
-# Terminal UI widgets (MSRV 1.88). Reachable only through the opt-in `tui` feature.
+# Terminal UI (MSRV 1.88). Reachable only through the opt-in `tui` feature.
 ratatui = { version = "0.30", optional = true, default-features = false, features = [
     "std",
+    "crossterm",
 ] }
+crossterm = { version = "0.28", optional = true }
+toml = { version = "0.8", optional = true }
+base64 = { version = "0.22", optional = true }
 
 [dev-dependencies]
 urlencoding = "2.1"

@@ -58,6 +58,17 @@ impl SemanticRef {
             identity,
         })
     }
+
+    /// Return the author-supplied DOM id encoded by this reference. Fingerprint
+    /// identities intentionally have no browser selector: guessing a DOM node
+    /// from a structural fingerprint would violate fail-closed interaction.
+    pub(crate) fn author_id(&self) -> Result<Option<String>, SemanticRefError> {
+        let payload = self.decode()?;
+        Ok(match payload.identity.kind {
+            SemanticIdentityKind::AuthorId => Some(payload.identity.value),
+            SemanticIdentityKind::Fingerprint => None,
+        })
+    }
 }
 
 impl fmt::Display for SemanticRef {

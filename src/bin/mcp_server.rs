@@ -15,6 +15,9 @@ use rmcp::transport::streamable_http_server::{
     StreamableHttpService, session::local::LocalSessionManager,
 };
 
+#[cfg(feature = "tui")]
+use chromewright::{BrowserSession, TuiOptions, run_tui};
+
 #[derive(Debug, Clone)]
 enum BrowserMode {
     Launch(LaunchOptions),
@@ -32,6 +35,14 @@ enum Command {
         /// HTTP streamable endpoint path (default: /mcp)
         #[arg(long, default_value = "/mcp")]
         http_path: String,
+    },
+
+    /// Interactive terminal browser over a shared Chrome session (requires `--features tui`).
+    #[cfg(feature = "tui")]
+    Tui {
+        /// TOML keymap overlay path (default: `$XDG_CONFIG_HOME/chromewright/tui.toml`)
+        #[arg(long, value_name = "PATH")]
+        config: Option<PathBuf>,
     },
 }
 
@@ -100,6 +111,18 @@ fn create_browser_server(mode: &BrowserMode) -> Result<BrowserServer, String> {
     match mode {
         BrowserMode::Launch(options) => BrowserServer::with_options(options.clone()),
         BrowserMode::Connect(options) => BrowserServer::connect(options.clone()),
+    }
+}
+
+#[cfg(feature = "tui")]
+fn create_browser_session(mode: &BrowserMode) -> Result<BrowserSession, String> {
+    match mode {
+        BrowserMode::Launch(options) => {
+            BrowserSession::launch(options.clone()).map_err(|e| e.to_string())
+        }
+        BrowserMode::Connect(options) => {
+            BrowserSession::connect(options.clone()).map_err(|e| e.to_string())
+        }
     }
 }
 
@@ -194,6 +217,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 debug!("Server quit with reason: {:?}", quit_reason);
             }
         }
+        #[cfg(feature = "tui")]
+        Some(Command::Tui { config }) => {
+            info!("Transport: terminal UI");
+            if let Some(ref path) = config {
+                info!("TUI config: {}", path.display());
+            } else {
+                info!("TUI config: XDG default (if present)");
+            }
+            let session = create_browser_session(&browser_mode)
+                .map_err(|e| format!("Failed to create browser session: {e}"))?;
+            run_tui(
+                &session,
+                TuiOptions {
+                    config: config.clone(),
+                },
+            )
+            .map_err(|e| format!("TUI exited with error: {e}"))?;
+            return Ok(());
+        }
         Some(Command::Serve { port, http_path }) => {
             info!("Transport: HTTP streamable");
             info!("Port: {}", port);
@@ -250,6 +292,8 @@ mod tests {
                 assert_eq!(http_path, "/mcp");
             }
             None => panic!("expected serve subcommand"),
+            #[cfg(feature = "tui")]
+            Some(Command::Tui { .. }) => panic!("expected serve subcommand"),
         }
     }
 
@@ -353,5 +397,37 @@ mod tests {
         .expect_err("CLI should reject conflicting browser modes");
 
         assert_eq!(err.kind(), ErrorKind::ArgumentConflict);
+    }
+
+    #[cfg(feature = "tui")]
+    #[test]
+    fn test_cli_tui_subcommand_parses_config() {
+        let cli = Cli::try_parse_from([
+            "chromewright",
+            "tui",
+            "--config",
+            "/tmp/chromewright-tui.toml",
+        ])
+        .expect("CLI should parse tui");
+
+        match cli.command {
+            Some(Command::Tui { config }) => {
+                assert_eq!(config, Some(PathBuf::from("/tmp/chromewright-tui.toml")));
+            }
+            other => panic!("expected tui subcommand, got {other:?}"),
+        }
+    }
+
+    #[cfg(feature = "tui")]
+    #[test]
+    fn test_cli_tui_does_not_alter_serve_defaults() {
+        let cli = Cli::try_parse_from(["chromewright", "serve"]).expect("serve");
+        match cli.command {
+            Some(Command::Serve { port, http_path }) => {
+                assert_eq!(port, 3000);
+                assert_eq!(http_path, "/mcp");
+            }
+            _ => panic!("expected serve"),
+        }
     }
 }

@@ -19,6 +19,10 @@ pub mod tools;
 #[doc(hidden)]
 pub mod semantic;
 
+#[cfg(feature = "tui")]
+#[doc(hidden)]
+pub mod tui;
+
 #[cfg(feature = "mcp-handler")]
 #[doc(hidden)]
 pub mod mcp;
@@ -46,6 +50,10 @@ pub use semantic::{
     render_debug, render_outline, render_ratatui_buffer, render_ratatui_lines,
     render_semantic_json, render_semantic_markdown, truncate_output,
 };
+
+#[cfg(feature = "tui")]
+#[doc(hidden)]
+pub use tui::{TuiConfig, TuiOptions, run_tui};
 
 #[cfg(feature = "mcp-handler")]
 #[doc(hidden)]

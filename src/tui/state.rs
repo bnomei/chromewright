@@ -1,0 +1,362 @@
+//! Terminal browser state: lifecycle, interaction modes, viewport, and chrome fields.
+
+use crate::semantic::{SemanticDocument, SemanticRef};
+use std::collections::HashSet;
+
+/// Page lifecycle: Ready -> Loading -> Ready | Error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Lifecycle {
+    Ready,
+    Loading { action: String },
+    Error { action: String, message: String },
+}
+
+impl Lifecycle {
+    pub fn is_loading(&self) -> bool {
+        matches!(self, Self::Loading { .. })
+    }
+
+    pub fn is_ready(&self) -> bool {
+        matches!(self, Self::Ready)
+    }
+
+    pub fn status_label(&self) -> &str {
+        match self {
+            Self::Ready => "Ready",
+            Self::Loading { .. } => "Loading",
+            Self::Error { .. } => "Error",
+        }
+    }
+}
+
+/// Interaction mode while lifecycle is Ready (or Error, which still allows Escape/retry).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InteractionMode {
+    Normal,
+    /// URL bar, forward search, or form-control editing.
+    Input(InputKind),
+    /// Two-key link hint selection (chained until Escape).
+    Hint(HintMode),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InputKind {
+    Url {
+        buffer: String,
+    },
+    Search {
+        buffer: String,
+    },
+    /// Form control value editing bound to an exact semantic_ref.
+    Form {
+        semantic_ref: SemanticRef,
+        buffer: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HintMode {
+    /// Follow link in the current tab.
+    Follow,
+    /// Open link in a new tab.
+    NewTab,
+}
+
+/// Snapshot published only after wait/settle + capture + reconciliation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublishedPage {
+    pub document: SemanticDocument,
+    pub url: String,
+    pub title: String,
+    pub revision: String,
+}
+
+impl PublishedPage {
+    pub fn from_document(document: SemanticDocument) -> Self {
+        let url = document.document.url.clone();
+        let title = document.document.title.clone();
+        let revision = document.document.revision.clone();
+        Self {
+            document,
+            url,
+            title,
+            revision,
+        }
+    }
+}
+
+/// Viewport and selection state keyed by exact semantic_ref.
+#[derive(Debug, Clone, Default)]
+pub struct ViewState {
+    /// Vertical scroll offset in content lines.
+    pub scroll_y: usize,
+    /// Horizontal scroll offset in columns.
+    pub scroll_x: usize,
+    /// Viewport height in lines (content area).
+    pub viewport_height: usize,
+    /// Viewport width in columns.
+    pub viewport_width: usize,
+    /// Currently selected addressable component (exact ref).
+    pub selection: Option<SemanticRef>,
+    /// Collapsed component refs (exact).
+    pub collapsed: HashSet<SemanticRef>,
+    /// Forward-search matches (exact refs, document order).
+    pub search_matches: Vec<SemanticRef>,
+    pub search_index: usize,
+    /// Last search query (for status).
+    pub search_query: String,
+    /// Inspection overlay text (no key legends).
+    pub inspect_text: Option<String>,
+    /// Transient status (anchor changed, clipboard fallback, etc.).
+    pub status_message: Option<String>,
+    /// Pending two-key hint buffer.
+    pub hint_buffer: String,
+}
+
+impl ViewState {
+    pub fn set_status(&mut self, msg: impl Into<String>) {
+        self.status_message = Some(msg.into());
+    }
+
+    pub fn clear_status(&mut self) {
+        self.status_message = None;
+    }
+}
+
+/// Full terminal browser state shared by controller and renderer.
+#[derive(Debug, Clone)]
+pub struct TuiState {
+    pub lifecycle: Lifecycle,
+    pub mode: InteractionMode,
+    /// Last successfully published page (retained on Error).
+    pub page: Option<PublishedPage>,
+    pub view: ViewState,
+    pub can_go_back: bool,
+    pub can_go_forward: bool,
+    pub should_quit: bool,
+    /// Clipboard fallback text when OSC 52 is unavailable.
+    pub clipboard_fallback: Option<String>,
+}
+
+impl Default for TuiState {
+    fn default() -> Self {
+        Self {
+            lifecycle: Lifecycle::Ready,
+            mode: InteractionMode::Normal,
+            page: None,
+            view: ViewState::default(),
+            can_go_back: false,
+            can_go_forward: false,
+            should_quit: false,
+            clipboard_fallback: None,
+        }
+    }
+}
+
+impl TuiState {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn mode_label(&self) -> &'static str {
+        match &self.mode {
+            InteractionMode::Normal => "Normal",
+            InteractionMode::Input(InputKind::Url { .. }) => "URL",
+            InteractionMode::Input(InputKind::Search { .. }) => "Search",
+            InteractionMode::Input(InputKind::Form { .. }) => "Input",
+            InteractionMode::Hint(HintMode::Follow) => "Hint",
+            InteractionMode::Hint(HintMode::NewTab) => "Hint+",
+        }
+    }
+
+    pub fn is_input_mode(&self) -> bool {
+        matches!(self.mode, InteractionMode::Input(_))
+    }
+
+    pub fn is_hint_mode(&self) -> bool {
+        matches!(self.mode, InteractionMode::Hint(_))
+    }
+
+    /// Normal-mode commands must not fire while editing URL or form input.
+    pub fn allows_normal_commands(&self) -> bool {
+        matches!(self.mode, InteractionMode::Normal) && self.lifecycle.is_ready()
+    }
+
+    pub fn url(&self) -> &str {
+        self.page.as_ref().map(|p| p.url.as_str()).unwrap_or("")
+    }
+
+    pub fn title(&self) -> &str {
+        self.page.as_ref().map(|p| p.title.as_str()).unwrap_or("")
+    }
+
+    pub fn revision(&self) -> &str {
+        self.page
+            .as_ref()
+            .map(|p| p.revision.as_str())
+            .unwrap_or("")
+    }
+
+    pub fn document(&self) -> Option<&SemanticDocument> {
+        self.page.as_ref().map(|p| &p.document)
+    }
+
+    /// Atomically publish document + url + title + revision.
+    pub fn publish_page(&mut self, document: SemanticDocument) {
+        self.page = Some(PublishedPage::from_document(document));
+        self.lifecycle = Lifecycle::Ready;
+    }
+
+    pub fn enter_loading(&mut self, action: impl Into<String>) {
+        self.lifecycle = Lifecycle::Loading {
+            action: action.into(),
+        };
+        // Leave transient input/hint modes during page-changing work.
+        if !matches!(self.mode, InteractionMode::Normal) {
+            self.mode = InteractionMode::Normal;
+            self.view.hint_buffer.clear();
+        }
+    }
+
+    pub fn enter_error(&mut self, action: impl Into<String>, message: impl Into<String>) {
+        self.lifecycle = Lifecycle::Error {
+            action: action.into(),
+            message: message.into(),
+        };
+        self.mode = InteractionMode::Normal;
+        self.view.hint_buffer.clear();
+    }
+
+    /// Set chrome affordances from the active browser tab, never from a local
+    /// approximation of global navigation history.
+    pub fn set_history_availability(&mut self, can_go_back: bool, can_go_forward: bool) {
+        self.can_go_back = can_go_back;
+        self.can_go_forward = can_go_forward;
+    }
+
+    /// Reconcile selection/collapse/search by exact identity after recapture.
+    ///
+    /// Surviving selected anchor restores viewport-relative position; otherwise
+    /// scroll is clamped and an identity-change status is set.
+    pub fn reconcile_after_capture(
+        &mut self,
+        new_document: SemanticDocument,
+        previous_selection: Option<SemanticRef>,
+        previous_scroll_y: usize,
+        anchor_offset_in_viewport: usize,
+        content_line_of: impl Fn(&SemanticDocument, &SemanticRef) -> Option<usize>,
+    ) {
+        let mut collapsed = HashSet::new();
+        for old in &self.view.collapsed {
+            if let Ok(rebound) = new_document.rebind_surviving(old) {
+                collapsed.insert(rebound);
+            }
+        }
+
+        let mut search_matches = Vec::new();
+        for old in &self.view.search_matches {
+            if let Ok(rebound) = new_document.rebind_surviving(old) {
+                search_matches.push(rebound);
+            }
+        }
+        let search_index = self
+            .view
+            .search_index
+            .min(search_matches.len().saturating_sub(1));
+
+        // The anchor must be measured against the reconciled collapsed layout,
+        // not the old or fully expanded projection.
+        self.view.collapsed = collapsed;
+
+        let mut selection = None;
+        let mut scroll_y = previous_scroll_y;
+        let mut status = None;
+
+        if let Some(prev) = previous_selection {
+            match new_document.rebind_surviving(&prev) {
+                Ok(rebound) => {
+                    selection = Some(rebound.clone());
+                    if let Some(line) = content_line_of(&new_document, &rebound) {
+                        // Restore at the same viewport-relative offset.
+                        scroll_y = line.saturating_sub(anchor_offset_in_viewport);
+                    }
+                }
+                Err(_) => {
+                    status = Some("anchor changed".to_string());
+                    // Clamp later once content height is known; keep absolute scroll for now.
+                }
+            }
+        }
+
+        self.view.search_matches = search_matches;
+        self.view.search_index = search_index;
+        self.view.selection = selection;
+        self.view.scroll_y = scroll_y;
+        if let Some(msg) = status {
+            self.view.set_status(msg);
+        } else {
+            // Clear only anchor messages; keep clipboard notes until next action.
+            if self.view.status_message.as_deref() == Some("anchor changed") {
+                self.view.clear_status();
+            }
+        }
+
+        self.publish_page(new_document);
+    }
+
+    pub fn clamp_scroll(&mut self, content_len: usize) {
+        let max_scroll = content_len.saturating_sub(self.view.viewport_height.max(1));
+        if self.view.scroll_y > max_scroll {
+            self.view.scroll_y = max_scroll;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normal_commands_blocked_in_input_and_loading() {
+        let mut s = TuiState::new();
+        assert!(s.allows_normal_commands());
+
+        s.mode = InteractionMode::Input(InputKind::Url {
+            buffer: String::new(),
+        });
+        assert!(!s.allows_normal_commands());
+
+        s.mode = InteractionMode::Normal;
+        s.enter_loading("reload");
+        assert!(!s.allows_normal_commands());
+    }
+
+    #[test]
+    fn error_retains_last_page() {
+        use crate::dom::DocumentMetadata;
+        use crate::semantic::SemanticDocument;
+
+        let doc = SemanticDocument::empty(DocumentMetadata {
+            document_id: "d".into(),
+            revision: "1".into(),
+            url: "https://example.com/".into(),
+            title: "T".into(),
+            ready_state: "complete".into(),
+            frames: vec![],
+        })
+        .expect("empty");
+        let mut s = TuiState::new();
+        s.publish_page(doc);
+        assert_eq!(s.url(), "https://example.com/");
+        s.enter_error("navigate", "boom");
+        assert_eq!(s.url(), "https://example.com/");
+        assert!(matches!(s.lifecycle, Lifecycle::Error { .. }));
+    }
+
+    #[test]
+    fn error_never_reenables_semantic_actions() {
+        let mut state = TuiState::new();
+        state.enter_error("reload", "failed");
+        assert!(!state.allows_normal_commands());
+    }
+}

@@ -514,9 +514,19 @@ JSON.stringify((function() {
         return [node];
     }
 
-    // Count author ids for uniqueness so Rust can prefer durable author identities.
-    function markUniqueIds(nodes) {
+    // Count ids across the full live DOM, including nodes omitted from the
+    // semantic projection. An emitted node may only receive an author identity
+    // when its id is unique at the browser interaction boundary as well.
+    function markUniqueIds(nodes, root) {
         var counts = Object.create(null);
+
+        if (root && root.querySelectorAll) {
+            var allWithId = root.querySelectorAll('[id]');
+            for (var i = 0; i < allWithId.length; i += 1) {
+                var id = allWithId[i].id;
+                if (id) counts[id] = (counts[id] || 0) + 1;
+            }
+        }
 
         function walk(list) {
             for (var i = 0; i < list.length; i += 1) {
@@ -540,7 +550,9 @@ JSON.stringify((function() {
             }
         }
 
-        walk(nodes);
+        // The query above is authoritative for a real DOM capture. Keep the
+        // tree walk for synthetic/fixture roots that do not implement it.
+        if (!root || !root.querySelectorAll) walk(nodes);
         apply(nodes);
     }
 
@@ -548,7 +560,7 @@ JSON.stringify((function() {
         var documentState = ensureDocumentState(document);
         var root = document.body || document.documentElement;
         var nodes = root ? visit(root, 0) : [];
-        markUniqueIds(nodes);
+        markUniqueIds(nodes, root);
 
         return {
             document: {

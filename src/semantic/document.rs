@@ -107,6 +107,39 @@ impl SemanticDocument {
         }
     }
 
+    /// Resolve a reference from a prior capture by durable identity only.
+    ///
+    /// Used for viewport anchor restoration and selection rebinding after a
+    /// successful recapture. The prior token's revision is ignored; identity
+    /// must match exactly. Missing identities fail closed as [`SemanticRefError::Unknown`].
+    pub fn resolve_surviving(
+        &self,
+        previous: &SemanticRef,
+    ) -> std::result::Result<&SemanticComponent, SemanticRefError> {
+        let payload = previous.decode()?;
+        if payload.document_id != self.document.document_id {
+            return Err(SemanticRefError::WrongDocument {
+                expected: self.document.document_id.clone(),
+                actual: payload.document_id,
+            });
+        }
+        let current_ref = self
+            .identity_index
+            .get(&payload.identity)
+            .ok_or(SemanticRefError::Unknown)?;
+        // `current_ref` is minted for this document revision, so resolve is exact.
+        self.resolve(current_ref)
+    }
+
+    /// Like [`Self::resolve_surviving`], returning the current opaque ref on success.
+    pub fn rebind_surviving(
+        &self,
+        previous: &SemanticRef,
+    ) -> std::result::Result<SemanticRef, SemanticRefError> {
+        let component = self.resolve_surviving(previous)?;
+        Ok(component.semantic_ref.clone())
+    }
+
     fn resolve_path(
         &self,
         semantic_ref: &SemanticRef,
@@ -393,5 +426,97 @@ mod tests {
             document.resolve_str("garbage"),
             Err(SemanticRefError::Malformed)
         );
+    }
+
+    #[test]
+    fn resolve_surviving_matches_identity_across_revisions() {
+        let first = SemanticDocument::from_components(
+            meta("doc-a", "rev-1"),
+            vec![text_component(
+                "doc-a",
+                "rev-1",
+                SemanticIdentity::author_id("anchor"),
+                "hello",
+            )],
+        )
+        .expect("first");
+        let old_ref = first.semantic_refs().into_iter().next().expect("ref");
+
+        let second = SemanticDocument::from_components(
+            meta("doc-a", "rev-2"),
+            vec![text_component(
+                "doc-a",
+                "rev-2",
+                SemanticIdentity::author_id("anchor"),
+                "hello again",
+            )],
+        )
+        .expect("second");
+
+        let surviving = second.resolve_surviving(&old_ref).expect("survives");
+        assert_eq!(surviving.text.as_deref(), Some("hello again"));
+        assert_ne!(surviving.semantic_ref, old_ref);
+
+        let rebound = second.rebind_surviving(&old_ref).expect("rebind");
+        assert_eq!(rebound, surviving.semantic_ref);
+    }
+
+    #[test]
+    fn resolve_surviving_fails_closed_when_identity_absent() {
+        let first = SemanticDocument::from_components(
+            meta("doc-a", "rev-1"),
+            vec![text_component(
+                "doc-a",
+                "rev-1",
+                SemanticIdentity::author_id("gone"),
+                "hello",
+            )],
+        )
+        .expect("first");
+        let old_ref = first.semantic_refs().into_iter().next().expect("ref");
+
+        let second = SemanticDocument::from_components(
+            meta("doc-a", "rev-2"),
+            vec![text_component(
+                "doc-a",
+                "rev-2",
+                SemanticIdentity::author_id("other"),
+                "different",
+            )],
+        )
+        .expect("second");
+
+        assert_eq!(
+            second.resolve_surviving(&old_ref),
+            Err(SemanticRefError::Unknown)
+        );
+    }
+
+    #[test]
+    fn resolve_surviving_rejects_same_identity_from_another_document() {
+        let first = SemanticDocument::from_components(
+            meta("doc-a", "rev-1"),
+            vec![text_component(
+                "doc-a",
+                "rev-1",
+                SemanticIdentity::author_id("shared"),
+                "one",
+            )],
+        )
+        .expect("first");
+        let second = SemanticDocument::from_components(
+            meta("doc-b", "rev-2"),
+            vec![text_component(
+                "doc-b",
+                "rev-2",
+                SemanticIdentity::author_id("shared"),
+                "two",
+            )],
+        )
+        .expect("second");
+        assert!(matches!(
+            second.resolve_surviving(&first.semantic_refs()[0]),
+            Err(SemanticRefError::WrongDocument { .. })
+        ));
     }
 }

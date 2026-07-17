@@ -10,7 +10,7 @@ mod document;
 mod extract;
 mod identity;
 mod limits;
-mod normalize;
+pub(crate) mod normalize;
 mod render;
 
 #[cfg(test)]
