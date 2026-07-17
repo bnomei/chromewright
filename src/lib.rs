@@ -15,6 +15,10 @@ pub mod error;
 #[doc(hidden)]
 pub mod tools;
 
+#[cfg(feature = "tui")]
+#[doc(hidden)]
+pub mod semantic;
+
 #[cfg(feature = "mcp-handler")]
 #[doc(hidden)]
 pub mod mcp;
@@ -29,6 +33,15 @@ pub use dom::{
 pub use error::{BrowserError, Result};
 #[doc(hidden)]
 pub use tools::{Tool, ToolContext, ToolRegistry, ToolResult};
+
+#[cfg(feature = "tui")]
+#[doc(hidden)]
+pub use semantic::{
+    LandmarkRole, MAX_SEMANTIC_COMPONENTS, MAX_SEMANTIC_DEPTH, MAX_SEMANTIC_SELECT_OPTIONS,
+    MAX_SEMANTIC_STRING_CHARS, MAX_SEMANTIC_TOTAL_TEXT_CHARS, SelectOption, SemanticAttrs,
+    SemanticComponent, SemanticDocument, SemanticKind, SemanticRef, SemanticRefError,
+    extract_semantic_document,
+};
 
 #[cfg(feature = "mcp-handler")]
 #[doc(hidden)]

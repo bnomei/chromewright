@@ -151,6 +151,15 @@ impl BrowserSession {
         self.backend.extract_dom()
     }
 
+    /// Capture a bounded semantic document from the active tab.
+    ///
+    /// Independent of [`Self::extract_dom`]: reads the hydrated HTML DOM, not the
+    /// actionability/ARIA tree. Available only with the opt-in `tui` feature.
+    #[cfg(feature = "tui")]
+    pub fn extract_semantic_document(&self) -> Result<crate::semantic::SemanticDocument> {
+        crate::semantic::extract_semantic_document(self)
+    }
+
     /// Extract the DOM tree from a specific tab without activating it.
     pub(crate) fn extract_dom_for_tab(&self, tab_id: &str) -> Result<DomTree> {
         self.backend.extract_dom_for_tab(tab_id)
