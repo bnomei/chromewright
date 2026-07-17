@@ -37,10 +37,14 @@ pub use tools::{Tool, ToolContext, ToolRegistry, ToolResult};
 #[cfg(feature = "tui")]
 #[doc(hidden)]
 pub use semantic::{
-    LandmarkRole, MAX_SEMANTIC_COMPONENTS, MAX_SEMANTIC_DEPTH, MAX_SEMANTIC_SELECT_OPTIONS,
-    MAX_SEMANTIC_STRING_CHARS, MAX_SEMANTIC_TOTAL_TEXT_CHARS, SelectOption, SemanticAttrs,
-    SemanticComponent, SemanticDocument, SemanticKind, SemanticRef, SemanticRefError,
-    extract_semantic_document,
+    ComponentProjection, DebugNode, DebugProjection, LandmarkRole, MAX_RENDER_OUTPUT_CHARS,
+    MAX_SEMANTIC_COMPONENTS, MAX_SEMANTIC_DEPTH, MAX_SEMANTIC_SELECT_OPTIONS,
+    MAX_SEMANTIC_STRING_CHARS, MAX_SEMANTIC_TOTAL_TEXT_CHARS, OutlineEntry, OutlineProjection,
+    RenderError, RenderedOutput, SelectOption, SemanticAttrs, SemanticComponent, SemanticDocument,
+    SemanticJsonProjection, SemanticKind, SemanticRatatuiView, SemanticRef, SemanticRefError,
+    buffer_to_lines, extract_semantic_document, render_component_json, render_component_markdown,
+    render_debug, render_outline, render_ratatui_buffer, render_ratatui_lines,
+    render_semantic_json, render_semantic_markdown, truncate_output,
 };
 
 #[cfg(feature = "mcp-handler")]
