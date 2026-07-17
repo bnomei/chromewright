@@ -10,7 +10,7 @@ use crate::tools::ToolResult as InternalToolResult;
 use crate::tools::{ToolContext, normalize_tool_outcome};
 use rmcp::{
     ErrorData as McpError,
-    model::{CallToolResult, Content, Meta},
+    model::{CallToolResult, ContentBlock, Meta},
 };
 
 fn merge_error_details(
@@ -130,7 +130,7 @@ pub(crate) fn convert_result(result: InternalToolResult) -> Result<CallToolResul
         let result = if let Some(data) = data {
             CallToolResult::structured(data)
         } else {
-            CallToolResult::success(vec![Content::text("Success")])
+            CallToolResult::success(vec![ContentBlock::text("Success")])
         };
 
         Ok(with_metadata(result, metadata))

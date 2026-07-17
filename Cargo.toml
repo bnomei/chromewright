@@ -30,6 +30,7 @@ required-features = ["mcp-server"]
 
 [features]
 default = ["mcp-server"]
+tui = []
 mcp-handler = ["rmcp/macros", "rmcp/server"]
 mcp-server = [
     "mcp-handler",
@@ -42,8 +43,8 @@ mcp-server = [
 ]
 
 [dependencies]
-headless_chrome = "=1.0.21"
-rmcp = "1.5"
+headless_chrome = "=1.0.22"
+rmcp = { version = "2.2", default-features = false }
 thiserror = "2.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

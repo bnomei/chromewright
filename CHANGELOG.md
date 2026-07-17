@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Upgrade the MCP runtime to RMCP 2.2 and retain only the server, stdio, and streamable-HTTP transport features.
+- Refresh Rust 1.88-compatible dependencies, including `headless_chrome` 1.0.22.
+
 ## 0.7.1 - 2026-06-28
 
 ### Changed
