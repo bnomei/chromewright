@@ -8,16 +8,20 @@ use crate::tui::keymap::{
 };
 use crate::tui::state::{HintMode, InputKind, InteractionMode};
 
-/// Outcome of handling one key event.
+/// Outcome of handling one key event for the terminal event loop.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DispatchOutcome {
+    /// Keep the loop running without forcing an immediate full redraw.
     Continue,
+    /// User requested quit (`Ctrl-c` / Quit action).
     Quit,
-    /// Page-changing work was requested; caller may redraw Loading first.
+    /// Page-changing work was requested; caller should draw Loading then perform it.
     Redraw,
 }
 
-/// Stateless-ish dispatcher holding multi-key resolver state.
+/// Routes key chords to named [`Action`]s under Normal / Input / Hint mode boundaries.
+///
+/// Holds multi-key resolver state so sequences like `gg` and `gi` complete across events.
 pub struct Dispatcher {
     pub keymap: TuiKeymap,
     resolver: KeyResolver,

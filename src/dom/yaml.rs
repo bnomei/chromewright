@@ -3,7 +3,7 @@
 //! Escaping rules follow Playwright's `renderAriaTree` conventions so snapshot
 //! output stays parseable when roles, names, or values contain YAML-significant characters.
 
-/// Check if a YAML string needs quotes
+/// Decide whether a snapshot string must be quoted to stay valid Playwright-style YAML.
 pub fn yaml_string_needs_quotes(s: &str) -> bool {
     if s.is_empty() {
         return true;
@@ -76,7 +76,7 @@ pub fn yaml_string_needs_quotes(s: &str) -> bool {
     false
 }
 
-/// Escape a YAML key if needed (uses single quotes)
+/// Quote a YAML key with single quotes when it would otherwise be ambiguous or invalid.
 pub fn yaml_escape_key_if_needed(s: &str) -> String {
     if !yaml_string_needs_quotes(s) {
         return s.to_string();
@@ -86,7 +86,7 @@ pub fn yaml_escape_key_if_needed(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
 }
 
-/// Escape a YAML value if needed (uses double quotes)
+/// Quote a YAML scalar value with double quotes and escape control characters when required.
 pub fn yaml_escape_value_if_needed(s: &str) -> String {
     if !yaml_string_needs_quotes(s) {
         return s.to_string();

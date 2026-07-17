@@ -55,6 +55,10 @@ fn validate_markdown_text_chars(char_count: usize) -> Result<()> {
     Ok(())
 }
 
+/// Extract main-content markdown (with session cache reuse), then return one page of text.
+///
+/// Waits for document readiness and a short settle window when the cache misses, runs
+/// Readability in-page, converts HTML to markdown, and stores a revision-keyed cache entry.
 pub(crate) fn execute_get_markdown(
     params: GetMarkdownParams,
     context: &mut ToolContext,
@@ -131,6 +135,7 @@ pub(crate) fn execute_get_markdown(
     Ok(context.finish(ToolResult::success_with(output)))
 }
 
+/// Slice a cached full-markdown entry into a page-sized window with checkpoint metadata.
 pub(crate) fn paginate_markdown(
     entry: &MarkdownCacheEntry,
     params: &GetMarkdownParams,

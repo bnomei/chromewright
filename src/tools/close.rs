@@ -1,9 +1,14 @@
+//! MCP tool that ends the browser session or closes only managed tabs in attach mode.
+//!
+//! Connected/attach sessions keep unmanaged tabs unless `confirm_destructive` is set;
+//! launch mode closes the whole session.
+
 use crate::error::{BrowserError, Result};
 use crate::tools::{Tool, ToolContext, ToolResult};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// Parameters for the close tool (no parameters needed)
+/// Session-close options; attach mode may require confirm_destructive for unmanaged tabs.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CloseParams {
     /// Allow closing unmanaged tabs in connected sessions
@@ -11,10 +16,11 @@ pub struct CloseParams {
     pub confirm_destructive: bool,
 }
 
-/// Tool for closing the browser
+/// Closes managed tabs in attach mode, or all tabs when launching/confirmed.
 #[derive(Default)]
 pub struct CloseTool;
 
+/// Counts and scope of tabs closed by the session close tool.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CloseOutput {
     pub closed_tabs: usize,

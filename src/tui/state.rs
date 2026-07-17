@@ -3,11 +3,14 @@
 use crate::semantic::{SemanticDocument, SemanticRef};
 use std::collections::HashSet;
 
-/// Page lifecycle: Ready -> Loading -> Ready | Error.
+/// Page lifecycle: Ready → Loading → Ready | Error (atomic publish on success).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Lifecycle {
+    /// Settled document is published; normal commands and scrolling apply.
     Ready,
+    /// Page-changing work is in flight; normal key actions are ignored.
     Loading { action: String },
+    /// Last action failed; previous page (if any) is retained for recovery.
     Error { action: String, message: String },
 }
 
@@ -30,8 +33,12 @@ impl Lifecycle {
 }
 
 /// Interaction mode while lifecycle is Ready (or Error, which still allows Escape/retry).
+///
+/// The dispatcher routes keys by mode so Normal action maps never fire during
+/// URL/search/form editing or two-key hint selection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InteractionMode {
+    /// Keymap-driven action dispatch (Vimari-style).
     Normal,
     /// URL bar, forward search, or form-control editing.
     Input(InputKind),
@@ -39,26 +46,26 @@ pub enum InteractionMode {
     Hint(HintMode),
 }
 
+/// Kind of text-input overlay active while [`InteractionMode::Input`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InputKind {
-    Url {
-        buffer: String,
-    },
-    Search {
-        buffer: String,
-    },
-    /// Form control value editing bound to an exact semantic_ref.
+    /// Navigate-to URL prompt (`o` / OpenUrl).
+    Url { buffer: String },
+    /// Forward search by content (`/` / Search); matches bind exact `semantic_ref`s.
+    Search { buffer: String },
+    /// Form control value editing bound to an exact `semantic_ref`.
     Form {
         semantic_ref: SemanticRef,
         buffer: String,
     },
 }
 
+/// Whether a resolved link hint opens in the current tab or a new tab.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HintMode {
-    /// Follow link in the current tab.
+    /// Follow link in the current tab (`f`).
     Follow,
-    /// Open link in a new tab.
+    /// Open link in a new tab (`F`).
     NewTab,
 }
 

@@ -24,12 +24,18 @@ use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
+/// Inclusive lower bound for launch-mode DevTools debug port allocation.
 pub(crate) const DEBUG_PORT_START: u16 = 40_000;
+/// Inclusive upper bound for launch-mode DevTools debug port allocation.
 pub(crate) const DEBUG_PORT_END: u16 = 59_999;
+/// Stable machine code for attach-mode page target loss surfaces.
 pub(crate) const ATTACH_PAGE_TARGET_LOST_CODE: &str = "attach_page_target_lost";
+/// Structured loss kind embedded in attach-session degradation errors.
 pub(crate) const ATTACH_SESSION_PAGE_TARGET_LOSS_KIND: &str = "page_target_lost";
 const ATTACH_SESSION_RECOVERY_HINT: &str = "Run tab_list, then switch_tab to reacquire an active page target. If page actions still fail, reconnect the attach session and rerun snapshot.";
+/// Default CSS-pixel cap for viewport width/height unless large-canvas is opted in.
 pub(crate) const VIEWPORT_DIMENSION_MAX: u32 = 10_000;
+/// Upper CSS-pixel cap when `allow_large_viewport` is set for intentional large canvases.
 pub(crate) const VIEWPORT_LARGE_DIMENSION_MAX: u32 = 10_000_000;
 static DEBUG_PORT_COUNTER: AtomicU16 = AtomicU16::new(DEBUG_PORT_START);
 
@@ -46,6 +52,7 @@ fn session_close_result(total_tabs: usize, failures: Vec<String>) -> Result<()> 
     )))
 }
 
+/// Backend-neutral tab identity used by `SessionBackend` list/activate/close paths.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TabDescriptor {
     pub id: String,
@@ -53,11 +60,14 @@ pub(crate) struct TabDescriptor {
     pub url: String,
 }
 
+/// Whether a screenshot captures the current viewport or the full scrollable page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ScreenshotMode {
+    /// Capture only the visible viewport (default).
     #[default]
     Viewport,
+    /// Capture beyond the viewport for full-page PNG output.
     FullPage,
 }
 
@@ -75,11 +85,14 @@ impl ScreenshotMode {
     }
 }
 
+/// Pixel density mode for screenshot capture relative to device vs CSS pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ScreenshotScale {
+    /// Capture at the page's device pixel ratio (default).
     #[default]
     Device,
+    /// Capture at CSS-pixel scale (compensates for device pixel ratio).
     Css,
 }
 
@@ -92,9 +105,11 @@ impl ScreenshotScale {
     }
 }
 
+/// Encoded image format for managed screenshot artifacts (PNG only today).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ScreenshotFormat {
+    /// Portable Network Graphics; written under the session screenshot root.
     Png,
 }
 
@@ -112,11 +127,16 @@ impl ScreenshotFormat {
     }
 }
 
+/// CSS-pixel crop region for a viewport screenshot; incompatible with full-page mode.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ScreenshotClip {
+    /// Horizontal origin in CSS pixels from the page layout origin.
     pub x: f64,
+    /// Vertical origin in CSS pixels from the page layout origin.
     pub y: f64,
+    /// Crop width in CSS pixels; must be finite and greater than zero.
     pub width: f64,
+    /// Crop height in CSS pixels; must be finite and greater than zero.
     pub height: f64,
 }
 
@@ -246,14 +266,20 @@ impl ViewportResetRequest {
     }
 }
 
+/// Caller-facing screenshot capture options passed through to CDP `Page.captureScreenshot`.
+///
+/// Optional `tab_id` targets a managed tab without activating it when the backend supports
+/// tab-scoped capture. Clip regions require viewport mode and cannot pair with full-page.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Default)]
 pub struct ScreenshotRequest {
     #[serde(default)]
     pub mode: ScreenshotMode,
     #[serde(default)]
     pub scale: ScreenshotScale,
+    /// When set, capture from this tab id instead of the active page target.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tab_id: Option<String>,
+    /// Optional CSS-pixel crop; rejected when combined with [`ScreenshotMode::FullPage`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clip: Option<ScreenshotClip>,
 }
@@ -348,6 +374,10 @@ fn validate_optional_tab_id(tab_id: Option<&str>, label: &str) -> Result<()> {
     Ok(())
 }
 
+/// In-memory PNG capture result before it is written as a managed screenshot artifact.
+///
+/// Carries layout metrics (CSS size, DPR, inferred pixel scale) alongside encoded bytes so
+/// session storage and tool responses can report dimensions without re-decoding the image.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ScreenshotCapture {
     pub mode: ScreenshotMode,
@@ -356,11 +386,16 @@ pub(crate) struct ScreenshotCapture {
     pub format: ScreenshotFormat,
     pub mime_type: &'static str,
     pub byte_count: usize,
+    /// Intrinsic PNG width in device pixels.
     pub width: u32,
+    /// Intrinsic PNG height in device pixels.
     pub height: u32,
+    /// Logical capture width in CSS pixels after clip/mode resolution.
     pub css_width: f64,
+    /// Logical capture height in CSS pixels after clip/mode resolution.
     pub css_height: f64,
     pub device_pixel_ratio: f64,
+    /// Ratio of device pixels to CSS pixels inferred from the encoded image.
     pub pixel_scale: f64,
     pub clip: Option<ScreenshotClip>,
     pub bytes: Vec<u8>,
@@ -577,14 +612,23 @@ fn infer_pixel_scale(width: u32, height: u32, css_width: f64, css_height: f64) -
     }
 }
 
+/// Normalized result of a CDP JavaScript evaluation on a page target.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct ScriptEvaluation {
+    /// Serialized return value when the runtime produced a JSON-compatible object.
     pub value: Option<Value>,
+    /// Optional remote-object description from the CDP Runtime domain.
     pub description: Option<String>,
+    /// Runtime type name (for example `string`, `object`, or `undefined`).
     pub type_name: Option<String>,
 }
 
 /// Session-scoped CDP operations: navigation, DOM extraction, tabs, viewport, and screenshots.
+///
+/// Implementations bridge Rust session logic to a live browser (`ChromeSessionBackend`) or an
+/// in-memory test double (`FakeSessionBackend`). Default methods report
+/// [`BrowserError::BackendUnsupported`] when a capability is not available; attach mode may
+/// surface page target loss via [`BrowserError::PageTargetLost`].
 pub(crate) trait SessionBackend: Send + Sync {
     fn navigate(&self, url: &str) -> Result<()>;
     fn wait_for_navigation(&self) -> Result<()>;
@@ -695,12 +739,17 @@ pub(crate) trait SessionBackend: Send + Sync {
     fn close(&self) -> Result<()>;
 }
 
+/// Allocate the next launch-mode DevTools debug port from the shared rotating range.
 pub(crate) fn choose_debug_port() -> u16 {
     let span = DEBUG_PORT_END - DEBUG_PORT_START + 1;
     let offset = DEBUG_PORT_COUNTER.fetch_add(1, Ordering::Relaxed) % span;
     DEBUG_PORT_START + offset
 }
 
+/// Map chromewright [`LaunchOptions`] into headless_chrome launch options for process spawn.
+///
+/// Sets the session idle timeout, strips the automation banner arg, and chooses a debug port
+/// when the caller did not pin one.
 pub(crate) fn build_launch_options(
     options: LaunchOptions,
 ) -> headless_chrome::LaunchOptions<'static> {
@@ -730,8 +779,14 @@ pub(crate) fn build_launch_options(
     launch_opts
 }
 
+/// Production `SessionBackend` backed by a headless_chrome `Browser` over CDP.
+///
+/// Launch mode owns a disposable Chrome process; attach mode connects to an existing DevTools
+/// endpoint and can mark the session degraded when the active page target is lost until a tab
+/// is reacquired.
 pub(crate) struct ChromeSessionBackend {
     browser: Browser,
+    /// `true` when connected to an external browser rather than a launched process.
     attach_mode: bool,
     active_tab_hint: RwLock<Option<String>>,
     page_target_degraded: AtomicBool,

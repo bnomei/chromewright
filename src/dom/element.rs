@@ -413,11 +413,10 @@ impl AriaNode {
     }
 }
 
-// Legacy compatibility: ElementNode type alias for old code
-// This allows gradual migration from ElementNode to AriaNode
+/// Legacy alias for [`AriaNode`]; prefer `AriaNode` in new code.
 pub type ElementNode = AriaNode;
 
-// Legacy: BoundingBox (now BoxInfo)
+/// Axis-aligned layout box in CSS pixels (legacy geometry helper; snapshots use [`BoxInfo`]).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct BoundingBox {
     pub x: f64,
@@ -427,6 +426,7 @@ pub struct BoundingBox {
 }
 
 impl BoundingBox {
+    /// Construct a box from origin and size in CSS pixels.
     pub fn new(x: f64, y: f64, width: f64, height: f64) -> Self {
         Self {
             x,
@@ -436,10 +436,12 @@ impl BoundingBox {
         }
     }
 
+    /// True when both width and height are strictly positive.
     pub fn is_visible(&self) -> bool {
         self.width > 0.0 && self.height > 0.0
     }
 
+    /// Return width × height in CSS pixels squared.
     pub fn area(&self) -> f64 {
         self.width * self.height
     }

@@ -410,10 +410,14 @@ impl KeyResolver {
     }
 }
 
+/// Outcome of feeding one chord into the multi-key normal-mode resolver.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyResolveResult {
+    /// Sequence completed; dispatch this named action.
     Action(Action),
+    /// Pending chords form a known binding prefix; wait for more input.
     Pending,
+    /// Sequence is not a binding or valid prefix; clear and do not re-fire last key.
     Unbound,
 }
 

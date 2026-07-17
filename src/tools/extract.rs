@@ -1,3 +1,7 @@
+//! MCP tool that extracts raw text or HTML from the document body or a CSS selector.
+//!
+//! Enforces extract size limits and returns a document envelope for follow-up tools.
+
 use crate::error::{BrowserError, Result};
 use crate::tools::core::structured_tool_failure;
 use crate::tools::limits::{MAX_EXTRACT_CHARS, validate_extract_chars};
@@ -8,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::borrow::Cow;
 
+/// Optional selector scope and text/html format for raw content extraction.
 #[derive(Debug, Clone, Serialize)]
 pub struct ExtractParams {
     /// CSS selector (optional, defaults to body)
@@ -91,6 +96,7 @@ fn parse_extract_format(format: &str) -> Result<ExtractFormat> {
 #[derive(Default)]
 pub struct ExtractContentTool;
 
+/// Document result carrying extracted content, format label, and character length.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ExtractOutput {
     #[serde(flatten)]

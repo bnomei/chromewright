@@ -45,6 +45,10 @@ fn session_close_result(total_tabs: usize, failures: Vec<String>) -> Result<()> 
     )))
 }
 
+/// In-memory `SessionBackend` for unit tests that must not spawn Chrome.
+///
+/// Tracks tabs, revision bumps, viewport emulation, and scripted close failures so session
+/// cache, history, and tool tests can exercise lifecycle without CDP.
 pub(crate) struct FakeSessionBackend {
     state: Mutex<FakeState>,
     close_failure_urls: Vec<String>,

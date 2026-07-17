@@ -1,3 +1,7 @@
+//! MCP tool that chooses a dropdown option after actionability checks succeed.
+//!
+//! Resolves a selector or revision-scoped cursor, then selects by option value.
+
 use crate::browser::commands::{
     BrowserCommand, BrowserCommandResult, InteractionCommand, InteractionCommandResult,
     SelectInteractionRequest, TargetedInteractionRequest,
@@ -29,7 +33,8 @@ const SELECT_JS: &str = include_str!("select.js");
 #[cfg(test)]
 static SELECT_SHELL: OnceLock<crate::tools::browser_kernel::BrowserKernelTemplateShell> =
     OnceLock::new();
-/// Parameters for the select tool
+
+/// Dropdown value and selector/cursor target for a select interaction.
 #[derive(Debug, Clone, Serialize)]
 pub struct SelectParams {
     /// CSS selector (use either this or index, not both)
@@ -93,10 +98,11 @@ impl JsonSchema for SelectParams {
     }
 }
 
-/// Tool for selecting dropdown options
+/// Selects a dropdown option after actionability checks succeed.
 #[derive(Default)]
 pub struct SelectTool;
 
+/// Targeted action result with the chosen value and visible selected text.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SelectOutput {
     #[serde(flatten)]

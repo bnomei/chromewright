@@ -1,3 +1,7 @@
+//! MCP tool that probes one resolved node for identity, layout, accessibility, and form state.
+//!
+//! Stale cursors may rebound via target recovery; compact detail is the default for agent loops.
+
 use crate::dom::{Cursor, NodeRef};
 use crate::error::{BrowserError, Result};
 use crate::tools::{
@@ -15,6 +19,7 @@ const INSPECT_NODE_JS: &str = include_str!("inspect_node.js");
 static INSPECT_NODE_SHELL: OnceLock<crate::tools::browser_kernel::BrowserKernelTemplateShell> =
     OnceLock::new();
 
+/// How much payload to return: compact agent defaults or full sections.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum InspectDetail {
@@ -26,6 +31,7 @@ fn default_detail() -> InspectDetail {
     InspectDetail::Compact
 }
 
+/// Selector or cursor target, detail level, and optional computed style names to probe.
 #[derive(Debug, Clone, Serialize)]
 pub struct InspectNodeParams {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -95,6 +101,7 @@ impl JsonSchema for InspectNodeParams {
 #[derive(Default)]
 pub struct InspectNodeTool;
 
+/// Full inspect payload: target envelope, identity, a11y, form, layout, and optional sections.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct InspectNodeOutput {
     #[serde(flatten)]
@@ -113,6 +120,7 @@ pub struct InspectNodeOutput {
     pub truncated_fields: Vec<String>,
 }
 
+/// DOM tag, id, and class list for the inspected node.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct InspectIdentity {
     pub tag: String,
@@ -122,6 +130,7 @@ pub struct InspectIdentity {
     pub classes: Vec<String>,
 }
 
+/// ARIA tri-state values that may be a boolean or the mixed string.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum BooleanOrMixed {
@@ -129,6 +138,7 @@ pub enum BooleanOrMixed {
     Mixed(String),
 }
 
+/// Role, name, and common ARIA state flags for the inspected node.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct InspectAccessibility {
     pub role: String,
@@ -147,6 +157,7 @@ pub struct InspectAccessibility {
     pub selected: Option<bool>,
 }
 
+/// Form control value and editability flags when the node is form-like.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct InspectFormState {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -159,6 +170,7 @@ pub struct InspectFormState {
     pub disabled: Option<bool>,
 }
 
+/// Bounding box, visibility, and pointer-event readiness for actionability diagnosis.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct InspectLayout {
     pub bounding_box: InspectBoundingBox,
@@ -167,10 +179,12 @@ pub struct InspectLayout {
     pub receives_pointer_events: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pointer_events: Option<String>,
+    /// CSS `cursor` property value (not a revision-scoped snapshot cursor).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,
 }
 
+/// Axis-aligned box in CSS pixels for the inspected node.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct InspectBoundingBox {
     pub x: f64,
@@ -179,6 +193,7 @@ pub struct InspectBoundingBox {
     pub height: f64,
 }
 
+/// Document URL, frame depth, and shadow-root nesting for the inspected node.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct InspectContext {
     pub document_url: String,
@@ -186,6 +201,7 @@ pub struct InspectContext {
     pub inside_shadow_root: bool,
 }
 
+/// Frame, shadow, or cross-origin boundary discovered while resolving the node.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct InspectBoundary {
     pub kind: String,
@@ -195,6 +211,7 @@ pub struct InspectBoundary {
     pub url: Option<String>,
 }
 
+/// Full-detail text, HTML, attribute, and style sections with truncation metadata.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct InspectSections {
     pub text: BoundedTextSection,
@@ -203,6 +220,7 @@ pub struct InspectSections {
     pub styles: BoundedMapSection,
 }
 
+/// String payload that may be truncated against inspect size budgets.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct BoundedTextSection {
     pub value: String,
@@ -210,6 +228,7 @@ pub struct BoundedTextSection {
     pub total_chars: usize,
 }
 
+/// Key/value map that may be truncated against inspect size budgets.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct BoundedMapSection {
     pub values: BTreeMap<String, String>,
@@ -217,6 +236,10 @@ pub struct BoundedMapSection {
     pub total_entries: usize,
 }
 
+/// Decoded in-page probe result before mapping into `InspectNodeOutput`.
+///
+/// Carries resolution status, identity/layout/a11y sections, and optional failure codes from
+/// the browser-kernel inspect script.
 #[derive(Debug, Deserialize)]
 pub(crate) struct InspectNodeProbePayload {
     pub success: bool,
@@ -267,6 +290,7 @@ impl Tool for InspectNodeTool {
     }
 }
 
+/// Render the inspect-node browser-kernel script with the given probe config payload.
 pub(crate) fn build_inspect_node_js(config: &serde_json::Value) -> String {
     use crate::tools::browser_kernel::render_browser_kernel_script;
     render_browser_kernel_script(
@@ -277,6 +301,9 @@ pub(crate) fn build_inspect_node_js(config: &serde_json::Value) -> String {
     )
 }
 
+/// Parse a CDP evaluation value (object or JSON string) into [`InspectNodeProbePayload`].
+///
+/// Missing results become a structured `inspect_failed` payload rather than a hard error.
 pub(crate) fn decode_probe_payload(
     value: Option<serde_json::Value>,
 ) -> Result<InspectNodeProbePayload> {

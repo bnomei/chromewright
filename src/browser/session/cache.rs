@@ -46,6 +46,7 @@ impl MarkdownPaginationMetadata {
     }
 }
 
+/// Identity and reader metadata used to construct a revision-keyed markdown cache entry.
 #[derive(Debug, Clone)]
 pub(crate) struct MarkdownCacheMetadata {
     pub document_id: String,
@@ -57,6 +58,10 @@ pub(crate) struct MarkdownCacheMetadata {
     pub site_name: String,
 }
 
+/// Cached full-document markdown keyed by document id, revision, and URL.
+///
+/// Hits require all three keys so SPA `pushState` navigations without a revision bump still
+/// force re-extraction. Pagination checkpoints enable efficient char-offset slicing.
 #[derive(Debug, Clone)]
 pub(crate) struct MarkdownCacheEntry {
     pub document_id: String,
@@ -102,9 +107,12 @@ impl MarkdownCacheEntry {
     }
 }
 
+/// Scope summary retained with a snapshot cache entry for delta and locality decisions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SnapshotCacheScope {
+    /// Snapshot mode string used when the entry was produced (for example `viewport`).
     pub mode: String,
+    /// Fallback mode if locality degraded during capture.
     pub fallback_mode: Option<String>,
     pub viewport_biased: bool,
     pub returned_node_count: usize,
@@ -112,6 +120,10 @@ pub(crate) struct SnapshotCacheScope {
     pub global_interactive_count: Option<usize>,
 }
 
+/// Revision-keyed snapshot base: YAML text, interactive nodes, and capture scope.
+///
+/// Lookup reuses a prior revision for the same `document_id` so delta snapshots can compare
+/// against a stable base; a different document identity evicts the entry on read.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SnapshotCacheEntry {
     pub document: DocumentMetadata,
@@ -120,10 +132,16 @@ pub(crate) struct SnapshotCacheEntry {
     pub scope: SnapshotCacheScope,
 }
 
+/// Managed PNG artifact written under the session-private screenshot root.
+///
+/// Files are mode `0o600` on Unix, retained up to a small ring limit, and removed on session
+/// close. `uri` is a `file://` URL suitable for tool responses.
 #[derive(Debug, Clone)]
 pub struct ScreenshotArtifact {
     pub id: String,
+    /// Percent-encoded `file://` URI pointing at [`Self::path`].
     pub uri: String,
+    /// Absolute filesystem path of the stored PNG.
     pub path: PathBuf,
     pub format: ScreenshotFormat,
     pub mime_type: &'static str,

@@ -1,3 +1,7 @@
+//! MCP tool that navigates browser history backward and returns a document envelope.
+//!
+//! Landings on non-web schemes require `allow_unsafe`; the DOM cache is invalidated after success.
+
 use crate::error::{BrowserError, Result};
 use crate::tools::{
     DocumentEnvelopeOptions, Tool, ToolContext, ToolResult, build_document_envelope,
@@ -6,14 +10,14 @@ use crate::tools::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// Parameters for the go_back tool
+/// History-back options; set allow_unsafe when the prior entry may use a non-web scheme.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct GoBackParams {
     #[serde(default)]
     pub allow_unsafe: bool,
 }
 
-/// Tool for navigating back in browser history
+/// Steps back in session history and returns a minimal document envelope.
 #[derive(Default)]
 pub struct GoBackTool;
 

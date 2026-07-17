@@ -17,34 +17,47 @@ use crate::dom::{DocumentMetadata, SnapshotNode};
 )]
 #[serde(rename_all = "snake_case")]
 pub enum SnapshotMode {
+    /// Prefer interactive nodes near the current viewport (default locality bias).
     #[default]
     Viewport,
+    /// Diff against the session's revision-keyed snapshot cache base.
     Delta,
+    /// Return the full accessibility tree without viewport locality filtering.
     Full,
 }
 
 /// Combined document metadata with optional snapshot YAML, node list, and scope summary.
+///
+/// Primary read envelope for snapshot tools: metadata always present; snapshot/nodes/scope
+/// fill in when the caller requested a rendered tree rather than metadata-only.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct DocumentEnvelope {
     pub document: DocumentMetadata,
+    /// Optional focused target when the snapshot was locality-biased around a handle.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target: Option<TargetEnvelope>,
+    /// YAML accessibility tree when a snapshot was requested.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub snapshot: Option<String>,
+    /// Interactive nodes with cursors corresponding to the snapshot.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub nodes: Vec<SnapshotNode>,
+    /// How the snapshot was scoped (mode, viewport bias, frame failures).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scope: Option<SnapshotScope>,
+    /// Total interactive count in the document when known (may exceed returned nodes).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub global_interactive_count: Option<usize>,
 }
 
+/// Lightweight tool payload that returns only document identity after a read or navigation.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct DocumentResult {
     pub document: DocumentMetadata,
 }
 
 impl DocumentResult {
+    /// Wrap document metadata for tools that do not return snapshot or target envelopes.
     pub fn new(document: DocumentMetadata) -> Self {
         Self { document }
     }
@@ -56,14 +69,17 @@ impl From<DocumentEnvelope> for DocumentResult {
     }
 }
 
+/// Document metadata plus the action name that produced the post-mutation state.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct DocumentActionResult {
     #[serde(flatten)]
     pub document_result: DocumentResult,
+    /// Tool action label (for example `navigate` or `click`) for agent transcripts.
     pub action: String,
 }
 
 impl DocumentActionResult {
+    /// Build a post-action document result with a stable action label.
     pub fn new(action: impl Into<String>, document: DocumentMetadata) -> Self {
         Self {
             document_result: DocumentResult::new(document),
@@ -72,13 +88,20 @@ impl DocumentActionResult {
     }
 }
 
+/// Mutation result that includes target envelopes before/after and resolution status.
+///
+/// Used by click/input/hover/select tools so agents can see whether the interactive handle
+/// remained valid after the action and what the target looked like at each phase.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct TargetedActionResult {
     #[serde(flatten)]
     pub document_action_result: DocumentActionResult,
+    /// Target snapshot resolved before the mutation ran.
     pub target_before: TargetEnvelope,
+    /// Target snapshot after mutation when the handle still resolves.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_after: Option<TargetEnvelope>,
+    /// Whether the target stayed valid, drifted, or was lost after the action.
     pub target_status: TargetStatus,
 }
 

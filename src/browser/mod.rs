@@ -41,6 +41,9 @@ pub fn connect(endpoint: &str) -> Result<BrowserSession> {
     BrowserSession::connect(ConnectionOptions::new(endpoint))
 }
 
+/// True when a launch/connect failure looks environment-specific (missing Chrome, ports, sandbox).
+///
+/// Integration tests use this to skip rather than fail hard when the host cannot run Chrome.
 #[cfg(test)]
 pub(super) fn launch_error_is_environmental(err: &crate::error::BrowserError) -> bool {
     let message = match err {

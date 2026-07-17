@@ -1,9 +1,15 @@
+//! Operator MCP tool that evaluates arbitrary JavaScript in the active page.
+//!
+//! Registered only on full server sessions; requires `confirm_unsafe` so agents
+//! cannot run unconstrained scripts by accident. Prefer `inspect_node` when it suffices.
+
 use crate::error::{BrowserError, Result};
 use crate::tools::{Tool, ToolContext, ToolResult};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// Script source plus promise-await and confirm_unsafe gates for operator evaluation.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct EvaluateParams {
     /// JavaScript code to execute
@@ -22,6 +28,7 @@ pub struct EvaluateParams {
 #[derive(Default)]
 pub struct EvaluateTool;
 
+/// Runtime value and CDP type metadata returned from an evaluate call.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct EvaluateOutput {
     pub result: Value,

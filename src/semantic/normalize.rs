@@ -80,6 +80,10 @@ pub struct RawSemanticNode {
     pub children: Vec<RawSemanticNode>,
 }
 
+/// Intermediate `<select>` option from capture or fixtures before budget clipping.
+///
+/// Normalized into [`SelectOption`] with per-field string budgets and
+/// [`MAX_SEMANTIC_SELECT_OPTIONS`](crate::semantic::MAX_SEMANTIC_SELECT_OPTIONS).
 #[derive(Debug, Clone, Deserialize)]
 pub struct RawSelectOption {
     #[serde(default)]

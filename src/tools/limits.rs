@@ -2,26 +2,44 @@
 
 use crate::error::{BrowserError, Result};
 
+/// Upper bound for `wait.timeout_ms` (two minutes).
 pub(crate) const MAX_WAIT_TIMEOUT_MS: u64 = 120_000;
 
+/// Per-axis CSS pixel cap for screenshot capture regions.
 pub(crate) const SCREENSHOT_MAX_CSS_DIMENSION: f64 = 32_768.0;
+/// CSS pixel area cap (`width * height`) for screenshot capture regions.
 pub(crate) const SCREENSHOT_MAX_CSS_AREA: f64 = 50_000_000.0;
+/// Encoded PNG size budget returned to the agent.
 pub(crate) const SCREENSHOT_MAX_PNG_BYTES: usize = 64 * 1024 * 1024;
 
+/// Maximum actionable nodes retained during DOM extraction.
 pub(crate) const MAX_DOM_NODES: usize = 10_000;
+/// Maximum DOM tree depth during extraction.
 pub(crate) const MAX_DOM_DEPTH: usize = 64;
+/// Maximum same-origin frames expanded during extraction.
 pub(crate) const MAX_DOM_FRAMES: usize = 50;
+/// Cap on individual DOM/string fields (names, URLs, excerpts, etc.).
 pub(crate) const MAX_DOM_STRING_CHARS: usize = 4_096;
+/// Cap on collection sizes emitted from DOM extraction paths.
 pub(crate) const MAX_DOM_COLLECTION_ITEMS: usize = 50_000;
+/// Combined snapshot text + serialized nodes byte budget.
 pub(crate) const MAX_SNAPSHOT_OUTPUT_BYTES: usize = 1_000_000;
+/// Character budget for extract tool payload bodies.
 pub(crate) const MAX_EXTRACT_CHARS: usize = 1_000_000;
+/// Maximum links returned by `read_links`.
 pub(crate) const MAX_READ_LINKS_COUNT: usize = 2_000;
+/// Per-field character cap for link title/href-like strings.
 pub(crate) const MAX_READ_LINK_FIELD_CHARS: usize = 2_048;
+/// Character budget for Readability HTML (and related markdown text) inputs.
 pub(crate) const MAX_MARKDOWN_HTML_CHARS: usize = 1_000_000;
+/// Maximum markdown characters per pagination page.
 pub(crate) const MAX_MARKDOWN_PAGE_SIZE: usize = 200_000;
+/// Compact-field truncation budget for `inspect_node` string fields.
 pub(crate) const MAX_INSPECT_COMPACT_CHARS: usize = 2_000;
+/// Maximum CSS classes retained on an inspect identity payload.
 pub(crate) const MAX_INSPECT_CLASSES: usize = 64;
 
+/// Reject wait timeouts above [`MAX_WAIT_TIMEOUT_MS`].
 pub(crate) fn validate_wait_timeout(timeout_ms: u64) -> Result<()> {
     if timeout_ms > MAX_WAIT_TIMEOUT_MS {
         return Err(BrowserError::InvalidArgument(format!(
@@ -32,6 +50,7 @@ pub(crate) fn validate_wait_timeout(timeout_ms: u64) -> Result<()> {
     Ok(())
 }
 
+/// Enforce per-axis and area CSS pixel budgets for a screenshot source region.
 pub(crate) fn validate_screenshot_css_size(source: &str, width: f64, height: f64) -> Result<()> {
     if width > SCREENSHOT_MAX_CSS_DIMENSION {
         return Err(BrowserError::resource_limit_exceeded(
@@ -70,6 +89,7 @@ pub(crate) fn validate_screenshot_css_size(source: &str, width: f64, height: f64
     Ok(())
 }
 
+/// Reject PNG payloads larger than [`SCREENSHOT_MAX_PNG_BYTES`].
 pub(crate) fn validate_screenshot_png_bytes(byte_count: usize) -> Result<()> {
     if byte_count > SCREENSHOT_MAX_PNG_BYTES {
         return Err(BrowserError::resource_limit_exceeded(
@@ -85,6 +105,7 @@ pub(crate) fn validate_screenshot_png_bytes(byte_count: usize) -> Result<()> {
     Ok(())
 }
 
+/// Reject snapshot envelopes larger than [`MAX_SNAPSHOT_OUTPUT_BYTES`].
 pub(crate) fn validate_snapshot_output_bytes(byte_count: usize) -> Result<()> {
     if byte_count > MAX_SNAPSHOT_OUTPUT_BYTES {
         return Err(BrowserError::resource_limit_exceeded(
@@ -100,6 +121,7 @@ pub(crate) fn validate_snapshot_output_bytes(byte_count: usize) -> Result<()> {
     Ok(())
 }
 
+/// Reject extract payloads larger than [`MAX_EXTRACT_CHARS`] (format is for the error text only).
 pub(crate) fn validate_extract_chars(char_count: usize, format: &str) -> Result<()> {
     if char_count > MAX_EXTRACT_CHARS {
         return Err(BrowserError::resource_limit_exceeded(
@@ -115,6 +137,7 @@ pub(crate) fn validate_extract_chars(char_count: usize, format: &str) -> Result<
     Ok(())
 }
 
+/// Reject markdown HTML inputs larger than [`MAX_MARKDOWN_HTML_CHARS`].
 pub(crate) fn validate_markdown_html_chars(char_count: usize) -> Result<()> {
     if char_count > MAX_MARKDOWN_HTML_CHARS {
         return Err(BrowserError::resource_limit_exceeded(

@@ -1,3 +1,8 @@
+//! MCP tool that types text into an editable target after actionability succeeds.
+//!
+//! Optionally clears existing content first; the target is a selector or
+//! revision-scoped cursor from snapshot/inspect.
+
 use crate::browser::commands::{
     BrowserCommand, BrowserCommandResult, InputInteractionRequest, InteractionCommand,
     InteractionCommandResult, TargetedInteractionRequest,
@@ -30,6 +35,7 @@ const INPUT_JS: &str = include_str!("input.js");
 static INPUT_SHELL: OnceLock<crate::tools::browser_kernel::BrowserKernelTemplateShell> =
     OnceLock::new();
 
+/// Text, optional clear flag, and selector/cursor target for editable input.
 #[derive(Debug, Clone, Serialize)]
 pub struct InputParams {
     /// CSS selector (use either this or index, not both)
@@ -105,6 +111,7 @@ impl JsonSchema for InputParams {
 #[derive(Default)]
 pub struct InputTool;
 
+/// Targeted action result echoing the text typed and whether clear was requested.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct InputOutput {
     #[serde(flatten)]

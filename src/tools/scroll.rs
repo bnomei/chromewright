@@ -1,3 +1,8 @@
+//! MCP tool that scrolls the page by a pixel amount or one viewport height.
+//!
+//! Returns post-scroll viewport metrics so agents can avoid a full snapshot for
+//! simple rereads.
+
 use crate::error::{BrowserError, Result};
 use crate::tools::core::structured_tool_failure;
 use crate::tools::{
@@ -8,7 +13,7 @@ use schemars::JsonSchema;
 use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
 
-/// Parameters for the scroll tool
+/// Optional pixel delta; omit to scroll by one viewport height.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ScrollParams {
     /// Amount to scroll in pixels (positive for down, negative for up).
@@ -17,12 +22,13 @@ pub struct ScrollParams {
     pub amount: Option<i32>,
 }
 
-/// Tool for scrolling the page
+/// Scrolls the active document and reports resulting viewport position.
 #[derive(Default)]
 pub struct ScrollTool;
 
 const SCROLL_JS: &str = include_str!("scroll.js");
 
+/// Scroll position and edge flags after a scroll action.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct ViewportAfter {
     pub scroll_y: i64,
@@ -30,6 +36,7 @@ pub struct ViewportAfter {
     pub is_at_bottom: bool,
 }
 
+/// Document action result with scrolled delta and post-scroll viewport metrics.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ScrollOutput {
     #[serde(flatten)]

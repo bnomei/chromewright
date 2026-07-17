@@ -117,7 +117,11 @@ fn with_metadata(
     result.with_meta(Some(Meta(metadata.into_iter().collect())))
 }
 
-/// Maps an internal `ToolResult` into rmcp structured success or error content.
+/// Maps an internal `ToolResult` into an rmcp `CallToolResult` envelope.
+///
+/// Success and tool-local failure both become `Ok(CallToolResult)` so MCP clients
+/// always receive structured content (`code`, `error`, optional `document` /
+/// `target` / `recovery`). Infrastructure faults use [`mcp_internal_error`] instead.
 pub(crate) fn convert_result(result: InternalToolResult) -> Result<CallToolResult, McpError> {
     let InternalToolResult {
         success,
@@ -152,6 +156,10 @@ fn convert_tool_outcome(
     convert_result(result)
 }
 
+/// Map infrastructure or join failures to an MCP internal error (not a tool-local result).
+///
+/// Tool-local failures stay in structured `CallToolResult` via [`convert_result`].
+/// Use this for browser infra errors, blocking-task panics, and other non-tool faults.
 pub(crate) fn mcp_internal_error(error: impl std::fmt::Display) -> McpError {
     McpError::internal_error(error.to_string(), None)
 }

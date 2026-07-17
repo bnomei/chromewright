@@ -1,16 +1,19 @@
+//! MCP tool that lists open tabs with stable `tab_id` values for switch/close flows.
+
 use crate::error::Result;
 use crate::tools::{TabSummary, Tool, ToolContext, ToolResult};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// Parameters for the tab_list tool (no parameters needed)
+/// Empty params; tab listing has no filters.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct TabListParams {}
 
-/// Tool for listing all browser tabs
+/// Enumerates session tabs and highlights the active tab for agent routing.
 #[derive(Default)]
 pub struct TabListTool;
 
+/// Ordered tab summaries with active tab, count, and human-readable summary text.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct TabListOutput {
     pub tabs: Vec<TabSummary>,

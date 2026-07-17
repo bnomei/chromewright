@@ -1,3 +1,7 @@
+//! MCP tool that activates a tab by stable `tab_id` and returns a document envelope.
+//!
+//! Invalidates the DOM cache so subsequent tools re-read the newly active document.
+
 use crate::error::Result;
 use crate::tools::core::structured_tool_failure;
 use crate::tools::{
@@ -10,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::borrow::Cow;
 
-/// Parameters for the switch_tab tool
+/// Stable `tab_id` (preferred) or legacy index used to activate another tab.
 #[derive(Debug, Clone, Serialize)]
 pub struct SwitchTabParams {
     /// Tab index to switch to
@@ -57,10 +61,11 @@ impl JsonSchema for SwitchTabParams {
     }
 }
 
-/// Tool for switching to a specific tab
+/// Activates a tab by stable id and returns the resulting document envelope.
 #[derive(Default)]
 pub struct SwitchTabTool;
 
+/// Selected and active tab summaries after a successful switch.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SwitchTabOutput {
     #[serde(flatten)]

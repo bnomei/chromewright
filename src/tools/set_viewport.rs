@@ -1,3 +1,7 @@
+//! MCP tool that applies or resets CDP viewport emulation for the active or named tab.
+//!
+//! Large-canvas dimensions need `allow_large_viewport`; reset clears emulation without size fields.
+
 use crate::browser::backend::VIEWPORT_LARGE_DIMENSION_MAX;
 use crate::browser::{
     ViewportEmulation, ViewportEmulationRequest, ViewportMetrics, ViewportOperationResult,
@@ -9,6 +13,7 @@ use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 
+/// Viewport dimensions, device flags, optional tab_id, or reset request for CDP emulation.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct SetViewportParams {
@@ -96,6 +101,7 @@ impl JsonSchema for SetViewportParams {
 #[derive(Default)]
 pub struct SetViewportTool;
 
+/// Applied emulation (or reset) with post-change viewport metrics for the target tab.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SetViewportOutput {
     #[serde(flatten)]

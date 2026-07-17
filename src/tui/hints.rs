@@ -7,10 +7,12 @@ use std::collections::HashMap;
 /// Hint alphabet for two-key labels (home-row friendly, deterministic).
 const HINT_CHARS: &[u8] = b"asdfgqwertzxcvb";
 
-/// One assigned hint over a visible link.
+/// One assigned two-key hint over a viewport-visible link.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinkHint {
+    /// Deterministic two-character label (e.g. `aa`, `as`).
     pub label: String,
+    /// Exact `semantic_ref` of the link to follow or open in a new tab.
     pub semantic_ref: SemanticRef,
 }
 
@@ -73,7 +75,7 @@ pub fn assign_hints(
         .collect()
 }
 
-/// Resolve a typed hint buffer against assigned hints.
+/// Resolve a typed hint buffer against assigned hints (fail closed on ambiguity).
 pub fn match_hint<'a>(hints: &'a [LinkHint], buffer: &str) -> HintMatch<'a> {
     if buffer.is_empty() {
         return HintMatch::Partial;
@@ -92,10 +94,14 @@ pub fn match_hint<'a>(hints: &'a [LinkHint], buffer: &str) -> HintMatch<'a> {
     HintMatch::None
 }
 
+/// Outcome of matching the in-progress hint buffer to assigned link labels.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HintMatch<'a> {
+    /// Exactly one label matches; carry its `semantic_ref` for follow/open.
     Exact(&'a SemanticRef),
+    /// Buffer is a proper prefix of at least one label (keep collecting keys).
     Partial,
+    /// No label matches or is a prefix of the buffer (reject).
     None,
 }
 

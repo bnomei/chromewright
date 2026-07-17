@@ -17,6 +17,7 @@ use crate::tools::{
 };
 use std::time::{Duration, Instant};
 
+/// Run a wait condition: navigation settled, revision change, or target actionability/text/value.
 pub(crate) fn execute_wait(params: WaitParams, context: &mut ToolContext) -> Result<ToolResult> {
     validate_wait_timeout(params.timeout_ms)?;
     let start = Instant::now();
@@ -174,6 +175,7 @@ pub(crate) fn execute_wait(params: WaitParams, context: &mut ToolContext) -> Res
     }
 }
 
+/// Actionability predicates required by a target-scoped wait condition (empty for document waits).
 pub(crate) fn wait_condition_predicates(
     condition: &WaitCondition,
 ) -> &'static [ActionabilityPredicate] {
@@ -198,6 +200,7 @@ pub(crate) fn wait_condition_predicates(
     }
 }
 
+/// Enforce wait-parameter contracts: target allowed/required, text/value required for match modes.
 pub(crate) fn validate_wait_condition(
     condition: &WaitCondition,
     has_target: bool,
@@ -237,6 +240,7 @@ pub(crate) fn validate_wait_condition(
     }
 }
 
+/// Wire-format / error-message name for a wait condition.
 pub(crate) fn condition_name(condition: &WaitCondition) -> &'static str {
     match condition {
         WaitCondition::NavigationSettled => "navigation_settled",
@@ -253,6 +257,7 @@ pub(crate) fn condition_name(condition: &WaitCondition) -> &'static str {
     }
 }
 
+/// Whether the condition should poll via interaction scroll-into-view rather than pure probes.
 pub(crate) fn wait_condition_uses_interaction_scroll(condition: &WaitCondition) -> bool {
     matches!(
         condition,
@@ -260,6 +265,7 @@ pub(crate) fn wait_condition_uses_interaction_scroll(condition: &WaitCondition) 
     )
 }
 
+/// Single-tick actionability probe for the predicates implied by `condition`.
 pub(crate) fn evaluate_wait_probe(
     condition: &WaitCondition,
     session: &crate::browser::BrowserSession,
@@ -280,6 +286,7 @@ pub(crate) fn evaluate_wait_probe(
     )
 }
 
+/// True when every predicate in the wait set reports success on the probe.
 pub(crate) fn wait_condition_matches(
     _condition: &WaitCondition,
     predicates: &[ActionabilityPredicate],

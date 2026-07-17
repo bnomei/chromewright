@@ -1,17 +1,21 @@
+//! MCP tool that dispatches a keyboard key and reports post-press focus hints.
+//!
+//! Prefer `focus_after` over a full snapshot when only focus movement matters.
+
 use crate::dom::{AriaChild, AriaNode, Cursor, DomTree};
 use crate::error::{BrowserError, Result};
 use crate::tools::{Tool, ToolContext, ToolResult, core::DocumentActionResult};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// Parameters for the press_key tool
+/// Key name to dispatch on the focused page (for example Enter, Tab, Escape).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PressKeyParams {
     /// Name of the key to press (e.g., "Enter", "Tab", "Escape", "ArrowDown", "F1", etc.)
     pub key: String,
 }
 
-/// Tool for pressing keyboard keys
+/// Presses a keyboard key and returns document plus focus-after hints.
 #[derive(Default)]
 pub struct PressKeyTool;
 
@@ -164,6 +168,7 @@ const FOCUS_AFTER_JS: &str = r#"
 })()
 "#;
 
+/// Where focus landed after the key press: a revision-scoped cursor or a compact ARIA summary.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum FocusAfter {
@@ -185,6 +190,7 @@ struct FocusSummary {
     name: Option<String>,
 }
 
+/// Document action result with the pressed key and optional focus-after hint.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PressKeyOutput {
     #[serde(flatten)]

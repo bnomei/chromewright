@@ -1,3 +1,7 @@
+//! MCP tool that moves the pointer over a target after actionability succeeds.
+//!
+//! Used to reveal hover-only UI before a follow-up snapshot or click.
+
 use crate::browser::commands::{
     BrowserCommand, BrowserCommandResult, InteractionCommand, InteractionCommandResult,
     TargetedInteractionRequest,
@@ -29,7 +33,8 @@ const HOVER_JS: &str = include_str!("hover.js");
 #[cfg(test)]
 static HOVER_SHELL: OnceLock<crate::tools::browser_kernel::BrowserKernelTemplateShell> =
     OnceLock::new();
-/// Parameters for the hover tool
+
+/// Selector or cursor target for a pointer hover after actionability succeeds.
 #[derive(Debug, Clone, Serialize)]
 pub struct HoverParams {
     /// CSS selector (use either this or index, not both)
@@ -87,10 +92,11 @@ impl JsonSchema for HoverParams {
     }
 }
 
-/// Tool for hovering over elements
+/// Hovers a resolved page element after actionability checks succeed.
 #[derive(Default)]
 pub struct HoverTool;
 
+/// Lightweight identity of the element that received the hover.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct HoverElement {
     pub tag_name: String,
@@ -98,6 +104,7 @@ pub struct HoverElement {
     pub class_name: String,
 }
 
+/// Targeted action result plus the hovered element's identity.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct HoverOutput {
     #[serde(flatten)]

@@ -18,12 +18,14 @@ use rmcp::transport::streamable_http_server::{
 #[cfg(feature = "tui")]
 use chromewright::{BrowserSession, TuiOptions, run_tui};
 
+/// How the process obtains a browser: local launch or DevTools attach.
 #[derive(Debug, Clone)]
 enum BrowserMode {
     Launch(LaunchOptions),
     Connect(ConnectionOptions),
 }
 
+/// Optional transport subcommand; default (no subcommand) is MCP over stdio.
 #[derive(Debug, Clone, Subcommand)]
 enum Command {
     /// Serve streamable HTTP on loopback for shared local MCP sessions.
@@ -46,6 +48,10 @@ enum Command {
     },
 }
 
+/// Top-level CLI: attach/launch browser flags plus optional `serve` or `tui`.
+///
+/// Without a subcommand the process speaks MCP over stdio. Launch flags start a
+/// local browser; otherwise defaults attach to `http://127.0.0.1:9222`.
 #[derive(Debug, Parser)]
 #[command(name = "chromewright")]
 #[command(version)]

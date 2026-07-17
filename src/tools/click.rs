@@ -1,3 +1,8 @@
+//! MCP tool that activates a page element after actionability checks succeed.
+//!
+//! Resolves a selector or revision-scoped cursor, waits for actionability, then
+//! performs the click and returns a targeted action result for the agent loop.
+
 use crate::browser::commands::{
     BrowserCommand, BrowserCommandResult, InteractionCommand, InteractionCommandResult,
     TargetedInteractionRequest,
@@ -30,7 +35,7 @@ const CLICK_JS: &str = include_str!("click.js");
 static CLICK_SHELL: OnceLock<crate::tools::browser_kernel::BrowserKernelTemplateShell> =
     OnceLock::new();
 
-/// Parameters for the click tool
+/// Selector or cursor target for a single activation after actionability succeeds.
 #[derive(Debug, Clone, Serialize)]
 pub struct ClickParams {
     /// CSS selector (use either this or index, not both)
@@ -88,7 +93,7 @@ impl JsonSchema for ClickParams {
     }
 }
 
-/// Tool for clicking elements
+/// Activates a resolved page element after actionability checks succeed.
 #[derive(Default)]
 pub struct ClickTool;
 

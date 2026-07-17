@@ -9,9 +9,10 @@ use std::time::Duration;
 
 const DEVTOOLS_VERSION_PATH: &str = "/json/version";
 const DEVTOOLS_VERSION_TIMEOUT: Duration = Duration::from_secs(5);
+/// Idle timeout applied to launched and attached headless_chrome browser sessions (1 hour).
 pub(crate) const CHROME_BROWSER_IDLE_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 
-/// Options for launching a new browser instance
+/// Launch-mode browser process settings: headless, profile, window size, and DevTools port.
 #[derive(Debug, Clone)]
 pub struct LaunchOptions {
     /// Whether to run browser in headless mode (default: true)
@@ -95,11 +96,11 @@ impl LaunchOptions {
     }
 }
 
-/// Options for connecting to an existing browser instance
+/// Attach-mode endpoint for an already-running Chrome or Chromium DevTools instance.
 #[derive(Debug, Clone)]
 pub struct ConnectionOptions {
-    /// Chrome DevTools browser WebSocket URL, or a stable DevTools HTTP endpoint
-    /// such as `http://127.0.0.1:9222`.
+    /// Browser-scoped WebSocket URL, or a stable DevTools HTTP origin such as
+    /// `http://127.0.0.1:9222` (resolved to a WebSocket before connect).
     pub ws_url: String,
 }
 

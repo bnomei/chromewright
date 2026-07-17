@@ -4,9 +4,12 @@ use super::BrowserSession;
 use crate::error::{BrowserError, Result};
 use std::time::{Duration, Instant};
 
+/// Counters recorded while waiting for history navigation to settle on a ready document.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct HistoryNavigationMetrics {
+    /// CDP evaluations issued during settle polling (document metadata reads).
     pub browser_evaluations: u64,
+    /// Loop iterations spent waiting for URL change and `readyState === complete`.
     pub poll_iterations: u64,
 }
 

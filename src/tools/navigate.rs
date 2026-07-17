@@ -1,3 +1,7 @@
+//! MCP tool that opens a URL in the active tab and returns a document envelope.
+//!
+//! Non-web schemes require `allow_unsafe`; optional load wait precedes envelope assembly.
+
 use crate::error::Result;
 use crate::tools::utils::validate_navigation_url;
 use crate::tools::{
@@ -7,7 +11,7 @@ use crate::tools::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// Parameters for the navigate tool
+/// URL, load-wait flag, and scheme safety override for active-tab navigation.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct NavigateParams {
     /// URL to navigate to
@@ -26,10 +30,11 @@ fn default_wait() -> bool {
     true
 }
 
-/// Tool for navigating to a URL
+/// Navigates the active tab to a validated URL and invalidates the DOM cache.
 #[derive(Default)]
 pub struct NavigateTool;
 
+/// Document action result with the normalized URL that was opened.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct NavigateOutput {
     #[serde(flatten)]

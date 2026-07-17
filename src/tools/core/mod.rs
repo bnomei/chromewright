@@ -30,8 +30,13 @@ use self::snapshot_projection::{
     SnapshotProjectionInput, project_snapshot, snapshot_cache_entry_from_projection,
 };
 
+/// Metadata key under which [`OperationMetrics`] are attached to a finished [`ToolResult`].
 pub(crate) const OPERATION_METRICS_METADATA_KEY: &str = "operation_metrics";
 
+/// Per-tool-call counters for browser evaluations, polls, DOM work, and output size.
+///
+/// Attached to successful and structured-failure results via [`ToolContext::finish`] so agents
+/// can reason about cost without separate telemetry plumbing.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub(crate) struct OperationMetrics {
     pub browser_evaluations: u64,
@@ -61,6 +66,7 @@ impl OperationMetrics {
     }
 }
 
+/// Saturating microsecond conversion used when recording operation metrics.
 pub(crate) fn duration_micros(duration: std::time::Duration) -> u64 {
     duration.as_micros().min(u128::from(u64::MAX)) as u64
 }
@@ -76,7 +82,7 @@ pub struct ToolContext<'a> {
 }
 
 impl<'a> ToolContext<'a> {
-    /// Create a new tool context
+    /// Bind a session for one tool invocation with an empty DOM cache and zeroed metrics.
     pub fn new(session: &'a BrowserSession) -> Self {
         Self {
             session,
@@ -85,7 +91,7 @@ impl<'a> ToolContext<'a> {
         }
     }
 
-    /// Create a context with a pre-extracted DOM tree
+    /// Bind a session with a pre-extracted DOM tree (skips the first extraction).
     pub fn with_dom(session: &'a BrowserSession, dom_tree: DomTree) -> Self {
         Self {
             session,
@@ -94,12 +100,12 @@ impl<'a> ToolContext<'a> {
         }
     }
 
-    /// Invalidate the cached DOM tree after a mutation.
+    /// Drop the cached DOM after a page mutation so the next access re-extracts.
     pub fn invalidate_dom(&mut self) {
         self.dom_tree = None;
     }
 
-    /// Get or extract the DOM tree
+    /// Return the cached DOM tree, extracting once from the session when missing.
     pub fn get_dom(&mut self) -> Result<&DomTree> {
         if self.dom_tree.is_none() {
             let started = Instant::now();
@@ -160,6 +166,7 @@ impl<'a> ToolContext<'a> {
     }
 }
 
+/// Controls which snapshot fields [`build_document_envelope`] materializes into a document envelope.
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct DocumentEnvelopeOptions {
     pub include_snapshot: bool,
@@ -168,6 +175,7 @@ pub(crate) struct DocumentEnvelopeOptions {
 }
 
 impl DocumentEnvelopeOptions {
+    /// Document metadata only—no snapshot text or node list.
     pub const fn minimal() -> Self {
         Self {
             include_snapshot: false,
@@ -176,11 +184,13 @@ impl DocumentEnvelopeOptions {
         }
     }
 
+    /// Full-document projection with snapshot text and nodes.
     #[cfg_attr(not(test), allow(dead_code))]
     pub const fn full() -> Self {
         Self::snapshot(SnapshotMode::Full)
     }
 
+    /// Snapshot text plus nodes using the given projection mode (viewport, delta, or full).
     pub const fn snapshot(snapshot_mode: SnapshotMode) -> Self {
         Self {
             include_snapshot: true,
@@ -190,6 +200,7 @@ impl DocumentEnvelopeOptions {
     }
 }
 
+/// Agent-facing tab identity for list and switch responses.
 #[derive(
     Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema, PartialEq, Eq,
 )]
@@ -202,6 +213,7 @@ pub struct TabSummary {
 }
 
 impl TabSummary {
+    /// Map a session tab descriptor into the public tab summary shape.
     pub fn from_browser_tab(index: usize, tab: &crate::browser::TabInfo) -> Self {
         Self {
             tab_id: tab.id.clone(),
@@ -213,6 +225,9 @@ impl TabSummary {
     }
 }
 
+/// Single resolved interaction target after exclusive selector / index / node_ref / cursor choice.
+///
+/// `method` may encode a selector rebound recovery path (see [`encode_selector_rebound_method`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ResolvedTarget {
     pub method: String,
@@ -223,6 +238,7 @@ pub(crate) struct ResolvedTarget {
 }
 
 impl ResolvedTarget {
+    /// Public target envelope, decoding selector-rebound markers into resolution status fields.
     pub fn to_target_envelope(&self) -> TargetEnvelope {
         let (method, resolution_status, recovered_from) = decode_target_method(&self.method);
         TargetEnvelope {
@@ -236,7 +252,7 @@ impl ResolvedTarget {
         }
     }
 
-    /// Return an index only for handle-like targets that need browser-side reconciliation.
+    /// Index for handle-like targets that need browser-side reconciliation; CSS-only targets omit it.
     pub(crate) fn browser_command_target_index(&self) -> Option<usize> {
         if self.method == "css" {
             return None;
@@ -249,15 +265,20 @@ impl ResolvedTarget {
     }
 }
 
+/// Outcome of exclusive target resolution: a live target or a structured tool failure.
 #[derive(Debug)]
 pub(crate) enum TargetResolution {
     Resolved(ResolvedTarget),
+    /// Soft failure already shaped as a tool result (invalid target, stale handle, etc.).
     Failure(ToolResult),
 }
 
+/// Whether a stale cursor may recover via selector rebound against the current DOM revision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StaleCursorPolicy {
+    /// Re-resolve using the cursor's CSS selector when document_id/revision no longer match.
     AllowRebind,
+    /// Fail closed with a stale_node_ref structured error.
     DenyRebind,
 }
 
@@ -265,6 +286,7 @@ fn default_target_resolution_status() -> String {
     "exact".to_string()
 }
 
+/// Which handle family triggered selector rebound recovery after a revision mismatch.
 #[derive(
     Debug, Clone, Copy, serde::Serialize, serde::Deserialize, schemars::JsonSchema, PartialEq, Eq,
 )]
@@ -293,6 +315,10 @@ impl TargetRecoveredFrom {
 
 const TARGET_METHOD_SELECTOR_REBOUND_MARKER: &str = "::selector_rebound::";
 
+/// Embed selector-rebound recovery provenance into the internal target method string.
+///
+/// Decoded later by [`ResolvedTarget::to_target_envelope`] into `resolution_status` /
+/// `recovered_from` on the public target envelope.
 pub(crate) fn encode_selector_rebound_method(
     method: &str,
     recovered_from: TargetRecoveredFrom,
@@ -361,6 +387,11 @@ fn stale_node_ref_failure(
     )
 }
 
+/// Resolve exactly one of selector / index / node_ref / cursor against an optional DOM tree.
+///
+/// On revision mismatch for cursor handles, [`StaleCursorPolicy::AllowRebind`] attempts
+/// selector rebound; otherwise returns a structured stale-handle failure. Hard errors
+/// (missing DOM when required, unknown index) still surface as [`BrowserError`].
 pub(crate) fn resolve_target_with_cursor(
     tool: &str,
     selector: Option<String>,
@@ -512,6 +543,7 @@ pub(crate) fn resolve_target_with_cursor(
     }
 }
 
+/// First actionable cursor matching `selector` in the current DOM, if any.
 pub(crate) fn actionable_cursor_for_selector(dom: &DomTree, selector: &str) -> Option<Cursor> {
     dom.cursor_for_selector(selector)
 }
@@ -524,6 +556,9 @@ fn normalized_error_value(value: Value) -> Option<Value> {
     }
 }
 
+/// JSON error object with optional document, target, recovery hints, and details.
+///
+/// Empty objects and null optional fields are omitted so agents see a compact payload.
 pub(crate) fn structured_error_payload(
     code: impl Into<String>,
     error: impl Into<String>,
@@ -561,6 +596,7 @@ pub(crate) fn structured_error_payload(
     Value::Object(payload)
 }
 
+/// Soft tool failure carrying a structured error payload agents can branch on.
 pub(crate) fn structured_tool_failure(
     code: impl Into<String>,
     error: impl Into<String>,
@@ -598,6 +634,9 @@ fn attach_session_degraded_failure(details: PageTargetLostDetails) -> ToolResult
     )
 }
 
+/// Map recoverable [`BrowserError`] variants into structured tool failures.
+///
+/// Launch/connection/Chrome process failures remain hard errors for the session layer.
 pub(crate) fn tool_result_from_browser_error(
     error: BrowserError,
 ) -> std::result::Result<ToolResult, BrowserError> {
@@ -694,6 +733,7 @@ pub(crate) fn tool_result_from_browser_error(
     }
 }
 
+/// Attach operation metrics and convert recoverable browser errors into tool results.
 pub(crate) fn normalize_tool_outcome(
     outcome: Result<ToolResult>,
     context: &ToolContext<'_>,
@@ -712,6 +752,10 @@ fn live_viewport_metrics(context: &mut ToolContext<'_>) -> Result<ViewportMetric
     context.session.viewport_metrics(None)
 }
 
+/// Assemble a document envelope: live metadata, optional target, and optional snapshot projection.
+///
+/// When snapshot fields are requested, runs viewport / delta / full projection, enforces the
+/// snapshot byte budget, and may refresh the session snapshot cache for later delta baselines.
 pub(crate) fn build_document_envelope(
     context: &mut ToolContext,
     target: Option<&ResolvedTarget>,
@@ -872,6 +916,7 @@ impl<T: Tool> DynTool for T {
     }
 }
 
+/// Registry entry describing one MCP tool: schemas plus safety annotation hints.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolDescriptor {
     pub name: String,

@@ -61,10 +61,16 @@ pub struct BrowserSession {
     screenshot_artifact_root: tempfile::TempDir,
 }
 
+/// Whether this session launched a disposable browser or attached to an existing one.
+///
+/// Launch mode seeds managed tabs from the initial process; attach mode starts with an empty
+/// managed-tab set so pre-existing browser tabs are not closed as session-owned.
 #[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SessionOrigin {
+    /// Browser process was started by chromewright (`BrowserSession::launch`).
     Launched,
+    /// Connected to an existing DevTools endpoint (`BrowserSession::connect`).
     Connected,
 }
 
@@ -74,22 +80,28 @@ pub struct TabInfo {
     pub id: String,
     pub title: String,
     pub url: String,
+    /// Whether this tab is the session's active page target.
     pub active: bool,
 }
 
 /// Metadata returned when a tab is closed, including its index before removal.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ClosedTabSummary {
+    /// Zero-based index of the closed tab in the pre-close tab list.
     pub index: usize,
     pub id: String,
     pub title: String,
     pub url: String,
+    /// Active tab after close, when one remains.
     pub active_tab: Option<TabInfo>,
 }
 
+/// Counts from closing session-owned managed tabs during attach-aware teardown.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ManagedTabsCloseSummary {
+    /// Tabs successfully closed that were tracked as managed.
     pub closed_tabs: usize,
+    /// Managed ids skipped because the backend no longer listed them.
     pub skipped_tabs: usize,
 }
 
@@ -285,10 +297,12 @@ impl BrowserSession {
         self.backend.press_key(key)
     }
 
+    /// Navigate history back and wait for document settle; blocks unsafe URL schemes by default.
     pub fn go_back(&self) -> Result<()> {
         self.go_back_with_metrics(false).map(|_| ())
     }
 
+    /// Navigate history forward and wait for document settle; blocks unsafe URL schemes by default.
     pub fn go_forward(&self) -> Result<()> {
         self.go_forward_with_metrics(false).map(|_| ())
     }

@@ -66,7 +66,11 @@ impl SemanticDocument {
         Self::from_components(document, Vec::new())
     }
 
-    /// Resolve an opaque reference fail-closed against this document.
+    /// Resolve an opaque `semantic_ref` fail-closed against this document revision.
+    ///
+    /// Never retargets by text similarity. Wrong document, stale revision, unknown
+    /// identity, ambiguity, or a malformed token each yield a distinct
+    /// [`SemanticRefError`] without guessing a substitute component.
     pub fn resolve(
         &self,
         semantic_ref: &SemanticRef,
@@ -76,7 +80,7 @@ impl SemanticDocument {
             .ok_or(SemanticRefError::Unknown)
     }
 
-    /// Resolve a raw opaque token fail-closed against this document.
+    /// Resolve a raw opaque token fail-closed (same contract as [`Self::resolve`]).
     pub fn resolve_str(
         &self,
         token: &str,

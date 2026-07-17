@@ -258,6 +258,10 @@ fn truncate_boundary_fields(
     }
 }
 
+/// Resolve a node (allowing selector rebound), run the in-page inspect probe, and assemble output.
+///
+/// On revision drift after the probe, handle-like target fields may be downgraded to CSS-only
+/// so agents do not reuse unverified cursors.
 pub(crate) fn execute_inspect_node(
     params: InspectNodeParams,
     context: &mut ToolContext,

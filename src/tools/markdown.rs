@@ -1,3 +1,7 @@
+//! MCP tool that extracts paginated main-content Markdown via Readability.
+//!
+//! Reuses the session's revision-keyed markdown cache across pages of the same document.
+
 use crate::error::{BrowserError, Result};
 use crate::tools::limits::MAX_MARKDOWN_PAGE_SIZE;
 use crate::tools::{
@@ -9,7 +13,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(test)]
 pub(crate) use crate::tools::services::markdown::paginate_markdown;
 
-/// Parameters for getting markdown content with pagination support
+/// 1-based page index and character page size for main-content Markdown extraction.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct GetMarkdownParams {
     /// Page number to extract (1-based index, default: 1)
@@ -59,6 +63,7 @@ impl GetMarkdownParams {
 #[derive(Default)]
 pub struct GetMarkdownTool;
 
+/// Paginated Markdown page plus document metadata and Readability fields.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct GetMarkdownOutput {
     #[serde(flatten)]

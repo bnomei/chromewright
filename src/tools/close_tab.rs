@@ -1,10 +1,14 @@
+//! MCP tool that closes the active tab and reports the next active tab.
+//!
+//! Attach mode refuses unmanaged active tabs unless `confirm_destructive` is true.
+
 use crate::error::{BrowserError, Result};
 use crate::tools::core::structured_tool_failure;
 use crate::tools::{TabSummary, Tool, ToolContext, ToolResult};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// Parameters for the close_tab tool (no parameters needed)
+/// Active-tab close options; attach mode may require confirm_destructive for unmanaged tabs.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CloseTabParams {
     /// Allow closing an unmanaged active tab in connected sessions
@@ -12,10 +16,11 @@ pub struct CloseTabParams {
     pub confirm_destructive: bool,
 }
 
-/// Tool for closing the current active tab
+/// Closes the active managed tab (or unmanaged when confirmed) and promotes a successor.
 #[derive(Default)]
 pub struct CloseTabTool;
 
+/// Closed tab summary plus the tab that became active afterward.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CloseTabOutput {
     pub action: String,

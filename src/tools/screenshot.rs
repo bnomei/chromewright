@@ -1,3 +1,8 @@
+//! MCP tool that captures managed screenshot artifacts for viewport, page, element, or region.
+//!
+//! Element mode can reveal offscreen targets into the viewport before capture; artifacts
+//! live under the session-managed screenshot store.
+
 use crate::browser::backend::ScreenshotScale as BrowserScreenshotScale;
 use crate::browser::{
     ScreenshotClip as BrowserScreenshotClip, ScreenshotMode as BrowserCaptureMode,
@@ -23,6 +28,7 @@ use std::sync::OnceLock;
 const REVEAL_TARGET_TEMPLATE_JS: &str = include_str!("screenshot_reveal_target.js");
 static REVEAL_TARGET_SHELL: OnceLock<BrowserKernelTemplateShell> = OnceLock::new();
 
+/// Capture surface: current viewport, full page, element target, or explicit region.
 #[derive(
     Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq, PartialOrd, Ord,
 )]
@@ -35,6 +41,7 @@ pub enum ScreenshotMode {
     Region,
 }
 
+/// Pixel scale for the capture: device pixels or CSS pixels.
 #[derive(
     Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq, PartialOrd, Ord,
 )]
@@ -45,6 +52,7 @@ pub enum ScreenshotScale {
     Css,
 }
 
+/// CSS-space rectangle used when mode is `region`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct ScreenshotRegion {
     pub x: f64,
@@ -53,6 +61,7 @@ pub struct ScreenshotRegion {
     pub height: f64,
 }
 
+/// Clip actually applied to the capture, including coordinate space labeling.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct ScreenshotClip {
     pub coordinate_space: String,
@@ -62,6 +71,7 @@ pub struct ScreenshotClip {
     pub height: f64,
 }
 
+/// Mode, scale, optional tab, and element/region target for a managed screenshot.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ScreenshotParams {
@@ -85,6 +95,7 @@ pub struct ScreenshotParams {
 #[derive(Default)]
 pub struct ScreenshotTool;
 
+/// Artifact path/URI and capture metrics for a managed screenshot.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ScreenshotOutput {
     pub mode: ScreenshotMode,

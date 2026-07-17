@@ -146,10 +146,17 @@ fn render_command_script(
         .render(config)
 }
 
+/// In-page command compiled from browser-kernel templates and executed via CDP evaluation.
+///
+/// Probes are idempotent reads used for waits and selector identity; interactions mutate the
+/// page and always invalidate follow-up snapshot assumptions at the session layer.
 #[derive(Debug, Clone)]
 pub(crate) enum BrowserCommand {
+    /// Read-only actionability predicates for a selector (present, visible, enabled, …).
     ActionabilityProbe(ActionabilityProbeRequest),
+    /// Read-only check whether a selector matches zero, one, or many nodes across scopes.
     SelectorIdentityProbe(SelectorIdentityProbeRequest),
+    /// Click, input, hover, or select mutation against a targeted element.
     Interaction(InteractionCommand),
 }
 
@@ -212,6 +219,7 @@ impl BrowserCommand {
     }
 }
 
+/// Discriminated result of a [`BrowserCommand`] after in-page script execution.
 #[derive(Debug, Clone)]
 pub(crate) enum BrowserCommandResult {
     ActionabilityProbe(ActionabilityProbeResult),
@@ -219,26 +227,43 @@ pub(crate) enum BrowserCommandResult {
     Interaction(InteractionCommandResult),
 }
 
+/// In-page actionability probe: selector, optional index, and predicates to evaluate.
 #[derive(Debug, Clone)]
 pub(crate) struct ActionabilityProbeRequest {
+    /// CSS selector resolved across light DOM, shadow roots, and same-origin frames.
     pub selector: String,
+    /// Optional interactive-index disambiguation when multiple matches exist.
     pub target_index: Option<usize>,
+    /// Predicates to evaluate; omitted fields in the result stay `None`.
     pub predicates: Vec<ActionabilityPredicate>,
+    /// Expected substring for [`ActionabilityPredicate::TextContains`].
     pub expected_text: Option<String>,
+    /// Expected form value for [`ActionabilityPredicate::ValueEquals`].
     pub expected_value: Option<String>,
 }
 
+/// Named actionability checks aligned with Playwright-style wait preconditions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum ActionabilityPredicate {
+    /// At least one matching element exists in resolvable document scopes.
     Present,
+    /// Element has a non-zero layout box and is not `visibility: hidden`.
     Visible,
+    /// Element is not disabled for pointer/keyboard interaction.
     Enabled,
+    /// Element accepts text input (contenteditable or form control).
     Editable,
+    /// Layout geometry is stable across consecutive samples.
     Stable,
+    /// Element can receive pointer events (not fully blocked by ancestors).
     ReceivesEvents,
+    /// Any part of the element intersects the current viewport.
     InViewport,
+    /// Center point hit-tests back to the element (not covered by overlay).
     UnobscuredCenter,
+    /// Accessible or text content contains the expected substring.
     TextContains,
+    /// Form control value equals the expected string.
     ValueEquals,
 }
 
@@ -259,6 +284,7 @@ impl ActionabilityPredicate {
     }
 }
 
+/// Predicate outcomes from an actionability probe; optional fields track requested predicates only.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub(crate) struct ActionabilityProbeResult {
     pub present: bool,
@@ -271,18 +297,23 @@ pub(crate) struct ActionabilityProbeResult {
     pub unobscured_center: Option<bool>,
     pub text_contains: Option<bool>,
     pub value_equals: Option<bool>,
+    /// Nesting depth of the frame that resolved the target, when known.
     pub frame_depth: Option<usize>,
+    /// Extra hit-test and text diagnostics for failed waits.
     pub diagnostics: Option<ActionabilityDiagnostics>,
 }
 
+/// Supplemental hit-test and content details attached to a failed or partial probe.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub(crate) struct ActionabilityDiagnostics {
     pub pointer_events: Option<String>,
+    /// Element under the pointer at the target center, when hit-testing ran.
     pub hit_target: Option<ActionabilityElementSummary>,
     pub text_length: Option<usize>,
     pub has_value: Option<bool>,
 }
 
+/// Compact DOM identity summary used in actionability diagnostics.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub(crate) struct ActionabilityElementSummary {
     pub tag: String,
@@ -308,17 +339,21 @@ impl ActionabilityProbeResult {
     }
 }
 
+/// Request to count selector matches across light DOM, shadow roots, and same-origin frames.
 #[derive(Debug, Clone)]
 pub(crate) struct SelectorIdentityProbeRequest {
     pub selector: String,
 }
 
+/// Whether a selector is present and uniquely resolves to a single node.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct SelectorIdentityProbeResult {
     pub present: bool,
+    /// `true` only when exactly one match exists across resolvable scopes.
     pub unique: bool,
 }
 
+/// Mutation command that performs a user-facing interaction through browser-kernel scripts.
 #[derive(Debug, Clone)]
 pub(crate) enum InteractionCommand {
     Click(TargetedInteractionRequest),
@@ -389,9 +424,11 @@ fn render_interaction_script(
     render_command_script(shell_cache, template, config_placeholder, config)
 }
 
+/// Selector plus optional interactive index shared by click, hover, input, and select.
 #[derive(Debug, Clone)]
 pub(crate) struct TargetedInteractionRequest {
     pub selector: String,
+    /// Disambiguates among multiple matches when the interactive index is known.
     pub target_index: Option<usize>,
 }
 
@@ -404,19 +441,23 @@ impl TargetedInteractionRequest {
     }
 }
 
+/// Text input interaction, optionally clearing the control before typing.
 #[derive(Debug, Clone)]
 pub(crate) struct InputInteractionRequest {
     pub target: TargetedInteractionRequest,
     pub text: String,
+    /// When true, clear existing value before inserting `text`.
     pub clear: bool,
 }
 
+/// Select an option by value on a `<select>` or equivalent control.
 #[derive(Debug, Clone)]
 pub(crate) struct SelectInteractionRequest {
     pub target: TargetedInteractionRequest,
     pub value: String,
 }
 
+/// Outcome of a mutating interaction command after browser-kernel execution.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) enum InteractionCommandResult {
     Click(ActionCommandResult),
@@ -425,15 +466,18 @@ pub(crate) enum InteractionCommandResult {
     Select(SelectCommandResult),
 }
 
+/// Generic success/error payload shared by click-style actions.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct ActionCommandResult {
     pub success: bool,
+    /// Stable machine code when the script reports a known failure mode.
     #[serde(default)]
     pub code: Option<String>,
     #[serde(default)]
     pub error: Option<String>,
 }
 
+/// Input interaction result including the control value after typing when available.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct InputCommandResult {
     pub success: bool,
@@ -441,10 +485,12 @@ pub(crate) struct InputCommandResult {
     pub code: Option<String>,
     #[serde(default)]
     pub error: Option<String>,
+    /// Control value observed after the input script completes.
     #[serde(default)]
     pub value: Option<String>,
 }
 
+/// Hover result with optional DOM identity of the element under the pointer.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct HoverCommandResult {
     pub success: bool,
@@ -460,6 +506,7 @@ pub(crate) struct HoverCommandResult {
     pub class_name: Option<String>,
 }
 
+/// Select interaction result with the chosen option value and visible label.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct SelectCommandResult {
     pub success: bool,

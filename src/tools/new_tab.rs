@@ -1,3 +1,7 @@
+//! MCP tool that opens a URL in a new managed tab and activates it.
+//!
+//! Records managed-tab ownership for later close/session teardown; non-web schemes need `allow_unsafe`.
+
 use crate::error::{BrowserError, Result};
 use crate::tools::utils::validate_navigation_url;
 use crate::tools::{
@@ -7,7 +11,7 @@ use crate::tools::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// Parameters for the new_tab tool
+/// URL and scheme safety override for opening a new managed tab.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct NewTabParams {
     /// URL to open in the new tab
@@ -18,10 +22,11 @@ pub struct NewTabParams {
     pub allow_unsafe: bool,
 }
 
-/// Tool for opening a new tab
+/// Opens a managed tab, activates it, and returns tab summaries plus a document envelope.
 #[derive(Default)]
 pub struct NewTabTool;
 
+/// New and active tab summaries with the normalized URL that was opened.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct NewTabOutput {
     #[serde(flatten)]

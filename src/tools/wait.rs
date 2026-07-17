@@ -1,3 +1,7 @@
+//! MCP tool that polls document settle, revision change, or node actionability conditions.
+//!
+//! Node waits take a selector or cursor target; navigation and revision waits are document-scoped.
+
 use crate::dom::{Cursor, NodeRef};
 use crate::error::Result;
 use crate::tools::{
@@ -15,6 +19,7 @@ pub(crate) use crate::tools::services::wait::{
     wait_condition_uses_interaction_scroll,
 };
 
+/// Predicate the wait tool polls until it holds or the timeout elapses.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum WaitCondition {
@@ -31,6 +36,7 @@ pub enum WaitCondition {
     RevisionChanged,
 }
 
+/// Condition, optional selector/cursor target, and timeout for a wait poll loop.
 #[derive(Debug, Clone, Serialize)]
 pub struct WaitParams {
     /// CSS selector to wait for
@@ -309,6 +315,7 @@ fn default_timeout() -> u64 {
 #[derive(Default)]
 pub struct WaitTool;
 
+/// Elapsed wait result with optional before/after target envelopes and status.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WaitOutput {
     #[serde(flatten)]

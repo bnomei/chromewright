@@ -17,6 +17,10 @@ pub const MAX_SEMANTIC_SELECT_OPTIONS: usize = 256;
 /// Maximum total characters across all retained text fields in one document.
 pub const MAX_SEMANTIC_TOTAL_TEXT_CHARS: usize = 1_000_000;
 
+/// Fail closed when a single semantic string field exceeds [`MAX_SEMANTIC_STRING_CHARS`].
+///
+/// Used during normalization and document indexing so oversized labels, text,
+/// hrefs, and related fields never enter a `SemanticDocument`.
 pub(crate) fn validate_semantic_string(field: &str, value: &str) -> Result<()> {
     let char_count = value.chars().count();
     if char_count > MAX_SEMANTIC_STRING_CHARS {
@@ -32,6 +36,7 @@ pub(crate) fn validate_semantic_string(field: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
+/// Fail closed when the document tree has more than [`MAX_SEMANTIC_COMPONENTS`] nodes.
 pub(crate) fn validate_component_count(count: usize) -> Result<()> {
     if count > MAX_SEMANTIC_COMPONENTS {
         return Err(BrowserError::resource_limit_exceeded(
@@ -46,6 +51,7 @@ pub(crate) fn validate_component_count(count: usize) -> Result<()> {
     Ok(())
 }
 
+/// Fail closed when nesting exceeds [`MAX_SEMANTIC_DEPTH`].
 pub(crate) fn validate_depth(depth: usize) -> Result<()> {
     if depth > MAX_SEMANTIC_DEPTH {
         return Err(BrowserError::resource_limit_exceeded(
@@ -60,6 +66,7 @@ pub(crate) fn validate_depth(depth: usize) -> Result<()> {
     Ok(())
 }
 
+/// Fail closed when retained text across the document exceeds [`MAX_SEMANTIC_TOTAL_TEXT_CHARS`].
 pub(crate) fn validate_total_text_chars(total: usize) -> Result<()> {
     if total > MAX_SEMANTIC_TOTAL_TEXT_CHARS {
         return Err(BrowserError::resource_limit_exceeded(

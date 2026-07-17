@@ -24,14 +24,19 @@ const SCROLL_TARGET_INTO_VIEW_TEMPLATE_JS: &str = include_str!("../scroll_target
 static SCROLL_TARGET_INTO_VIEW_SHELL: OnceLock<
     crate::tools::browser_kernel::BrowserKernelTemplateShell,
 > = OnceLock::new();
+/// Default actionability poll budget used by click/input and similar interactions.
 pub(crate) const DEFAULT_ACTIONABILITY_TIMEOUT_MS: u64 = 5_000;
 const ACTIONABILITY_POLL_INTERVAL_MS: u64 = 50;
 
+/// Terminal state of an actionability poll loop.
 pub(crate) enum ActionabilityWaitState {
+    /// All requested predicates held true within the timeout.
     Ready,
+    /// Budget exhausted; last probe is retained for structured failure diagnostics.
     TimedOut(ActionabilityProbeResult),
 }
 
+/// Post-action document envelope pieces: refreshed revision plus target continuity status.
 pub(crate) struct InteractionHandoff {
     pub document: DocumentMetadata,
     pub target_before: TargetEnvelope,
@@ -39,6 +44,10 @@ pub(crate) struct InteractionHandoff {
     pub target_status: TargetStatus,
 }
 
+/// Resolve a click/input-style target, denying selector rebound on stale cursors.
+///
+/// Interaction tools fail closed on revision mismatch so agents re-snapshot rather than
+/// acting on an ambiguous rebound.
 pub(crate) fn resolve_interaction_target(
     tool: &str,
     selector: Option<String>,
@@ -59,6 +68,10 @@ pub(crate) fn resolve_interaction_target(
     )
 }
 
+/// Poll actionability predicates until ready, optionally scrolling the target into view.
+///
+/// When receives-events / unobscured-center predicates need viewport locality and the
+/// probe reports present-but-out-of-viewport, scrolls into view between poll ticks.
 pub(crate) fn wait_for_actionability(
     context: &mut ToolContext,
     target: &ResolvedTarget,
@@ -104,6 +117,7 @@ pub(crate) fn wait_for_actionability(
     }
 }
 
+/// Refresh the DOM after a mutation and classify target continuity (same / moved / detached).
 pub(crate) fn build_interaction_handoff(
     context: &mut ToolContext,
     target_before: &ResolvedTarget,
@@ -134,6 +148,7 @@ pub(crate) fn build_interaction_handoff(
     })
 }
 
+/// Structured failure from a timed-out or failed actionability probe, with recovery hints.
 pub(crate) fn build_actionability_failure(
     tool: &str,
     session: &BrowserSession,
@@ -155,6 +170,7 @@ pub(crate) fn build_actionability_failure(
     )
 }
 
+/// Shared structured interaction failure (code, failed predicates, diagnostics, suggested tool).
 pub(crate) fn build_interaction_failure(
     _tool: &str,
     session: &BrowserSession,
@@ -186,6 +202,7 @@ pub(crate) fn build_interaction_failure(
     ))
 }
 
+/// Parse a browser action result that may arrive as a JSON string or a structured value.
 pub(crate) fn decode_action_result(
     value: Option<serde_json::Value>,
     fallback: serde_json::Value,

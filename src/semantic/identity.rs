@@ -7,10 +7,11 @@ use std::hash::{Hash, Hasher};
 
 const REF_VERSION: &str = "sref1";
 
-/// Opaque reference to one semantic component within a captured document revision.
+/// Opaque `semantic_ref` for one component within a captured document revision.
 ///
 /// Consumers must treat the string form as opaque. Only the document's resolution
-/// API may interpret it. Resolution never retargets by text similarity.
+/// API may interpret it. Resolution is fail-closed and never retargets by text
+/// similarity or structural guesswork.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct SemanticRef(String);
@@ -124,13 +125,21 @@ impl fmt::Display for SemanticRefError {
 
 impl std::error::Error for SemanticRefError {}
 
-/// Document-scoped identity key used to mint and resolve opaque references.
+/// Document-scoped identity key used to mint and resolve opaque `semantic_ref`s.
+///
+/// Prefer unique author DOM ids when available; otherwise use a structural
+/// fingerprint. The key is never retargeted by display text.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub(crate) struct SemanticIdentity {
     kind: SemanticIdentityKind,
     value: String,
 }
 
+/// How a component is identified within a document revision.
+///
+/// `AuthorId` is a unique author-supplied DOM id. `Fingerprint` is a durable
+/// structural digest (scope + ancestry + signature) used when no unique id is
+/// available. Interaction must not invent a selector from a fingerprint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub(crate) enum SemanticIdentityKind {
     AuthorId,
@@ -172,6 +181,10 @@ impl SemanticIdentity {
     }
 }
 
+/// Decoded `semantic_ref` fields used only inside capture and resolution.
+///
+/// Encodes document id, revision, and identity kind/value into the opaque token.
+/// Callers outside identity/resolution must treat the string form as opaque.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SemanticRefPayload {
     pub document_id: String,

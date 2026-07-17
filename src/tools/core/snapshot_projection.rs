@@ -12,19 +12,25 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
+/// Inputs for viewport projection or delta snapshot encoding against a cache baseline.
 pub(crate) struct SnapshotProjectionInput<'a> {
     pub dom: &'a DomTree,
     pub mode: SnapshotMode,
     pub global_interactive_count: Option<usize>,
+    /// Prior viewport projection used only for delta mode; ignored otherwise.
     pub base: Option<&'a SnapshotCacheEntry>,
 }
 
+/// Client-facing projection plus optional cacheable viewport baseline for later deltas.
 #[derive(Debug)]
 pub(crate) struct SnapshotProjectionOutput {
+    /// Projection returned to the agent (may be a delta or a viewport fallback).
     pub current: SnapshotProjection,
+    /// Full viewport projection to store as the next delta base, when applicable.
     pub cache_projection: Option<SnapshotProjection>,
 }
 
+/// Rendered snapshot text, node list, scope metadata, and render timing.
 #[derive(Debug, Clone)]
 pub(crate) struct SnapshotProjection {
     pub snapshot: Arc<str>,
@@ -33,6 +39,10 @@ pub(crate) struct SnapshotProjection {
     pub render_micros: u64,
 }
 
+/// Project the DOM into full, viewport-biased, or delta snapshot form.
+///
+/// Delta mode diffs against `base` and falls back to a viewport projection when no
+/// compatible cache entry exists (or the base was a full snapshot).
 pub(crate) fn project_snapshot(input: SnapshotProjectionInput<'_>) -> SnapshotProjectionOutput {
     let current_projection = match input.mode {
         SnapshotMode::Full => snapshot_projection(
@@ -210,6 +220,7 @@ fn delta_snapshot_projection(
     }
 }
 
+/// Session snapshot-cache row keyed by document metadata and projection scope labels.
 pub(crate) fn snapshot_cache_entry_from_projection(
     document: &DocumentMetadata,
     projection: &SnapshotProjection,

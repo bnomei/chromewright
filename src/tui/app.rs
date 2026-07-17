@@ -21,20 +21,27 @@ use std::io::{self, Stdout};
 use std::path::PathBuf;
 use std::time::Duration;
 
-/// Options for launching the terminal browser.
+/// Entry options for `chromewright tui`: optional keymap overlay path.
 #[derive(Debug, Clone, Default)]
 pub struct TuiOptions {
     /// Explicit keymap config path (`--config`); XDG default when None.
     pub config: Option<PathBuf>,
 }
 
-/// Run the interactive terminal browser against a shared session.
+/// Load keymap config from [`TuiOptions`] and run the interactive terminal browser.
+///
+/// Shares the caller's `BrowserSession` (no second browser process). Returns when
+/// the user quits or terminal setup/teardown fails.
 pub fn run_tui(session: &BrowserSession, options: TuiOptions) -> Result<(), String> {
     let config = crate::tui::config::load_tui_config(options.config.as_deref())
         .map_err(|e| e.to_string())?;
     run_tui_with_config(session, config)
 }
 
+/// Run the terminal browser with a pre-loaded [`TuiConfig`] (keymap overlay already resolved).
+///
+/// Owns the Ratatui event loop: Loading → action dispatch → recapture → Ready | Error.
+/// Application errors are preferred over secondary terminal restore failures.
 pub fn run_tui_with_config(session: &BrowserSession, config: TuiConfig) -> Result<(), String> {
     let mut terminal = TerminalGuard::setup().map_err(|e| e.to_string())?;
     let result = run_loop(session, config, terminal.terminal_mut());

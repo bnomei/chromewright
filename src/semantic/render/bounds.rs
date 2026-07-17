@@ -9,7 +9,10 @@ pub const MAX_RENDER_OUTPUT_CHARS: usize = 2_000_000;
 /// Marker appended when renderer output is truncated at the character budget.
 pub const TRUNCATION_MARKER: &str = "\n\n…[truncated]\n";
 
-/// Bounded render result with document identity for downstream consumers.
+/// Bounded render result with source document id and revision for consumers.
+///
+/// Text projections may set `truncated` when clipped at the character budget.
+/// JSON projections never truncate: over-budget payloads fail as [`RenderError::OutputLimit`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RenderedOutput {
     pub content: String,

@@ -1,3 +1,7 @@
+//! MCP tool that captures an ARIA snapshot as a revision-scoped document envelope.
+//!
+//! Yields cursors for later interaction; mode selects viewport, delta, or full-document scope.
+
 pub use crate::contract::SnapshotMode;
 use crate::dom::{AriaChild, AriaNode, yaml_escape_key_if_needed, yaml_escape_value_if_needed};
 use crate::error::Result;
@@ -7,7 +11,7 @@ use crate::tools::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// Parameters for the snapshot tool
+/// Snapshot surface mode; defaults to viewport for agent-facing rereads.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 pub struct SnapshotParams {
     /// Snapshot surface mode. `viewport` is the default agent-facing reread.
@@ -46,17 +50,16 @@ impl Tool for SnapshotTool {
     }
 }
 
-/// Rendering mode for ARIA tree
+/// ARIA YAML render profile: agent markers versus expect-test formatting.
 #[derive(Debug, Clone, Copy)]
 pub enum RenderMode {
-    /// AI consumption mode (includes refs, cursor, active markers)
+    /// Agent-facing render with refs, cursor, and active markers.
     Ai,
-    /// Expect mode (for testing)
+    /// Expect-test render without agent markers.
     Expect,
 }
 
-/// Render an ARIA tree to YAML format
-/// Based on Playwright's renderAriaTree function
+/// Render an ARIA tree to YAML (Playwright-style), optionally against a previous tree.
 pub fn render_aria_tree(root: &AriaNode, mode: RenderMode, previous: Option<&AriaNode>) -> String {
     let mut lines = Vec::new();
 

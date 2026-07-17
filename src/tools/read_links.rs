@@ -1,3 +1,7 @@
+//! MCP tool that lists page anchors with raw href and resolved absolute URLs.
+//!
+//! Enforces link-count and field-length budgets before returning a document result.
+
 use crate::error::Result;
 use crate::tools::core::structured_tool_failure;
 use crate::tools::limits::{MAX_READ_LINK_FIELD_CHARS, MAX_READ_LINKS_COUNT};
@@ -6,9 +10,11 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// Empty params; link listing always scans the active document.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ReadLinksParams {}
 
+/// Single anchor entry with visible text, raw href, and absolute resolved_url.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Link {
     /// The visible text content of the link
@@ -23,6 +29,7 @@ pub struct Link {
 #[derive(Default)]
 pub struct ReadLinksTool;
 
+/// Document result with collected links and total count.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ReadLinksOutput {
     #[serde(flatten)]

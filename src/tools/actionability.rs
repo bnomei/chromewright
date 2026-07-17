@@ -8,6 +8,7 @@ pub(crate) use crate::browser::commands::{
 use crate::browser::commands::{BrowserCommand, BrowserCommandResult};
 use crate::error::{BrowserError, Result};
 
+/// Borrowed actionability probe parameters forwarded to the browser command layer.
 #[derive(Debug, Clone)]
 pub(crate) struct ActionabilityRequest<'a> {
     pub selector: &'a str,
@@ -17,11 +18,13 @@ pub(crate) struct ActionabilityRequest<'a> {
     pub expected_value: Option<&'a str>,
 }
 
+/// Render the in-page actionability probe script for tests and diagnostics.
 #[cfg(test)]
 pub(crate) fn build_actionability_probe_js(request: &ActionabilityRequest<'_>) -> String {
     BrowserCommand::ActionabilityProbe(command_request(request)).render_script()
 }
 
+/// Execute an actionability probe in the page and validate the returned predicate payload.
 pub(crate) fn probe_actionability(
     session: &BrowserSession,
     request: &ActionabilityRequest<'_>,

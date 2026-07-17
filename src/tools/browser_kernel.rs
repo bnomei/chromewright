@@ -5,12 +5,17 @@ use std::sync::OnceLock;
 
 const BROWSER_KERNEL_JS: &str = include_str!("browser_kernel.js");
 
+/// Compiled tool probe template with the shared browser-kernel script inlined once.
+///
+/// Split around a single config placeholder so each render only splices JSON config
+/// between the fixed prefix/suffix without re-expanding `__BROWSER_KERNEL__`.
 pub(crate) struct BrowserKernelTemplateShell {
     prefix: String,
     suffix: String,
 }
 
 impl BrowserKernelTemplateShell {
+    /// Expand `__BROWSER_KERNEL__` and split the template on exactly one config placeholder.
     fn compile(template: &'static str, config_placeholder: &'static str) -> Self {
         let expanded = template.replace("__BROWSER_KERNEL__", BROWSER_KERNEL_JS);
         let mut parts = expanded.split(config_placeholder);
@@ -31,6 +36,7 @@ impl BrowserKernelTemplateShell {
         }
     }
 
+    /// Splice serialized `config` between the compiled prefix and suffix.
     fn render(&self, config: &Value) -> String {
         let config_json = config.to_string();
         let mut rendered =
@@ -42,6 +48,7 @@ impl BrowserKernelTemplateShell {
     }
 }
 
+/// Lazily compile a tool probe template and render it with the given JSON config.
 pub(crate) fn render_browser_kernel_script(
     shell_cache: &OnceLock<BrowserKernelTemplateShell>,
     template: &'static str,

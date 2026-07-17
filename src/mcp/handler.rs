@@ -15,24 +15,26 @@ use rmcp::{
 use std::future;
 use std::sync::Arc;
 
-/// MCP Server wrapper for BrowserSession
+/// Shared-session MCP server that dispatches registered browser tools via rmcp.
 ///
-/// This struct holds a browser session and provides thread-safe access
-/// for MCP tool execution.
+/// Implements `ServerHandler` for tool list/call. Tool-local failures map to
+/// structured `CallToolResult` errors (preserving document, target, recovery);
+/// infrastructure failures map to MCP internal errors. With the `tokio` feature,
+/// tool work runs on a blocking pool so the async handler stays free.
 #[derive(Clone)]
 pub struct BrowserServer {
     session: Arc<BrowserSession>,
 }
 
 impl BrowserServer {
-    /// Create a server from a preconfigured browser session.
+    /// Wrap an existing session so MCP tools share one browser lifecycle.
     pub fn from_session(session: BrowserSession) -> Self {
         Self {
             session: Arc::new(session),
         }
     }
 
-    /// Create a new browser server with default launch options.
+    /// Launch a browser with default options and expose it as an MCP server.
     pub fn new() -> Result<Self, String> {
         let session =
             BrowserSession::new().map_err(|e| format!("Failed to launch browser: {}", e))?;
@@ -40,7 +42,7 @@ impl BrowserServer {
         Ok(Self::from_session(session))
     }
 
-    /// Create a new browser server with custom launch options.
+    /// Launch with explicit options (headless, executable path, profile, port).
     pub fn with_options(options: crate::browser::LaunchOptions) -> Result<Self, String> {
         let session = BrowserSession::launch(options)
             .map_err(|e| format!("Failed to launch browser: {}", e))?;
@@ -48,7 +50,7 @@ impl BrowserServer {
         Ok(Self::from_session(session))
     }
 
-    /// Create a browser server by connecting to an existing WebSocket endpoint.
+    /// Attach to an existing DevTools / WebSocket endpoint as an MCP server.
     pub fn connect(options: ConnectionOptions) -> Result<Self, String> {
         let session = BrowserSession::connect(options)
             .map_err(|e| format!("Failed to connect browser session: {}", e))?;
@@ -56,11 +58,12 @@ impl BrowserServer {
         Ok(Self::from_session(session))
     }
 
-    /// Get a reference to the shared browser session.
+    /// Borrow the shared browser session used for tool dispatch.
     pub(crate) fn session(&self) -> &BrowserSession {
         self.session.as_ref()
     }
 
+    /// Advertise registered tools as rmcp descriptors (schemas + safety annotations).
     pub(crate) fn list_mcp_tools(&self) -> Vec<McpTool> {
         self.session()
             .tool_registry()
@@ -70,6 +73,10 @@ impl BrowserServer {
             .collect()
     }
 
+    /// Run one tool call on the shared session and map the outcome to `CallToolResult`.
+    ///
+    /// Tool-local failures stay structured success/error content; only registry or
+    /// conversion infrastructure issues become MCP internal errors.
     pub(crate) fn execute_tool_sync(
         &self,
         request: CallToolRequestParams,
