@@ -197,8 +197,8 @@ Keyboard bindings are not shown in the terminal chrome. Defaults are Vimari-comp
 
 | Key | Action name | Behavior |
 | --- | --- | --- |
-| `f` | `link_hints_follow` | Enter link-hint mode; follow the chosen link in the current tab. |
-| `F` | `link_hints_new_tab` | Enter link-hint mode; open the chosen link in a new tab. |
+| `f` | `link_hints_follow` | Enter link-hint mode; follow the chosen link in the current tab, then return to Normal. |
+| `F` | `link_hints_new_tab` | Enter link-hint mode; open the chosen link in a new tab (hint mode stays open for chaining until Esc). |
 | `j` | `scroll_down` | Scroll or move selection down one block. |
 | `k` | `scroll_up` | Scroll or move selection up one block. |
 | `h` | `scroll_left` | Horizontal scroll left when content overflows. |

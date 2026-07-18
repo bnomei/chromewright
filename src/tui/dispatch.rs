@@ -165,8 +165,8 @@ impl Dispatcher {
         if let Some((r, new_tab)) = controller.hint_type_char(ch) {
             match controller.follow_link(&r, new_tab) {
                 Ok(()) => {
-                    // The controller restores chained hint mode only after the
-                    // deferred action settles and publishes its fresh capture.
+                    // `F` may restore Hint mode after settle for chaining;
+                    // `f` returns to Normal (see follow_link hint_after).
                 }
                 Err(_) => {
                     // Error lifecycle already set; leave hint mode via enter_error.

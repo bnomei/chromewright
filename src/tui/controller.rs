@@ -178,6 +178,14 @@ impl Controller {
             .ok_or_else(|| "no document".to_string())?;
         // Fail closed on stale/unknown refs before entering Loading.
         document.resolve(semantic_ref).map_err(|e| e.to_string())?;
+        // `f` (current tab) leaves Hint mode after the follow settles — the
+        // destination page should start in Normal. `F` (new tab) keeps Hint
+        // mode so multiple background opens can be chained without re-pressing F.
+        let hint_after = if new_tab {
+            Some(HintMode::NewTab)
+        } else {
+            None
+        };
         self.queue_page_action(
             action,
             PageOperation::Follow {
@@ -185,11 +193,7 @@ impl Controller {
                 semantic_ref: semantic_ref.clone(),
                 new_tab,
             },
-            Some(if new_tab {
-                HintMode::NewTab
-            } else {
-                HintMode::Follow
-            }),
+            hint_after,
         );
         Ok(())
     }
@@ -1152,8 +1156,9 @@ impl Controller {
 
     /// Enter two-key hint mode over viewport-visible links (`f` / `F`).
     ///
-    /// Labels are deterministic for the current scroll window. Chained follows
-    /// re-enter this mode after a successful recapture until Escape.
+    /// Labels are deterministic for the current scroll window. After a
+    /// successful current-tab follow (`f`), mode returns to Normal. New-tab
+    /// follows (`F`) may re-enter Hint mode for chaining until Escape.
     pub fn enter_hint_mode(&mut self, mode: HintMode) {
         if self.state.lifecycle.is_loading() {
             return;
@@ -2029,11 +2034,19 @@ mod tests {
         let mut driver = FakePageDriver::new(vec![d1.clone(), d2]);
         let mut ctl = Controller::new();
         ctl.state.publish_page(d1);
+        ctl.enter_hint_mode(HintMode::Follow);
+        assert!(ctl.state.is_hint_mode());
         ctl.follow_link(&r, false).expect("schedule follow");
         render_loading_and_run(&mut ctl, &mut driver).expect("follow");
         assert_eq!(driver.activated.len(), 1);
         assert_eq!(driver.activated[0].0, r.as_str());
         assert!(!driver.activated[0].1);
+        // `f` auto-closes hint mode after a successful follow.
+        assert!(
+            matches!(ctl.state.mode, InteractionMode::Normal),
+            "expected Normal after f follow, got {:?}",
+            ctl.state.mode
+        );
     }
 
     #[test]
@@ -2043,10 +2056,17 @@ mod tests {
         let mut driver = FakePageDriver::new(vec![d1.clone()]);
         let mut ctl = Controller::new();
         ctl.state.publish_page(d1);
+        ctl.enter_hint_mode(HintMode::NewTab);
         ctl.follow_link(&r, true).expect("schedule new tab");
         render_loading_and_run(&mut ctl, &mut driver).expect("new tab");
         assert!(driver.activated[0].1);
         assert_eq!(driver.open_tabs.len(), 1);
+        // `F` keeps hint mode for chaining.
+        assert!(
+            matches!(ctl.state.mode, InteractionMode::Hint(HintMode::NewTab)),
+            "expected Hint(NewTab) after F follow, got {:?}",
+            ctl.state.mode
+        );
     }
 
     #[test]

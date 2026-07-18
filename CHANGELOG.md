@@ -26,6 +26,7 @@
 - Fall back to navigating a link's captured href when the live DOM click locator is stale/missing, and retry post-capture metadata matching a few times on dynamic pages.
 - Clear the TUI when the last browser tab is closed and keep `t` (new tab) available from Error so an empty session can recover.
 - Fold `data:` / base64 image (and link) URLs in TUI content to short placeholders like `base64,…`.
+- Exit link-hint mode after a successful current-tab follow (`f`); new-tab hints (`F`) still chain until Esc.
 
 ## 0.7.1 - 2026-06-28
 
