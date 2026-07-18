@@ -27,6 +27,10 @@ impl SemanticRef {
         &self.0
     }
 
+    /// Mint an opaque token from document id, revision, and identity (capture-time only).
+    ///
+    /// Wire format: `sref1.<document_id>..<revision>..<kind>..<value>` with percent-encoded
+    /// fields. Consumers must not parse this string outside resolution APIs.
     pub(crate) fn encode(payload: &SemanticRefPayload) -> Self {
         Self(format!(
             "{REF_VERSION}.{}..{}..{}..{}",
@@ -37,6 +41,11 @@ impl SemanticRef {
         ))
     }
 
+    /// Decode an opaque token into document/revision/identity for fail-closed resolution.
+    ///
+    /// Returns [`SemanticRefError::Malformed`] when the version, field count, encoding,
+    /// or identity kind is invalid. Does not consult a document — use
+    /// [`crate::semantic::SemanticDocument::resolve`] for revision binding.
     pub(crate) fn decode(&self) -> Result<SemanticRefPayload, SemanticRefError> {
         let rest = self
             .0
@@ -57,17 +66,6 @@ impl SemanticRef {
             document_id,
             revision,
             identity,
-        })
-    }
-
-    /// Return the author-supplied DOM id encoded by this reference. Fingerprint
-    /// identities intentionally have no browser selector: guessing a DOM node
-    /// from a structural fingerprint would violate fail-closed interaction.
-    pub(crate) fn author_id(&self) -> Result<Option<String>, SemanticRefError> {
-        let payload = self.decode()?;
-        Ok(match payload.identity.kind {
-            SemanticIdentityKind::AuthorId => Some(payload.identity.value),
-            SemanticIdentityKind::Fingerprint => None,
         })
     }
 }
@@ -147,6 +145,7 @@ pub(crate) enum SemanticIdentityKind {
 }
 
 impl SemanticIdentity {
+    /// Identity from a unique author-supplied DOM `id` (preferred when available).
     pub(crate) fn author_id(id: impl Into<String>) -> Self {
         Self {
             kind: SemanticIdentityKind::AuthorId,
@@ -154,6 +153,7 @@ impl SemanticIdentity {
         }
     }
 
+    /// Identity from a durable structural fingerprint when no unique author id exists.
     pub(crate) fn fingerprint(value: impl Into<String>) -> Self {
         Self {
             kind: SemanticIdentityKind::Fingerprint,
@@ -161,6 +161,7 @@ impl SemanticIdentity {
         }
     }
 
+    /// Rebuild identity from wire kind tokens (`id` / `fp`) during decode.
     pub(crate) fn from_parts(kind: &str, value: String) -> Result<Self, SemanticRefError> {
         let kind = match kind {
             "id" => SemanticIdentityKind::AuthorId,

@@ -24,44 +24,63 @@ pub const MAX_RESOURCE_CHARS: usize = 200_000;
 
 const SCHEME: &str = "chromewright://";
 
+/// Parsed `chromewright://` catalog URI for companion semantic resources.
+///
+/// Active and collaboration aliases resolve against live shared TUI state.
+/// Revision-addressed page URIs are immutable retained captures and never fall
+/// through to the active document when the requested revision is missing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResourceUri {
-    ActiveSemanticMd {
-        offset: usize,
-        limit: usize,
-    },
+    /// Dynamic alias of the last complete semantic Markdown capture (paginated).
+    ActiveSemanticMd { offset: usize, limit: usize },
+    /// Immutable revision-addressed full-document semantic Markdown (paginated).
     PageSemanticMd {
         document_id: String,
         revision: String,
         offset: usize,
         limit: usize,
     },
+    /// Immutable outline Markdown for a retained document revision.
     PageOutline {
         document_id: String,
         revision: String,
     },
+    /// Immutable semantic JSON for a retained document revision (fail-closed on size).
     PageSemanticJson {
         document_id: String,
         revision: String,
     },
+    /// Immutable debug JSON for a retained document revision (fail-closed on size).
     PageDebugJson {
         document_id: String,
         revision: String,
     },
+    /// Immutable component Markdown fragment addressed by an opaque `semantic_ref`.
     PageComponent {
         document_id: String,
         revision: String,
         semantic_ref: String,
     },
+    /// Read-only human selection collaboration state.
     Selection,
+    /// Read-only agent attention collaboration state.
     Attention,
 }
 
+/// Fail-closed catalog errors for parse, retention, coordination, or render budget.
+///
+/// Mapped at the MCP handler boundary: malformed URIs become invalid params;
+/// missing/evicted revisions, coordination faults, and render failures become
+/// resource-not-found rather than active-document fallthrough.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResourceError {
+    /// URI is not a well-formed catalog path or carries disallowed query keys.
     MalformedUri,
+    /// Catalog entry does not exist (reserved; retention misses use Coordination).
     NotFound,
+    /// Shared TUI retention or lifecycle rejected the read (evicted, wrong doc, loading).
     Coordination(CoordinationError),
+    /// Projection failed (stale `semantic_ref`, oversize body, or invalid JSON).
     Render(String),
 }
 
@@ -847,6 +866,7 @@ mod tests {
                 tag: Some("p".into()),
                 id: Some("spotlight".into()),
                 unique_id: true,
+                selector: None,
                 text: Some("hello".into()),
                 href: None,
                 landmark: None,
@@ -937,6 +957,7 @@ mod tests {
                 tag: Some("p".into()),
                 id: Some("spotlight".into()),
                 unique_id: true,
+                selector: None,
                 text: Some("hello".into()),
                 href: None,
                 landmark: None,

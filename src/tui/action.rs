@@ -48,6 +48,10 @@ pub enum Action {
     OpenUrl,
     /// `/` — forward search by exact semantic content.
     Search,
+    /// `n` — repeat the last forward search.
+    SearchNext,
+    /// `N` — repeat the last search in the opposite direction.
+    SearchPrevious,
     /// `Space` — collapse / expand selected block.
     Collapse,
     /// `i` — inspect selected component metadata.
@@ -92,6 +96,8 @@ impl Action {
             Self::NewTab => "new_tab",
             Self::OpenUrl => "open_url",
             Self::Search => "search",
+            Self::SearchNext => "search_next",
+            Self::SearchPrevious => "search_previous",
             Self::Collapse => "collapse",
             Self::Inspect => "inspect",
             Self::CopyBlock => "copy_block",
@@ -127,6 +133,8 @@ impl Action {
             "new_tab" => Some(Self::NewTab),
             "open_url" => Some(Self::OpenUrl),
             "search" => Some(Self::Search),
+            "search_next" => Some(Self::SearchNext),
+            "search_previous" => Some(Self::SearchPrevious),
             "collapse" => Some(Self::Collapse),
             "inspect" => Some(Self::Inspect),
             "copy_block" => Some(Self::CopyBlock),
@@ -164,7 +172,7 @@ impl Action {
     }
 }
 
-const ALL_ACTIONS: [Action; 29] = [
+const ALL_ACTIONS: [Action; 31] = [
     Action::LinkHintsFollow,
     Action::LinkHintsNewTab,
     Action::ScrollDown,
@@ -185,6 +193,8 @@ const ALL_ACTIONS: [Action; 29] = [
     Action::NewTab,
     Action::OpenUrl,
     Action::Search,
+    Action::SearchNext,
+    Action::SearchPrevious,
     Action::Collapse,
     Action::Inspect,
     Action::CopyBlock,

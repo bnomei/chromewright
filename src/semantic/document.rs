@@ -366,6 +366,7 @@ mod tests {
             label: None,
             text: Some(text.to_string()),
             attrs: SemanticAttrs::default(),
+            interaction_selector: None,
             children: Vec::new(),
         }
     }

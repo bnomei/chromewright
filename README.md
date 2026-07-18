@@ -309,7 +309,8 @@ Browser smoke checks launch a local browser and are intended for maintainer work
 
 ## Source anchors
 
-The opt-in semantic terminal browser, its Vimari-compatible defaults, and TOML
+The default-enabled, compile-time-optional semantic terminal browser, its
+Vim-compatible search, Vimari-compatible navigation defaults, and TOML
 configuration precedence are documented in [docs/tui.md](docs/tui.md).
 
 - Package metadata and Rust version: [Cargo.toml](Cargo.toml)

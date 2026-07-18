@@ -1,4 +1,9 @@
 //! Lifecycle controller: Loading → browser action → settle → capture → atomic Ready | Error.
+//!
+//! Owns local [`TuiState`] (viewport, selection, modes) while coordinating page
+//! actions with [`SharedTuiState`] so the companion and terminal share one
+//! Loading lock and one published SemanticDocument. Browser work is always
+//! deferred until the event loop has drawn a Loading frame.
 
 use crate::semantic::{SemanticDocument, SemanticRef};
 use crate::tui::content::{
@@ -11,10 +16,14 @@ use crate::tui::shared::SharedTuiState;
 use crate::tui::state::{HintMode, InputKind, InteractionMode, Lifecycle, TuiState};
 
 /// Orchestrates page-changing actions and pure view updates against [`TuiState`].
+///
+/// Page mutations go through a deferred queue: claim Loading on
+/// [`SharedTuiState`], draw Loading, then [`Self::perform_pending_page_action`].
+/// Pure view ops (scroll, collapse, search) never touch the browser driver.
 pub struct Controller {
     pub state: TuiState,
     pub shared: SharedTuiState,
-    /// Active link hints when in Hint mode.
+    /// Active link hints when in Hint mode (exact `semantic_ref` targets).
     pub hints: Vec<LinkHint>,
     /// Browser work that may begin only after the event loop has successfully
     /// drawn a Loading frame.
@@ -74,6 +83,7 @@ impl Controller {
         panic!("Controller::new requires a shared TUI runtime")
     }
 
+    /// Production constructor: share coordination state with the companion and tools.
     pub fn with_shared(shared: SharedTuiState) -> Self {
         Self {
             state: TuiState::new(),
@@ -83,6 +93,7 @@ impl Controller {
         }
     }
 
+    /// Test helper that seeds local state; still requires a shared runtime via [`Self::new`].
     pub fn with_state(state: TuiState) -> Self {
         Self {
             state,
@@ -90,6 +101,7 @@ impl Controller {
         }
     }
 
+    /// Seed both local state and shared coordination (tests / recovery harnesses).
     pub fn with_state_and_shared(state: TuiState, shared: SharedTuiState) -> Self {
         Self {
             state,
@@ -111,35 +123,45 @@ impl Controller {
         self.queue_page_action("navigate", PageOperation::Navigate(url.to_string()), None);
     }
 
+    /// Queue browser history back for the active tab (not a local history stack).
     pub fn history_back(&mut self) {
         self.queue_page_action("history_back", PageOperation::HistoryBack, None);
     }
 
+    /// Queue browser history forward for the active tab.
     pub fn history_forward(&mut self) {
         self.queue_page_action("history_forward", PageOperation::HistoryForward, None);
     }
 
+    /// Queue a full page reload and semantic recapture.
     pub fn reload(&mut self) {
         self.queue_page_action("reload", PageOperation::Reload, None);
     }
 
+    /// Queue activation of the next browser tab (document-changing).
     pub fn next_tab(&mut self) {
         self.queue_page_action("next_tab", PageOperation::NextTab, None);
     }
 
+    /// Queue activation of the previous browser tab (document-changing).
     pub fn prev_tab(&mut self) {
         self.queue_page_action("prev_tab", PageOperation::PrevTab, None);
     }
 
+    /// Queue close of the active tab and recapture of whatever remains active.
     pub fn close_tab(&mut self) {
         self.queue_page_action("close_tab", PageOperation::CloseTab, None);
     }
 
+    /// Queue opening a blank tab and switching to it.
     pub fn new_tab(&mut self) {
         self.queue_page_action("new_tab", PageOperation::NewTab, None);
     }
 
-    /// Queue a link follow by exact semantic_ref.
+    /// Queue a link follow by exact `semantic_ref` (current tab or new tab).
+    ///
+    /// Resolves the ref against the published document before entering Loading
+    /// so stale targets never claim the shared lifecycle lock.
     pub fn follow_link(&mut self, semantic_ref: &SemanticRef, new_tab: bool) -> Result<(), String> {
         let action = if new_tab {
             "hint_new_tab"
@@ -337,6 +359,12 @@ impl Controller {
     }
 
     /// Perform deferred browser work after a successfully rendered Loading frame.
+    ///
+    /// Settle → capture SemanticDocument → post-capture metadata barrier →
+    /// atomic Ready via [`TuiState::reconcile_after_capture`] and
+    /// [`SharedTuiState::publish_with_selection`]. On failure publishes Error
+    /// while retaining the last valid page. Rejects work if no Loading frame
+    /// was acknowledged (draw-before-browser invariant).
     pub fn perform_pending_page_action<D: PageDriver>(
         &mut self,
         driver: &mut D,
@@ -474,6 +502,7 @@ impl Controller {
         let _ = self.shared.publish_with_selection(document, selection);
     }
 
+    /// Push the current human selection into shared coordination for companion tools.
     pub fn publish_selection(&self) {
         if let Some(selection) = self.state.view.selection.clone() {
             let _ = self.shared.set_selection(selection);
@@ -502,6 +531,7 @@ impl Controller {
 
     // --- Pure view operations (no driver) ---
 
+    /// Flatten the active SemanticDocument into addressable content lines.
     pub fn content_lines(&self) -> Vec<crate::tui::content::ContentLine> {
         match self.state.document() {
             Some(doc) => build_content_lines(doc, &self.state.view.collapsed),
@@ -509,10 +539,12 @@ impl Controller {
         }
     }
 
+    /// Move selection to the next addressable content line (and keep it visible).
     pub fn scroll_down(&mut self) {
         self.move_selection(1);
     }
 
+    /// Move selection to the previous addressable content line (and keep it visible).
     pub fn scroll_up(&mut self) {
         self.move_selection(-1);
     }
@@ -544,6 +576,7 @@ impl Controller {
         self.ensure_visible(line_idx, lines.len());
     }
 
+    /// Scroll down by half the content viewport without changing selection.
     pub fn half_page_down(&mut self) {
         let h = self.state.view.viewport_height.max(1) / 2;
         self.state.view.scroll_y = self.state.view.scroll_y.saturating_add(h);
@@ -551,11 +584,13 @@ impl Controller {
         self.state.clamp_scroll(len);
     }
 
+    /// Scroll up by half the content viewport without changing selection.
     pub fn half_page_up(&mut self) {
         let h = self.state.view.viewport_height.max(1) / 2;
         self.state.view.scroll_y = self.state.view.scroll_y.saturating_sub(h);
     }
 
+    /// Jump to the first content line and select its `semantic_ref` when present.
     pub fn go_top(&mut self) {
         self.state.view.scroll_y = 0;
         let lines = self.content_lines();
@@ -564,6 +599,7 @@ impl Controller {
         }
     }
 
+    /// Jump to the last content line and select its `semantic_ref` when present.
     pub fn go_bottom(&mut self) {
         let lines = self.content_lines();
         let len = lines.len();
@@ -573,10 +609,12 @@ impl Controller {
         }
     }
 
+    /// Horizontal pan left when a content line overflows the viewport width.
     pub fn scroll_left(&mut self) {
         self.state.view.scroll_x = self.state.view.scroll_x.saturating_sub(4);
     }
 
+    /// Horizontal pan right when a content line overflows the viewport width.
     pub fn scroll_right(&mut self) {
         self.state.view.scroll_x = self.state.view.scroll_x.saturating_add(4);
     }
@@ -591,6 +629,7 @@ impl Controller {
         self.state.clamp_scroll(content_len);
     }
 
+    /// Collapse or expand the selected block by exact `semantic_ref` only (never rebind).
     pub fn toggle_collapse(&mut self) {
         let Some(sel) = self.state.view.selection.clone() else {
             return;
@@ -607,6 +646,7 @@ impl Controller {
         }
     }
 
+    /// Open the inspect overlay for the selected component (no key legends).
     pub fn inspect_selection(&mut self) {
         let Some(doc) = self.state.document() else {
             return;
@@ -636,6 +676,7 @@ impl Controller {
         }
     }
 
+    /// Rendered plain text for the selected block (clipboard payload for `y`).
     pub fn copy_block_text(&mut self) -> Option<String> {
         let doc = self.state.document()?;
         let sel = self.state.view.selection.as_ref()?;
@@ -643,6 +684,7 @@ impl Controller {
         rendered_block_text(doc, sel)
     }
 
+    /// Opaque `semantic_ref` string for the selection (clipboard payload for `Y`).
     pub fn copy_ref_text(&mut self) -> Option<String> {
         let doc = self.state.document()?;
         let sel = self.state.view.selection.as_ref()?;
@@ -650,6 +692,7 @@ impl Controller {
         Some(sel.as_str().to_string())
     }
 
+    /// Enter URL-bar input with an empty buffer (never prefill the current URL).
     pub fn enter_url_input(&mut self) {
         if self.state.lifecycle.is_loading() {
             return;
@@ -662,6 +705,7 @@ impl Controller {
         });
     }
 
+    /// Enter forward-search input mode (`/`).
     pub fn enter_search(&mut self) {
         if self.state.lifecycle.is_loading() {
             return;
@@ -671,28 +715,89 @@ impl Controller {
         });
     }
 
+    /// Apply a forward search: match content lines by text, own exact `semantic_ref`s.
+    ///
+    /// Empty query with a previous pattern repeats forward (Vim `/` + Enter).
+    /// New matches start after the current selection and wrap.
     pub fn apply_search(&mut self, query: &str) {
+        if query.is_empty() && !self.state.view.search_query.is_empty() {
+            self.state.mode = InteractionMode::Normal;
+            self.repeat_search(true);
+            return;
+        }
         let lines = self.content_lines();
         let matches = search_refs(&lines, query);
+        let current_line = self
+            .state
+            .view
+            .selection
+            .as_ref()
+            .and_then(|selection| line_index_of(&lines, selection));
         self.state.view.search_query = query.to_string();
         self.state.view.search_matches = matches;
-        self.state.view.search_index = 0;
-        if let Some(first) = self.state.view.search_matches.first().cloned() {
-            self.state.view.selection = Some(first.clone());
-            if let Some(idx) = line_index_of(&lines, &first) {
-                self.ensure_visible(idx, lines.len());
-            }
-            self.state.view.set_status(format!(
-                "search: {}/{}",
-                1,
-                self.state.view.search_matches.len()
-            ));
+        self.state.view.search_index = current_line
+            .and_then(|line| {
+                self.state
+                    .view
+                    .search_matches
+                    .iter()
+                    .position(|semantic_ref| {
+                        line_index_of(&lines, semantic_ref)
+                            .is_some_and(|match_line| match_line > line)
+                    })
+            })
+            .unwrap_or(0);
+        if self.state.view.search_matches.is_empty() {
+            self.state.view.set_status("pattern not found");
         } else {
-            self.state.view.set_status("no matches");
+            self.select_search_match(&lines);
         }
         self.state.mode = InteractionMode::Normal;
     }
 
+    /// Advance (`n`) or reverse (`N`) within the last search match list.
+    pub fn repeat_search(&mut self, forward: bool) {
+        if self.state.view.search_query.is_empty() {
+            self.state.view.set_status("no previous search");
+            return;
+        }
+        if self.state.view.search_matches.is_empty() {
+            self.state.view.set_status("pattern not found");
+            return;
+        }
+
+        let count = self.state.view.search_matches.len();
+        self.state.view.search_index = if forward {
+            (self.state.view.search_index + 1) % count
+        } else {
+            (self.state.view.search_index + count - 1) % count
+        };
+        let lines = self.content_lines();
+        self.select_search_match(&lines);
+    }
+
+    fn select_search_match(&mut self, lines: &[crate::tui::content::ContentLine]) {
+        let Some(selected) = self
+            .state
+            .view
+            .search_matches
+            .get(self.state.view.search_index)
+            .cloned()
+        else {
+            return;
+        };
+        self.state.view.selection = Some(selected.clone());
+        if let Some(line) = line_index_of(lines, &selected) {
+            self.ensure_visible(line, lines.len());
+        }
+        self.state.view.set_status(format!(
+            "search: {}/{}",
+            self.state.view.search_index + 1,
+            self.state.view.search_matches.len()
+        ));
+    }
+
+    /// Focus the first form control (`gi`) and enter form-input mode.
     pub fn focus_first_input(&mut self) {
         let Some(doc) = self.state.document() else {
             return;
@@ -705,6 +810,10 @@ impl Controller {
         }
     }
 
+    /// Cycle focusable controls (Tab / Shift-Tab); form fields enter edit mode.
+    ///
+    /// Leaving a form field clears Input mode so Enter cannot submit a control
+    /// that is no longer the visible selection.
     pub fn tab_focus(&mut self, forward: bool) {
         let Some(doc) = self.state.document() else {
             return;
@@ -765,6 +874,10 @@ impl Controller {
         });
     }
 
+    /// Enter two-key hint mode over viewport-visible links (`f` / `F`).
+    ///
+    /// Labels are deterministic for the current scroll window. Chained follows
+    /// re-enter this mode after a successful recapture until Escape.
     pub fn enter_hint_mode(&mut self, mode: HintMode) {
         if self.state.lifecycle.is_loading() {
             return;
@@ -792,7 +905,10 @@ impl Controller {
         }
     }
 
-    /// Feed a character while in hint mode. Returns a ref to follow when complete.
+    /// Feed a character while in hint mode.
+    ///
+    /// Returns `(semantic_ref, new_tab)` when a two-key label completes exactly;
+    /// partial prefixes wait; ambiguous/unknown labels fail closed and clear the buffer.
     pub fn hint_type_char(&mut self, ch: char) -> Option<(SemanticRef, bool)> {
         if !matches!(self.state.mode, InteractionMode::Hint(_)) {
             return None;
@@ -815,6 +931,7 @@ impl Controller {
         }
     }
 
+    /// Leave Input/Hint/inspect overlays and return to Normal mode (does not clear Error lifecycle).
     pub fn escape(&mut self) {
         self.state.mode = InteractionMode::Normal;
         self.state.view.hint_buffer.clear();
@@ -822,6 +939,7 @@ impl Controller {
         self.hints.clear();
     }
 
+    /// Update content-area dimensions after a terminal resize and clamp scroll.
     pub fn set_viewport(&mut self, width: usize, height: usize) {
         self.state.view.viewport_width = width;
         self.state.view.viewport_height = height;
@@ -863,6 +981,7 @@ mod tests {
                 tag: Some("a".into()),
                 id: Some(id.into()),
                 unique_id: true,
+                selector: None,
                 text: Some("Go".into()),
                 href: Some(href.into()),
                 landmark: None,
@@ -889,36 +1008,49 @@ mod tests {
     }
 
     fn text_doc(rev: &str, id: &str, text: &str) -> SemanticDocument {
+        normalize_fixture(meta(rev, "https://example.com/"), vec![raw_text(id, text)]).expect("doc")
+    }
+
+    fn raw_text(id: &str, text: &str) -> RawSemanticNode {
+        RawSemanticNode {
+            kind: "text".into(),
+            tag: Some("p".into()),
+            id: Some(id.into()),
+            unique_id: true,
+            selector: None,
+            text: Some(text.into()),
+            href: None,
+            landmark: None,
+            heading_level: None,
+            ordered: None,
+            label: None,
+            src: None,
+            alt: None,
+            name: None,
+            value: None,
+            input_type: None,
+            placeholder: None,
+            checked: None,
+            disabled: None,
+            required: None,
+            readonly: None,
+            multiple: None,
+            button_type: None,
+            options: vec![],
+            children: vec![],
+        }
+    }
+
+    fn search_doc() -> SemanticDocument {
         normalize_fixture(
-            meta(rev, "https://example.com/"),
-            vec![RawSemanticNode {
-                kind: "text".into(),
-                tag: Some("p".into()),
-                id: Some(id.into()),
-                unique_id: true,
-                text: Some(text.into()),
-                href: None,
-                landmark: None,
-                heading_level: None,
-                ordered: None,
-                label: None,
-                src: None,
-                alt: None,
-                name: None,
-                value: None,
-                input_type: None,
-                placeholder: None,
-                checked: None,
-                disabled: None,
-                required: None,
-                readonly: None,
-                multiple: None,
-                button_type: None,
-                options: vec![],
-                children: vec![],
-            }],
+            meta("1", "https://example.com/"),
+            vec![
+                raw_text("first", "needle one"),
+                raw_text("middle", "other"),
+                raw_text("last", "needle two"),
+            ],
         )
-        .expect("doc")
+        .expect("search doc")
     }
 
     fn render_loading_and_run(
@@ -942,6 +1074,41 @@ mod tests {
             ctl.state.mode,
             InteractionMode::Input(InputKind::Url { ref buffer }) if buffer.is_empty()
         ));
+    }
+
+    #[test]
+    fn vim_search_starts_after_selection_and_n_wraps_both_directions() {
+        let document = search_doc();
+        let refs = document.semantic_refs();
+        let mut ctl = Controller::new();
+        ctl.state.publish_page(document);
+        ctl.state.view.selection = Some(refs[0].clone());
+
+        ctl.apply_search("needle");
+        assert_eq!(ctl.state.view.selection.as_ref(), Some(&refs[2]));
+        assert_eq!(ctl.state.view.search_index, 1);
+
+        ctl.repeat_search(true);
+        assert_eq!(ctl.state.view.selection.as_ref(), Some(&refs[0]));
+        assert_eq!(ctl.state.view.search_index, 0);
+
+        ctl.repeat_search(false);
+        assert_eq!(ctl.state.view.selection.as_ref(), Some(&refs[2]));
+        assert_eq!(ctl.state.view.search_index, 1);
+    }
+
+    #[test]
+    fn empty_search_repeats_the_previous_pattern() {
+        let document = search_doc();
+        let refs = document.semantic_refs();
+        let mut ctl = Controller::new();
+        ctl.state.publish_page(document);
+
+        ctl.apply_search("needle");
+        assert_eq!(ctl.state.view.selection.as_ref(), Some(&refs[0]));
+        ctl.apply_search("");
+        assert_eq!(ctl.state.view.selection.as_ref(), Some(&refs[2]));
+        assert_eq!(ctl.state.view.search_query, "needle");
     }
 
     #[test]
@@ -1187,6 +1354,7 @@ mod tests {
                 tag: Some("p".into()),
                 id: Some(format!("line-{index}")),
                 unique_id: true,
+                selector: None,
                 text: Some(format!("line {index}")),
                 href: None,
                 landmark: None,

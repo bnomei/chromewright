@@ -360,6 +360,7 @@ mod tests {
                 tag: Some("a".into()),
                 id: Some("home".into()),
                 unique_id: true,
+                selector: None,
                 text: Some("Home".into()),
                 href: Some("/".into()),
                 landmark: None,

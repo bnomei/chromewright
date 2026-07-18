@@ -52,6 +52,23 @@ jobs:
       - name: Run cargo check
         run: cargo check --all-targets --all-features
 
+  feature-surfaces:
+    name: Feature Surface (${{ matrix.surface }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - surface: mcp-server-only
+            features: mcp-server
+          - surface: tui-only
+            features: tui
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Check isolated feature surface
+        run: cargo check --all-targets --no-default-features --features "${{ matrix.features }}"
+
   test:
     name: Test Suite
     runs-on: ubuntu-latest

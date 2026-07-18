@@ -3,7 +3,7 @@
 use chromewright::{BrowserError, BrowserSession, LaunchOptions, Result};
 use serde_json::Value;
 use std::path::PathBuf;
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -64,6 +64,10 @@ pub struct BrowserTestContext {
 impl BrowserTestContext {
     pub fn session(&self) -> &BrowserSession {
         &self.session
+    }
+
+    pub fn into_shared(self) -> (MutexGuard<'static, ()>, Arc<BrowserSession>) {
+        (self._guard, Arc::new(self.session))
     }
 }
 

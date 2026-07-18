@@ -35,6 +35,7 @@ fn node(kind: &str) -> RawSemanticNode {
         tag: None,
         id: None,
         unique_id: false,
+        selector: None,
         landmark: None,
         heading_level: None,
         ordered: None,
@@ -68,6 +69,7 @@ fn shared_fixture() -> SemanticDocument {
                 tag: Some("header".into()),
                 landmark: Some("header".into()),
                 unique_id: true,
+                selector: None,
                 id: Some("site-header".into()),
                 children: vec![RawSemanticNode {
                     kind: "heading".into(),
@@ -102,6 +104,7 @@ fn shared_fixture() -> SemanticDocument {
                                 text: Some("link".into()),
                                 label: Some("link".into()),
                                 unique_id: true,
+                                selector: None,
                                 id: Some("inline-link".into()),
                                 ..node("link")
                             },
@@ -148,6 +151,7 @@ fn shared_fixture() -> SemanticDocument {
                                 label: Some("Email".into()),
                                 required: Some(true),
                                 unique_id: true,
+                                selector: None,
                                 id: Some("email".into()),
                                 ..node("input")
                             },
@@ -176,6 +180,7 @@ fn shared_fixture() -> SemanticDocument {
                     text: Some("Home".into()),
                     label: Some("Home".into()),
                     unique_id: true,
+                    selector: None,
                     id: Some("nav-home".into()),
                     ..node("link")
                 }],

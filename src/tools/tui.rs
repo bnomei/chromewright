@@ -1,4 +1,9 @@
-//! Frozen flat companion tool-domain descriptors and their runtime seam.
+//! Companion-only TUI tool domain co-hosted with [`SharedTuiState`].
+//!
+//! These tools coordinate selection, attention, and semantic render views for the
+//! terminal UI. They are never registered on standard [`crate::tools::ToolRegistry`]
+//! defaults; the TUI companion binds them with shared state. Without co-hosted
+//! state, calls return [`unavailable`].
 
 use crate::error::Result;
 use crate::tools::{Tool, ToolContext, ToolDescriptor, ToolResult, ToolSafetyAnnotations};
@@ -6,16 +11,28 @@ use crate::tui::{CoordinationError, SharedTuiState};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// Shared parameter envelope for all companion TUI tools.
+///
+/// Fields are interpreted per tool name: selection/attention updates require
+/// `semantic_ref`; render/inspect/query honor `limit`; attention set may carry
+/// `message`. No field chooses arbitrary filesystem paths.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct TuiParams {
     /// Exact opaque semantic reference for selection/attention updates.
     pub semantic_ref: Option<String>,
     /// Optional bounded message for agent attention (never mutates Chrome).
     pub message: Option<String>,
+    /// Character budget for render/outline payloads (defaults applied in [`execute`]).
     pub limit: Option<usize>,
 }
+
+/// Wire result for companion TUI tools: availability flag plus exclusive data or error.
+///
+/// Success always sets `available = true` and `data`; failures set `available = false`
+/// and `error` without a `data` payload so clients need not inspect content shape.
 #[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct TuiResult {
+    /// Whether the companion runtime handled the request (false when TUI is not co-hosted).
     pub available: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<TuiData>,
@@ -52,6 +69,7 @@ pub enum TuiData {
     Acknowledged,
 }
 
+/// Frozen companion tool names; must stay out of default/operator MCP registries.
 pub const NAMES: [&str; 9] = [
     "tui_render",
     "tui_refresh",
@@ -64,6 +82,10 @@ pub const NAMES: [&str; 9] = [
     "tui_attention_clear",
 ];
 
+/// MCP descriptors for the companion tool set (shared schemas, per-name safety hints).
+///
+/// Mutation-ish tools (`tui_refresh`, `*_update`, `*_set`, `*_clear`) clear the
+/// read-only hint; none are marked destructive or open-world.
 pub fn descriptors() -> Vec<ToolDescriptor> {
     NAMES
         .iter()
@@ -85,6 +107,10 @@ pub fn descriptors() -> Vec<ToolDescriptor> {
         .collect()
 }
 
+/// Dispatch a companion tool against co-hosted [`SharedTuiState`].
+///
+/// Reads selection/attention without touching Chrome. `tui_refresh` re-pulls the
+/// current page into the semantic document. Unknown names return [`unavailable`].
 pub fn execute(name: &str, params: TuiParams, shared: &SharedTuiState) -> TuiResult {
     match name {
         "tui_render" | "tui_query" => match shared.render(params.limit.unwrap_or(32_000)) {
@@ -154,6 +180,9 @@ fn failure(error: impl std::fmt::Display) -> TuiResult {
     }
 }
 
+/// Result when the companion runtime is not co-hosted (no [`SharedTuiState`]).
+///
+/// Sets `available = false` and a stable error string; never panics.
 pub fn unavailable() -> TuiResult {
     TuiResult {
         available: false,
@@ -165,15 +194,24 @@ pub fn unavailable() -> TuiResult {
     }
 }
 
+/// [`Tool`] adapter for one companion TUI name, optionally bound to [`SharedTuiState`].
+///
+/// Without shared state, [`Tool::execute_typed`] still returns a successful outer
+/// [`ToolResult`] whose payload is [`unavailable`] so MCP clients see a structured
+/// companion-domain error rather than a hard tool failure.
 #[derive(Clone)]
 pub struct TuiTool {
     name: &'static str,
     shared: Option<SharedTuiState>,
 }
+
 impl TuiTool {
+    /// Unbound companion tool; execution yields [`unavailable`] until shared state is attached.
     pub const fn new(name: &'static str) -> Self {
         Self { name, shared: None }
     }
+
+    /// Companion tool bound to the co-hosted TUI coordination state.
     pub fn with_shared(name: &'static str, shared: SharedTuiState) -> Self {
         Self {
             name,
@@ -181,26 +219,40 @@ impl TuiTool {
         }
     }
 }
+
 impl Default for TuiTool {
     fn default() -> Self {
         Self::new(NAMES[0])
     }
 }
+
 impl Tool for TuiTool {
     type Params = TuiParams;
     type Output = TuiResult;
+
     fn name(&self) -> &str {
         self.name
     }
+
     fn description(&self) -> &str {
         "Shared TUI coordination operation"
     }
+
     fn parameters_schema(&self) -> Value {
         serde_json::to_value(schemars::schema_for!(TuiParams)).unwrap()
     }
+
     fn output_schema(&self) -> Value {
         serde_json::to_value(schemars::schema_for!(TuiResult)).unwrap()
     }
+
+    /// Run against shared TUI state when bound; otherwise return [`unavailable`] as payload.
+    ///
+    /// Ignores browser [`ToolContext`]—companion tools coordinate TUI state, not CDP actions.
+    ///
+    /// # Errors
+    ///
+    /// This path does not return `Err`; companion failures are encoded inside [`TuiResult`].
     fn execute_typed(&self, params: TuiParams, _context: &mut ToolContext) -> Result<ToolResult> {
         let result = self
             .shared
@@ -284,6 +336,7 @@ mod tests {
                 tag: Some("p".into()),
                 id: Some("spotlight".into()),
                 unique_id: true,
+                selector: None,
                 text: Some("hello".into()),
                 href: None,
                 landmark: None,
@@ -347,6 +400,7 @@ mod tests {
                 tag: Some("p".into()),
                 id: Some("spotlight".into()),
                 unique_id: true,
+                selector: None,
                 text: Some("hello".into()),
                 href: None,
                 landmark: None,

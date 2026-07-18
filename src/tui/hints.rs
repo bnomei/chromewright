@@ -131,6 +131,7 @@ mod tests {
             tag: Some("a".into()),
             id: Some(id.into()),
             unique_id: true,
+            selector: None,
             text: Some(text.into()),
             href: Some(href.into()),
             landmark: None,

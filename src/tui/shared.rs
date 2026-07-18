@@ -1,4 +1,10 @@
-//! Shared in-process coordination for the terminal and the future co-hosted MCP server.
+//! In-process coordination between the terminal UI and the co-hosted MCP companion.
+//!
+//! [`SharedTuiState`] is the single source of truth for published
+//! [`SemanticDocument`]s, revision retention/eviction, human selection, agent
+//! [`Attention`], and the shared Loading → Ready | Error lifecycle. Companion
+//! tools and the terminal controller both claim page actions through this type
+//! so they cannot race the one live [`BrowserSession`].
 
 use crate::browser::BrowserSession;
 use crate::semantic::{SemanticDocument, SemanticRef, render_outline, render_semantic_markdown};
@@ -10,11 +16,17 @@ use std::sync::{
 };
 use std::time::Duration;
 
+/// How many historical captures (excluding the active document) to retain for
+/// revisioned MCP resources and fail-closed ref lookups.
 pub const DEFAULT_REVISION_RETENTION: usize = 8;
 
 /// Maximum characters allowed in an agent attention message (tool + resource).
 pub const MAX_ATTENTION_MESSAGE_CHARS: usize = 512;
 
+/// Fail-closed coordination failures for companion tools and terminal publish paths.
+///
+/// Distinguishes missing vs. evicted vs. wrong-document revisions so callers can
+/// report stale `semantic_ref` targets without falling through to the active page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CoordinationError {
     NoDocument,
@@ -57,10 +69,19 @@ impl std::fmt::Display for CoordinationError {
 
 impl std::error::Error for CoordinationError {}
 
+/// Validated revision token used in revisioned resource URIs and lookups.
+///
+/// Rejects empty values and characters that would break path segments (`/` or
+/// whitespace). Does not interpret browser revision format beyond that.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RevisionId(String);
 
 impl RevisionId {
+    /// Parse a revision string for coordination lookups.
+    ///
+    /// # Errors
+    /// Returns [`CoordinationError::MalformedRevision`] when the token is empty
+    /// or contains `/` or whitespace.
     pub fn parse(value: &str) -> Result<Self, CoordinationError> {
         if value.is_empty() || value.chars().any(|c| c.is_whitespace() || c == '/') {
             return Err(CoordinationError::MalformedRevision);
@@ -72,10 +93,19 @@ impl RevisionId {
     }
 }
 
+/// Validated document identity for revisioned resource lookups.
+///
+/// Same path-safety rules as [`RevisionId`]; pairs with a revision to address a
+/// retained or active capture.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DocumentId(String);
 
 impl DocumentId {
+    /// Parse a document id for coordination lookups.
+    ///
+    /// # Errors
+    /// Returns [`CoordinationError::MalformedDocumentId`] when the token is empty
+    /// or contains `/` or whitespace.
     pub fn parse(value: &str) -> Result<Self, CoordinationError> {
         if value.is_empty() || value.chars().any(|c| c.is_whitespace() || c == '/') {
             return Err(CoordinationError::MalformedDocumentId);
@@ -87,6 +117,7 @@ impl DocumentId {
     }
 }
 
+/// Record that a historical capture left retention and must fail closed on lookup.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Eviction {
     pub document_id: String,
@@ -157,6 +188,12 @@ struct Inner {
     evictions: VecDeque<Eviction>,
 }
 
+/// Cloneable handle to the one in-process TUI/companion coordination object.
+///
+/// Holds the optional [`BrowserSession`], published SemanticDocument history,
+/// selection/attention, and the runtime-active gate that companion mutations
+/// require. Construct with [`Self::unbound`] when registering `tui_*` tools
+/// before the session Arc is sealed, then [`Self::bind_session`] exactly once.
 #[derive(Clone)]
 pub struct SharedTuiState {
     session: Arc<Mutex<Option<Arc<BrowserSession>>>>,
@@ -165,12 +202,19 @@ pub struct SharedTuiState {
 }
 
 impl SharedTuiState {
+    /// Bound coordination with default revision retention.
     pub fn new(session: Arc<BrowserSession>) -> Self {
         Self::with_retention(session, DEFAULT_REVISION_RETENTION)
     }
+
+    /// Bound coordination with an explicit historical-capture budget.
+    ///
+    /// `limit` is clamped to at least 1 and counts retained pages only (not the
+    /// active document).
     pub fn with_retention(session: Arc<BrowserSession>, limit: usize) -> Self {
         Self::with_optional_session(Some(session), limit)
     }
+
     /// Construct the coordination object before the BrowserSession registry is
     /// sealed, then bind the one live session exactly once.
     pub fn unbound() -> Self {
@@ -191,6 +235,13 @@ impl SharedTuiState {
             runtime_active: Arc::new(AtomicBool::new(false)),
         }
     }
+
+    /// Attach the one live browser session after tool registration.
+    ///
+    /// # Errors
+    /// Returns [`CoordinationError::RuntimeRequired`] if a session is already bound
+    /// (reused as a "runtime already claimed" signal rather than inventing a new
+    /// error variant).
     pub fn bind_session(&self, session: Arc<BrowserSession>) -> Result<(), CoordinationError> {
         let mut current = self.session.lock().unwrap();
         if current.is_some() {
@@ -199,6 +250,8 @@ impl SharedTuiState {
         *current = Some(session);
         Ok(())
     }
+
+    /// The bound browser session, if coordination has been activated with one.
     pub fn session(&self) -> Result<Arc<BrowserSession>, CoordinationError> {
         self.session
             .lock()
@@ -249,6 +302,15 @@ impl SharedTuiState {
         };
     }
 
+    /// Atomically publish a complete SemanticDocument as active and transition
+    /// lifecycle to Ready.
+    ///
+    /// Previous active captures move into retention (oldest first); when the
+    /// retention budget is exceeded the oldest is recorded as an [`Eviction`].
+    /// Selection is re-validated against the new document (dropped if unresolved);
+    /// attention survives only when its exact `semantic_ref` still resolves.
+    ///
+    /// Returns the oldest eviction produced by this publish, if any.
     pub fn publish(&self, document: SemanticDocument) -> Option<Eviction> {
         let mut state = self.inner.lock().unwrap();
         Self::publish_locked(&mut state, document, None)
@@ -359,6 +421,14 @@ impl SharedTuiState {
     pub fn retention_limit(&self) -> usize {
         self.inner.lock().unwrap().limit
     }
+
+    /// Look up an active or retained capture by document id + revision.
+    ///
+    /// # Errors
+    /// - [`CoordinationError::EvictedRevision`] when the pair was previously dropped
+    /// - [`CoordinationError::WrongDocument`] when another document is active/retained
+    /// - [`CoordinationError::RevisionUnavailable`] when the pair was never published
+    /// - Malformed id/revision parse errors from [`DocumentId`] / [`RevisionId`]
     pub fn revision(
         &self,
         document_id: &str,
@@ -503,9 +573,14 @@ impl SharedTuiState {
         }
     }
 
+    /// Human selection as an exact `semantic_ref` against the active document.
     pub fn selection(&self) -> Option<SemanticRef> {
         self.inner.lock().unwrap().selection.clone()
     }
+
+    /// Set human selection after resolving the ref against the active document.
+    ///
+    /// Does not mutate agent attention. Fails closed on missing/stale/unknown refs.
     pub fn set_selection(&self, reference: SemanticRef) -> Result<(), CoordinationError> {
         let mut s = self.inner.lock().unwrap();
         let d = s.active.as_ref().ok_or(CoordinationError::NoDocument)?;
@@ -513,6 +588,8 @@ impl SharedTuiState {
         s.selection = Some(reference);
         Ok(())
     }
+
+    /// Current agent attention spotlight (independent of human selection).
     pub fn attention(&self) -> Attention {
         self.inner.lock().unwrap().attention.clone()
     }
@@ -702,6 +779,7 @@ mod tests {
                 tag: Some("p".into()),
                 id: Some("spotlight".into()),
                 unique_id: true,
+                selector: None,
                 text: Some("hello".into()),
                 href: None,
                 landmark: None,
@@ -765,6 +843,7 @@ mod tests {
                 tag: Some("p".into()),
                 id: Some("spotlight".into()),
                 unique_id: true,
+                selector: None,
                 text: Some("hello".into()),
                 href: None,
                 landmark: None,

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Added
+
+- Add the default-enabled semantic terminal browser with Vimari navigation,
+  Vim-style search, configurable TOML bindings, bounded paste input, managed
+  headless Chrome sessions, and exact fail-closed id-less element interaction.
+- Add the co-hosted loopback MCP companion with the complete `tui_*` tool
+  family and bounded active/revisioned semantic resources.
+
 ### Changed
 
 - Upgrade the MCP runtime to RMCP 2.2 and retain only the server, stdio, and streamable-HTTP transport features.

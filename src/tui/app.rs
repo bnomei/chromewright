@@ -8,10 +8,7 @@ use crate::tui::driver::SessionPageDriver;
 use crate::tui::render;
 use crate::tui::shared::SharedTuiState;
 use crossterm::cursor::{Hide, Show};
-use crossterm::event::{
-    self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-    Event, KeyEventKind,
-};
+use crossterm::event::{self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyEventKind};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -99,7 +96,6 @@ fn run_tui_with_config_and_companion(
 struct TerminalLifecycle {
     raw_mode: bool,
     alternate_screen: bool,
-    mouse_capture: bool,
     bracketed_paste: bool,
     cursor_hidden: bool,
 }
@@ -109,8 +105,6 @@ trait TerminalControl {
     fn disable_raw_mode(&mut self) -> io::Result<()>;
     fn enter_alternate_screen(&mut self) -> io::Result<()>;
     fn leave_alternate_screen(&mut self) -> io::Result<()>;
-    fn enable_mouse_capture(&mut self) -> io::Result<()>;
-    fn disable_mouse_capture(&mut self) -> io::Result<()>;
     fn enable_bracketed_paste(&mut self) -> io::Result<()>;
     fn disable_bracketed_paste(&mut self) -> io::Result<()>;
     fn hide_cursor(&mut self) -> io::Result<()>;
@@ -123,8 +117,6 @@ impl TerminalLifecycle {
         control.enable_raw_mode()?;
         self.alternate_screen = true;
         control.enter_alternate_screen()?;
-        self.mouse_capture = true;
-        control.enable_mouse_capture()?;
         self.bracketed_paste = true;
         control.enable_bracketed_paste()?;
         self.cursor_hidden = true;
@@ -147,13 +139,6 @@ impl TerminalLifecycle {
             Self::record(
                 control.disable_bracketed_paste(),
                 &mut self.bracketed_paste,
-                &mut first_error,
-            );
-        }
-        if self.mouse_capture {
-            Self::record(
-                control.disable_mouse_capture(),
-                &mut self.mouse_capture,
                 &mut first_error,
             );
         }
@@ -205,14 +190,6 @@ impl TerminalControl for CrosstermTerminalControl<'_> {
 
     fn leave_alternate_screen(&mut self) -> io::Result<()> {
         execute!(self.terminal.backend_mut(), LeaveAlternateScreen)
-    }
-
-    fn enable_mouse_capture(&mut self) -> io::Result<()> {
-        execute!(self.terminal.backend_mut(), EnableMouseCapture)
-    }
-
-    fn disable_mouse_capture(&mut self) -> io::Result<()> {
-        execute!(self.terminal.backend_mut(), DisableMouseCapture)
     }
 
     fn enable_bracketed_paste(&mut self) -> io::Result<()> {
@@ -324,6 +301,9 @@ fn run_loop(
                     }
                 }
                 Event::Resize(_, _) => {}
+                Event::Paste(text) => {
+                    let _ = dispatcher.handle_paste(&mut controller, &text);
+                }
                 _ => {}
             }
         }
@@ -365,12 +345,6 @@ mod tests {
         fn leave_alternate_screen(&mut self) -> io::Result<()> {
             self.call("leave_alt")
         }
-        fn enable_mouse_capture(&mut self) -> io::Result<()> {
-            self.call("enable_mouse")
-        }
-        fn disable_mouse_capture(&mut self) -> io::Result<()> {
-            self.call("disable_mouse")
-        }
         fn enable_bracketed_paste(&mut self) -> io::Result<()> {
             self.call("enable_paste")
         }
@@ -396,12 +370,10 @@ mod tests {
             [
                 "enable_raw",
                 "enter_alt",
-                "enable_mouse",
                 "enable_paste",
                 "hide_cursor",
                 "show_cursor",
                 "disable_paste",
-                "disable_mouse",
                 "leave_alt",
                 "disable_raw",
             ]
@@ -413,7 +385,6 @@ mod tests {
         let mut lifecycle = TerminalLifecycle {
             raw_mode: true,
             alternate_screen: true,
-            mouse_capture: true,
             bracketed_paste: true,
             cursor_hidden: true,
         };
@@ -424,16 +395,10 @@ mod tests {
         assert!(lifecycle.restore(&mut terminal).is_err());
         assert_eq!(
             terminal.calls,
-            [
-                "show_cursor",
-                "disable_paste",
-                "disable_mouse",
-                "leave_alt",
-                "disable_raw"
-            ]
+            ["show_cursor", "disable_paste", "leave_alt", "disable_raw"]
         );
         assert!(lifecycle.bracketed_paste);
-        assert!(!lifecycle.raw_mode && !lifecycle.alternate_screen && !lifecycle.mouse_capture);
+        assert!(!lifecycle.raw_mode && !lifecycle.alternate_screen);
     }
 
     #[test]
@@ -450,10 +415,8 @@ mod tests {
             [
                 "enable_raw",
                 "enter_alt",
-                "enable_mouse",
                 "enable_paste",
                 "disable_paste",
-                "disable_mouse",
                 "leave_alt",
                 "disable_raw",
             ]

@@ -217,6 +217,8 @@ impl TuiKeymap {
         insert(&mut map, Action::NewTab, KeySequence::chars("t"));
         insert(&mut map, Action::OpenUrl, KeySequence::chars("o"));
         insert(&mut map, Action::Search, KeySequence::chars("/"));
+        insert(&mut map, Action::SearchNext, KeySequence::chars("n"));
+        insert(&mut map, Action::SearchPrevious, KeySequence::chars("N"));
         insert(
             &mut map,
             Action::Collapse,
@@ -447,6 +449,14 @@ mod tests {
         assert_eq!(
             km.resolve_sequence(&KeySequence::chars("o")),
             Some(Action::OpenUrl)
+        );
+        assert_eq!(
+            km.resolve_sequence(&KeySequence::chars("n")),
+            Some(Action::SearchNext)
+        );
+        assert_eq!(
+            km.resolve_sequence(&KeySequence::chars("N")),
+            Some(Action::SearchPrevious)
         );
         assert_eq!(
             km.resolve_sequence(&KeySequence::with_modifiers(

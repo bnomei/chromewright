@@ -250,19 +250,26 @@ fn js_string(s: &str) -> String {
     serde_json::to_string(s).unwrap_or_else(|_| "\"\"".into())
 }
 
-fn exact_dom_id(component: &crate::semantic::SemanticComponent) -> Result<String> {
-    component
-        .semantic_ref
-        .author_id()
-        .map_err(|e| BrowserError::InvalidArgument(e.to_string()))?
-        .ok_or_else(|| BrowserError::InvalidArgument("semantic ref has no exact DOM id".into()))
-}
-
 fn exact_target_prelude(
     document: &SemanticDocument,
     component: &crate::semantic::SemanticComponent,
 ) -> Result<String> {
-    let id = exact_dom_id(component)?;
+    let locator = component.interaction_selector.as_deref().ok_or_else(|| {
+        BrowserError::InvalidArgument("semantic ref has no exact interaction locator".into())
+    })?;
+    let selectors: Vec<String> = serde_json::from_str(locator).map_err(|_| {
+        BrowserError::InvalidArgument("semantic interaction locator is malformed".into())
+    })?;
+    if selectors.is_empty() || selectors.iter().any(|selector| selector.is_empty()) {
+        return Err(BrowserError::InvalidArgument(
+            "semantic interaction locator is empty".into(),
+        ));
+    }
+    let selectors = serde_json::to_string(&selectors).map_err(|error| {
+        BrowserError::InvalidArgument(format!(
+            "semantic interaction locator cannot be encoded: {error}"
+        ))
+    })?;
     let expected_tag = component
         .attrs
         .tag
@@ -271,14 +278,23 @@ fn exact_target_prelude(
         .to_ascii_uppercase();
     Ok(format!(
         r#"const state = globalThis.__browserUseDocumentState;
-            if (!state || state.documentId !== {document_id} || String(state.revision) !== {revision}) return 'stale';
-            const matches = Array.from(document.querySelectorAll('[id]')).filter((candidate) => candidate.id === {id});
-            if (matches.length !== 1) return 'ambiguous';
-            const el = matches[0];
+            if (!state || state.documentId !== {document_id} || ('main:' + String(state.revision)) !== {revision}) return 'stale';
+            const selectors = {selectors};
+            let scope = document;
+            let el = null;
+            for (let index = 0; index < selectors.length; index += 1) {{
+                const matches = Array.from(scope.querySelectorAll(selectors[index]));
+                if (matches.length !== 1) return 'ambiguous';
+                el = matches[0];
+                if (index + 1 < selectors.length) {{
+                    if (!el.shadowRoot) return 'missing_shadow_root';
+                    scope = el.shadowRoot;
+                }}
+            }}
             if ({expected_tag} && el.tagName !== {expected_tag}) return 'kind_mismatch';"#,
         document_id = js_string(&document.document.document_id),
         revision = js_string(&document.document.revision),
-        id = js_string(&id),
+        selectors = selectors,
         expected_tag = js_string(&expected_tag),
     ))
 }

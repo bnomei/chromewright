@@ -48,6 +48,7 @@ fn smoke_navigate_tool() {
 }
 
 #[test]
+#[cfg(feature = "tui")]
 fn smoke_semantic_capture_uses_main_revision_from_browser_metadata() {
     let Some(browser) = common::browser_or_skip() else {
         return;
@@ -78,6 +79,211 @@ fn smoke_semantic_capture_uses_main_revision_from_browser_metadata() {
         metadata.revision.split('|').next(),
         Some(semantic.document.revision.as_str()),
         "semantic capture must retain the browser metadata main-frame revision"
+    );
+}
+
+#[test]
+#[cfg(feature = "tui")]
+fn smoke_tui_operates_idless_semantic_controls_and_rejects_stale_refs() {
+    use chromewright::SemanticKind;
+    use chromewright::tui::{PageDriver, SessionPageDriver};
+
+    let Some(browser) = common::browser_or_skip() else {
+        return;
+    };
+    let session = browser.session();
+    common::navigate_encoded_html(
+        session,
+        r##"
+            <html><body>
+              <input name="email">
+              <select name="plan"><option value="free">Free</option><option value="pro">Pro</option></select>
+              <button onclick="window.__tuiClicked = true">Save</button>
+              <a href="#done" onclick="window.__tuiLinkClicked = true; event.preventDefault()">Continue</a>
+              <div class="widget"></div>
+              <script>
+                const shadow = document.querySelector('.widget').attachShadow({ mode: 'open' });
+                shadow.innerHTML = '<button onclick="window.__tuiShadowClicked = true">Shadow Save</button>';
+              </script>
+            </body></html>
+        "##,
+    )
+    .expect("failed to navigate");
+
+    let mut driver = SessionPageDriver::new(session);
+    let document = driver.capture_semantic().expect("semantic capture");
+    let input_ref = document
+        .components()
+        .find(|component| component.kind == SemanticKind::Input)
+        .expect("id-less input")
+        .semantic_ref
+        .clone();
+    driver
+        .fill_control(&document, &input_ref, "user@example.com")
+        .expect("fill id-less input");
+    assert_eq!(
+        common::evaluate(session, "document.querySelector('input').value")
+            .expect("input value")
+            .as_str(),
+        Some("user@example.com")
+    );
+
+    let document = driver.capture_semantic().expect("capture after input");
+    let select_ref = document
+        .components()
+        .find(|component| component.kind == SemanticKind::Select)
+        .expect("id-less select")
+        .semantic_ref
+        .clone();
+    driver
+        .fill_control(&document, &select_ref, "pro")
+        .expect("select id-less option");
+    assert_eq!(
+        common::evaluate(session, "document.querySelector('select').value")
+            .expect("select value")
+            .as_str(),
+        Some("pro")
+    );
+
+    let document = driver.capture_semantic().expect("capture after select");
+    let button_ref = document
+        .components()
+        .find(|component| component.kind == SemanticKind::Button)
+        .expect("id-less button")
+        .semantic_ref
+        .clone();
+    driver
+        .activate_ref(&document, &button_ref, false)
+        .expect("activate id-less button");
+    assert_eq!(
+        common::evaluate(session, "window.__tuiClicked === true").expect("button marker"),
+        Value::Bool(true)
+    );
+
+    let document = driver.capture_semantic().expect("capture after button");
+    let shadow_button_ref = document
+        .components()
+        .find(|component| {
+            component.kind == SemanticKind::Button
+                && component
+                    .text
+                    .as_deref()
+                    .or(component.label.as_deref())
+                    .is_some_and(|text| text.contains("Shadow Save"))
+        })
+        .expect("id-less shadow button")
+        .semantic_ref
+        .clone();
+    driver
+        .activate_ref(&document, &shadow_button_ref, false)
+        .expect("activate id-less shadow button");
+    assert_eq!(
+        common::evaluate(session, "window.__tuiShadowClicked === true")
+            .expect("shadow button marker"),
+        Value::Bool(true)
+    );
+
+    let stale_document = driver.capture_semantic().expect("capture before mutation");
+    let stale_button_ref = stale_document
+        .components()
+        .find(|component| component.kind == SemanticKind::Button)
+        .expect("button before mutation")
+        .semantic_ref
+        .clone();
+    common::evaluate(
+        session,
+        "document.body.appendChild(document.createElement('div'))",
+    )
+    .expect("mutate document");
+    let stale_error = driver
+        .activate_ref(&stale_document, &stale_button_ref, false)
+        .expect_err("stale semantic interaction must fail");
+    assert!(stale_error.to_string().contains("stale"), "{stale_error}");
+
+    let document = driver.capture_semantic().expect("capture after mutation");
+    let link_ref = document
+        .components()
+        .find(|component| component.kind == SemanticKind::Link)
+        .expect("id-less link")
+        .semantic_ref
+        .clone();
+    driver
+        .activate_ref(&document, &link_ref, false)
+        .expect("follow id-less link");
+    assert_eq!(
+        common::evaluate(session, "window.__tuiLinkClicked === true").expect("link marker"),
+        Value::Bool(true)
+    );
+}
+
+#[test]
+#[cfg(feature = "tui")]
+fn smoke_tui_controller_publishes_loading_then_atomic_ready_on_reload() {
+    use chromewright::tui::{Controller, Lifecycle, PageDriver, SessionPageDriver, SharedTuiState};
+
+    let Some(browser) = common::browser_or_skip() else {
+        return;
+    };
+    common::navigate_encoded_html(
+        browser.session(),
+        "<html><head><title>TUI lifecycle</title></head><body><main>ready</main></body></html>",
+    )
+    .expect("failed to navigate");
+    let (_guard, session) = browser.into_shared();
+    let shared = SharedTuiState::new(session.clone());
+    let mut controller = Controller::with_shared(shared.clone());
+    let mut driver = SessionPageDriver::new(&session);
+
+    controller.bootstrap();
+    assert!(matches!(
+        controller.state.lifecycle,
+        Lifecycle::Loading { .. }
+    ));
+    assert!(matches!(shared.lifecycle(), Lifecycle::Loading { .. }));
+    controller.acknowledge_loading_frame();
+    controller
+        .perform_pending_page_action(&mut driver)
+        .expect("initial semantic capture");
+    assert!(matches!(controller.state.lifecycle, Lifecycle::Ready));
+    let before = controller.state.revision().to_string();
+
+    controller.reload();
+    assert!(matches!(
+        controller.state.lifecycle,
+        Lifecycle::Loading { .. }
+    ));
+    assert_eq!(
+        controller.state.revision(),
+        before,
+        "Loading must retain the last complete page"
+    );
+    controller.acknowledge_loading_frame();
+    controller
+        .perform_pending_page_action(&mut driver)
+        .expect("reload and recapture");
+
+    assert!(matches!(controller.state.lifecycle, Lifecycle::Ready));
+    let page = controller.state.page.as_ref().expect("published page");
+    assert_eq!(page.revision, page.document.document.revision);
+    assert_eq!(page.url, page.document.document.url);
+    assert_eq!(page.title, page.document.document.title);
+    assert_eq!(
+        shared
+            .active()
+            .expect("shared published page")
+            .document
+            .revision,
+        page.revision
+    );
+    // Exercise the trait import in this live path and prove the published
+    // document remains immediately capturable from the same browser session.
+    assert_eq!(
+        driver
+            .capture_semantic()
+            .expect("post-ready capture")
+            .document
+            .document_id,
+        page.document.document.document_id
     );
 }
 

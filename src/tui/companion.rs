@@ -1,3 +1,11 @@
+//! Loopback MCP companion co-hosted with the interactive terminal browser.
+//!
+//! Binds streamable HTTP only on localhost, nests under a configured absolute path,
+//! and hands every session a [`BrowserServer`] built with the same
+//! [`BrowserSession`] + [`SharedTuiState`] the TUI owns. Standard stdio MCP remains
+//! a separate process boundary and never registers `tui_*` tools or semantic
+//! resources through this path.
+
 use crate::tui::SharedTuiState;
 use crate::{BrowserServer, BrowserSession};
 use axum::Router;
@@ -7,6 +15,10 @@ use rmcp::transport::streamable_http_server::{
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener};
 use std::sync::Arc;
 
+/// Running loopback MCP companion: HTTP task handle plus the bound address/path.
+///
+/// Drop is not enough — call [`Companion::stop`] so the listener is aborted
+/// before the terminal restores raw mode.
 pub struct Companion {
     task: tokio::task::JoinHandle<()>,
     #[cfg_attr(not(test), allow(dead_code))]
@@ -19,6 +31,8 @@ fn loopback_address(port: u16) -> SocketAddr {
     SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port)
 }
 
+/// Reject relative paths and URL-shaped values so the nest route cannot escape
+/// the intended companion endpoint.
 fn validate_http_path(path: &str) -> Result<String, String> {
     if path.is_empty() || !path.starts_with('/') {
         return Err(format!(
@@ -31,6 +45,11 @@ fn validate_http_path(path: &str) -> Result<String, String> {
     Ok(path.to_owned())
 }
 
+/// Start the companion on loopback, sharing the live TUI session and coordination state.
+///
+/// `port` may be `0` for an ephemeral bind. Refuses non-loopback addresses even
+/// if the OS would otherwise allow them. The returned [`Companion`] owns the
+/// serve task until [`Companion::stop`].
 pub fn start(
     session: Arc<BrowserSession>,
     shared: SharedTuiState,
@@ -69,16 +88,19 @@ pub fn start(
     })
 }
 impl Companion {
+    /// Bound loopback socket (resolved after ephemeral-port allocation).
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn address(&self) -> SocketAddr {
         self.address
     }
 
+    /// Absolute HTTP nest path the streamable MCP service is mounted under.
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn path(&self) -> &str {
         &self.path
     }
 
+    /// Abort the serve task so the loopback listener becomes unreachable.
     pub fn stop(self) {
         self.task.abort();
     }
@@ -117,6 +139,30 @@ mod tests {
             Err(ureq::Error::StatusCode(status)) => status,
             Err(error) => panic!("HTTP probe failed for {url}: {error}"),
         }
+    }
+
+    fn response_json(mut response: ureq::http::Response<ureq::Body>) -> serde_json::Value {
+        let status = response.status();
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("<missing>")
+            .to_string();
+        let body = response
+            .body_mut()
+            .read_to_string()
+            .expect("read MCP response");
+        let json = body
+            .lines()
+            .filter_map(|line| line.strip_prefix("data:").map(str::trim))
+            .find(|data| !data.is_empty())
+            .unwrap_or(body.trim());
+        serde_json::from_str(json).unwrap_or_else(|error| {
+            panic!(
+                "valid MCP JSON response (status={status}, content-type={content_type}, body={body:?}): {error}"
+            )
+        })
     }
 
     /// Sandboxed CI environments can prohibit all localhost binds. Keep the
@@ -175,6 +221,121 @@ mod tests {
             std::net::TcpStream::connect(address).is_err(),
             "listener must be unreachable after stop"
         );
+        shared.deactivate_runtime();
+    }
+
+    #[tokio::test]
+    async fn companion_serves_tools_and_resources_over_real_mcp_http_session() {
+        if !loopback_bind_available() {
+            return;
+        }
+        let (session, shared) = active_companion_session();
+        shared.publish(
+            SemanticDocument::empty(DocumentMetadata {
+                document_id: "fake-tab".into(),
+                revision: "fake:1".into(),
+                url: "https://example.test/".into(),
+                title: "Example".into(),
+                ready_state: "complete".into(),
+                frames: vec![],
+            })
+            .expect("semantic document"),
+        );
+        let companion = start(session, shared.clone(), "/mcp".into(), 0).expect("start");
+        let url = format!("http://{}/mcp", companion.address());
+
+        let (initialize, tools, resources) = tokio::task::spawn_blocking(move || {
+            let initialize_response = ureq::post(&url)
+                .header("accept", "application/json, text/event-stream")
+                .header("content-type", "application/json")
+                .send(
+                    serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "initialize",
+                        "params": {
+                            "protocolVersion": "2025-06-18",
+                            "capabilities": {},
+                            "clientInfo": { "name": "chromewright-test", "version": "1" }
+                        }
+                    })
+                    .to_string(),
+                )
+                .expect("initialize MCP session");
+            let session_id = initialize_response
+                .headers()
+                .get("mcp-session-id")
+                .expect("MCP session header")
+                .to_str()
+                .expect("session ID text")
+                .to_string();
+            let initialize = response_json(initialize_response);
+
+            let initialized = ureq::post(&url)
+                .header("accept", "application/json, text/event-stream")
+                .header("content-type", "application/json")
+                .header("mcp-session-id", &session_id)
+                .send(
+                    serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "method": "notifications/initialized"
+                    })
+                    .to_string(),
+                )
+                .expect("complete MCP handshake");
+            assert_eq!(initialized.status().as_u16(), 202);
+
+            let tools = ureq::post(&url)
+                .header("accept", "application/json, text/event-stream")
+                .header("content-type", "application/json")
+                .header("mcp-session-id", &session_id)
+                .send(
+                    serde_json::json!({
+                        "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}
+                    })
+                    .to_string(),
+                )
+                .map(response_json)
+                .expect("list tools");
+            let resources = ureq::post(&url)
+                .header("accept", "application/json, text/event-stream")
+                .header("content-type", "application/json")
+                .header("mcp-session-id", &session_id)
+                .send(
+                    serde_json::json!({
+                        "jsonrpc": "2.0", "id": 3, "method": "resources/list", "params": {}
+                    })
+                    .to_string(),
+                )
+                .map(response_json)
+                .expect("list resources");
+            (initialize, tools, resources)
+        })
+        .await
+        .expect("MCP client task");
+
+        assert_eq!(
+            initialize["result"]["instructions"],
+            "chromewright TUI companion MCP server (shared session, tui_* tools, semantic resources)"
+        );
+        let tool_names = tools["result"]["tools"]
+            .as_array()
+            .expect("tools array")
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect::<Vec<_>>();
+        assert!(tool_names.contains(&"tui_render"));
+        assert!(tool_names.contains(&"tui_attention_set"));
+        let resource_uris = resources["result"]["resources"]
+            .as_array()
+            .expect("resources array")
+            .iter()
+            .filter_map(|resource| resource["uri"].as_str())
+            .collect::<Vec<_>>();
+        assert!(resource_uris.contains(&"chromewright://active/semantic.md"));
+        assert!(resource_uris.contains(&"chromewright://tui/attention.json"));
+
+        companion.stop();
         shared.deactivate_runtime();
     }
 

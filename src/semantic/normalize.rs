@@ -39,6 +39,8 @@ pub struct RawSemanticNode {
     #[serde(default)]
     pub unique_id: bool,
     #[serde(default)]
+    pub selector: Option<String>,
+    #[serde(default)]
     pub landmark: Option<String>,
     #[serde(default)]
     pub heading_level: Option<u8>,
@@ -248,6 +250,7 @@ fn normalize_node(
         label,
         text,
         attrs,
+        interaction_selector: optional_clipped(&node.selector, "selector")?,
         children,
     }))
 }

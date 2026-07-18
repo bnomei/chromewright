@@ -3,25 +3,37 @@
 use crate::semantic::identity::SemanticRef;
 use serde::{Deserialize, Serialize};
 
-/// Kind of a normalized semantic component.
+/// Normalized component kind used by renderers, focus traversal, and projections.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SemanticKind {
+    /// Structural landmark region (main, nav, …).
     Landmark,
+    /// Heading with a level in attrs.
     Heading,
+    /// Prose or other non-interactive text block.
     Text,
+    /// Ordered or unordered list container.
     List,
+    /// Single list item.
     ListItem,
+    /// Hyperlink (focusable).
     Link,
+    /// Image with optional alt/src.
     Image,
+    /// Form input control (focusable).
     Input,
+    /// Multiline text control (focusable).
     Textarea,
+    /// Dropdown control with options (focusable).
     Select,
+    /// Button control (focusable).
     Button,
+    /// Generic grouping node without a more specific kind.
     Group,
 }
 
-/// Landmark roles retained from the HTML semantic subset.
+/// Landmark roles retained from the HTML semantic subset for outline and Ratatui frames.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LandmarkRole {
@@ -49,6 +61,13 @@ pub struct SemanticComponent {
     /// Kind-specific interaction and content metadata.
     #[serde(default, skip_serializing_if = "SemanticAttrs::is_empty")]
     pub attrs: SemanticAttrs,
+    /// Capture-scoped exact selector used only by the in-process TUI driver.
+    ///
+    /// This is deliberately absent from semantic JSON/resources: callers act
+    /// through opaque `semantic_ref`s, while the driver validates this locator
+    /// against the same document revision and requires one exact match.
+    #[serde(skip)]
+    pub(crate) interaction_selector: Option<String>,
     /// Child components in document order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<SemanticComponent>,
@@ -119,6 +138,7 @@ pub struct SemanticAttrs {
 }
 
 impl SemanticAttrs {
+    /// True when no kind-specific fields are set (serde skip and renderer elision).
     pub fn is_empty(&self) -> bool {
         self.landmark.is_none()
             && self.heading_level.is_none()
@@ -141,14 +161,18 @@ impl SemanticAttrs {
     }
 }
 
-/// One option retained from a `<select>` control.
+/// One option retained from a `<select>` control (clipped by select-option budgets).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SelectOption {
+    /// Option value submitted with the control.
     pub value: String,
+    /// Visible option label when distinct from `value`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// Whether this option is currently selected.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub selected: bool,
+    /// Whether this option is disabled.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub disabled: bool,
 }

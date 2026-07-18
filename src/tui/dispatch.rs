@@ -8,6 +8,8 @@ use crate::tui::keymap::{
 };
 use crate::tui::state::{HintMode, InputKind, InteractionMode};
 
+const MAX_TUI_INPUT_CHARS: usize = crate::semantic::MAX_SEMANTIC_STRING_CHARS;
+
 /// Outcome of handling one key event for the terminal event loop.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DispatchOutcome {
@@ -46,6 +48,28 @@ impl Dispatcher {
             InteractionMode::Input(_) => self.handle_input(controller, chord),
             InteractionMode::Hint(_) => self.handle_hint(controller, chord),
         }
+    }
+
+    /// Append a bracketed-paste payload only while editing, bounded like other
+    /// semantic strings. Normal/Hint/Loading modes never interpret pasted text.
+    pub fn handle_paste(&mut self, controller: &mut Controller, text: &str) -> DispatchOutcome {
+        if controller.state.lifecycle.is_loading() {
+            return DispatchOutcome::Continue;
+        }
+        let InteractionMode::Input(kind) = &mut controller.state.mode else {
+            return DispatchOutcome::Continue;
+        };
+        let buffer = input_buffer_mut(kind);
+        let remaining = MAX_TUI_INPUT_CHARS.saturating_sub(buffer.chars().count());
+        let appended: String = text.chars().take(remaining).collect();
+        let truncated = appended.chars().count() < text.chars().count();
+        buffer.push_str(&appended);
+        if truncated {
+            controller.state.view.set_status(format!(
+                "paste truncated at {MAX_TUI_INPUT_CHARS} characters"
+            ));
+        }
+        DispatchOutcome::Redraw
     }
 
     fn handle_normal(&mut self, controller: &mut Controller, chord: KeyChord) -> DispatchOutcome {
@@ -103,12 +127,9 @@ impl Dispatcher {
             }
             KeyCode::Char(ch) if !chord.modifiers.ctrl && !chord.modifiers.alt => {
                 if let InteractionMode::Input(kind) = &mut controller.state.mode {
-                    match kind {
-                        InputKind::Url { buffer }
-                        | InputKind::Search { buffer }
-                        | InputKind::Form { buffer, .. } => {
-                            buffer.push(ch);
-                        }
+                    let buffer = input_buffer_mut(kind);
+                    if buffer.chars().count() < MAX_TUI_INPUT_CHARS {
+                        buffer.push(ch);
                     }
                 }
                 DispatchOutcome::Redraw
@@ -228,6 +249,14 @@ impl Dispatcher {
                 controller.enter_search();
                 DispatchOutcome::Redraw
             }
+            Action::SearchNext => {
+                controller.repeat_search(true);
+                DispatchOutcome::Redraw
+            }
+            Action::SearchPrevious => {
+                controller.repeat_search(false);
+                DispatchOutcome::Redraw
+            }
             Action::Collapse => {
                 controller.toggle_collapse();
                 DispatchOutcome::Redraw
@@ -307,6 +336,14 @@ impl Dispatcher {
                 DispatchOutcome::Redraw
             }
         }
+    }
+}
+
+fn input_buffer_mut(kind: &mut InputKind) -> &mut String {
+    match kind {
+        InputKind::Url { buffer }
+        | InputKind::Search { buffer }
+        | InputKind::Form { buffer, .. } => buffer,
     }
 }
 
@@ -426,6 +463,31 @@ mod tests {
     }
 
     #[test]
+    fn bracketed_paste_is_bounded_and_only_edits_input_mode() {
+        let mut ctl = Controller::new();
+        ctl.state.publish_page(empty_doc());
+        let mut dispatcher = Dispatcher::new(TuiKeymap::defaults());
+
+        assert_eq!(
+            dispatcher.handle_paste(&mut ctl, "ignored"),
+            DispatchOutcome::Continue
+        );
+        ctl.enter_url_input();
+        assert_eq!(
+            dispatcher.handle_paste(&mut ctl, &"é".repeat(MAX_TUI_INPUT_CHARS + 1)),
+            DispatchOutcome::Redraw
+        );
+        let InteractionMode::Input(InputKind::Url { buffer }) = &ctl.state.mode else {
+            panic!("expected URL input");
+        };
+        assert_eq!(buffer.chars().count(), MAX_TUI_INPUT_CHARS);
+        assert_eq!(
+            ctl.state.view.status_message.as_deref(),
+            Some("paste truncated at 4096 characters")
+        );
+    }
+
+    #[test]
     fn reload_action_from_keymap() {
         let doc = empty_doc();
         let mut ctl = Controller::new();
@@ -453,6 +515,7 @@ mod tests {
                 tag: Some("a".into()),
                 id: Some("h".into()),
                 unique_id: true,
+                selector: None,
                 text: Some("Home".into()),
                 href: Some("/".into()),
                 landmark: None,

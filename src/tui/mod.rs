@@ -1,6 +1,6 @@
 //! Terminal browser (`chromewright tui`): lifecycle, keymap, and semantic navigation.
 //!
-//! Compiled only with the opt-in `tui` feature. Shares one `BrowserSession` and one
+//! Compiled only with the default-enabled, optional `tui` feature. Shares one `BrowserSession` and one
 //! semantic document with its Phase 5 loopback MCP companion, `tui_*` tools,
 //! and bounded revisioned resources. Standard stdio MCP remains separate.
 

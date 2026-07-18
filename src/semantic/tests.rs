@@ -25,6 +25,7 @@ fn node(kind: &str) -> RawSemanticNode {
         tag: None,
         id: None,
         unique_id: false,
+        selector: None,
         landmark: None,
         heading_level: None,
         ordered: None,
@@ -55,6 +56,7 @@ fn content_fixture() -> Vec<RawSemanticNode> {
             tag: Some("header".into()),
             landmark: Some("header".into()),
             unique_id: true,
+            selector: None,
             id: Some("site-header".into()),
             children: vec![RawSemanticNode {
                 kind: "heading".into(),
@@ -122,6 +124,7 @@ fn links_fixture() -> Vec<RawSemanticNode> {
                 text: Some("Home".into()),
                 label: Some("Home".into()),
                 unique_id: true,
+                selector: None,
                 id: Some("nav-home".into()),
                 ..node("link")
             },
@@ -207,6 +210,7 @@ fn controls_fixture() -> Vec<RawSemanticNode> {
                 label: Some("Email".into()),
                 required: Some(true),
                 unique_id: true,
+                selector: None,
                 id: Some("email".into()),
                 ..node("input")
             },

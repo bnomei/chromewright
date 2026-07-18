@@ -331,10 +331,24 @@ JSON.stringify((function() {
         }
         componentCount += 1;
 
+        var selector = null;
+        if (kind === 'link' || kind === 'input' || kind === 'textarea' ||
+            kind === 'select' || kind === 'button') {
+            selector = buildInteractionSelector(element);
+            if (selector) {
+                totalTextChars += selector.length;
+                if (totalTextChars > MAX_TOTAL_TEXT_CHARS) {
+                    truncated = true;
+                    return null;
+                }
+            }
+        }
+
         var node = {
             kind: kind,
             tag: element.tagName.toLowerCase(),
             id: element.id ? clipString(element.id) : null,
+            selector: selector,
             children: children || []
         };
 
@@ -347,6 +361,56 @@ JSON.stringify((function() {
         }
 
         return node;
+    }
+
+    // Mint an exact, capture-scoped locator without relying on text, classes,
+    // or mutable form values. Each JSON segment resolves uniquely inside the
+    // document or an open shadow root; the next segment enters that host's
+    // shadow root. Closed roots remain intentionally inaccessible.
+    function buildInteractionSelector(element) {
+        if (!element) return null;
+
+        var segments = [];
+        var target = element;
+        while (target) {
+            var root = target.getRootNode();
+            if (!root || !root.querySelectorAll) return null;
+            var selector = selectorWithinRoot(target, root);
+            if (!selector) return null;
+            segments.push(selector);
+            if (root === document) break;
+            if (!root.host) return null;
+            target = root.host;
+        }
+        segments.reverse();
+        var encoded = JSON.stringify(segments);
+        return encoded.length <= MAX_STRING_CHARS ? encoded : null;
+    }
+
+    function selectorWithinRoot(element, root) {
+        var path = [];
+        var current = element;
+        while (current && current.nodeType === 1) {
+            var parent = current.parentElement;
+            var tag = current.tagName.toLowerCase();
+            if (parent) {
+                var index = Array.prototype.indexOf.call(parent.children, current) + 1;
+                if (index <= 0) return null;
+                tag += ':nth-child(' + index + ')';
+            }
+            path.unshift(tag);
+            if (!parent) break;
+            current = parent;
+        }
+
+        var selector = path.join(' > ');
+        if (!selector || selector.length > MAX_STRING_CHARS) return null;
+        try {
+            var matches = root.querySelectorAll(selector);
+            return matches.length === 1 && matches[0] === element ? selector : null;
+        } catch (_) {
+            return null;
+        }
     }
 
     // Textual containers: leaf when only text; ordered children without aggregate
