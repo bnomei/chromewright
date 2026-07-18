@@ -30,7 +30,7 @@ pub fn draw(frame: &mut Frame, controller: &Controller) {
     draw_status(frame, chunks[2], controller, &theme);
 
     if let Some(inspect) = &controller.state.view.inspect_text {
-        draw_inspect_overlay(frame, area, inspect, &theme);
+        draw_inspect_under_selection(frame, chunks[1], controller, inspect, &theme);
     }
 }
 
@@ -235,20 +235,81 @@ fn draw_status(frame: &mut Frame, area: Rect, controller: &Controller, theme: &T
     frame.render_widget(Paragraph::new(line), area);
 }
 
-fn draw_inspect_overlay(frame: &mut Frame, area: Rect, inspect: &str, theme: &TuiTheme) {
-    let width = area.width.saturating_sub(4).max(10);
-    let height = 6u16.min(area.height.saturating_sub(2)).max(3);
-    let x = area.x + 2;
-    let y = area.y + area.height.saturating_sub(height + 1) / 2;
+/// Draw the inspect panel just below the last visible line of the selection.
+///
+/// Falls back to the bottom of the content area when the selection is off-screen
+/// or near the bottom (panel grows upward so it stays in the content pane).
+fn draw_inspect_under_selection(
+    frame: &mut Frame,
+    content_area: Rect,
+    controller: &Controller,
+    inspect: &str,
+    theme: &TuiTheme,
+) {
+    let state = &controller.state;
+    let lines = controller.content_lines();
+    let scroll = state.view.scroll_y;
+    let vh = content_area.height as usize;
+
+    let body_lines = inspect.lines().count().max(1);
+    // Border (2) + body, capped so we never cover the whole content pane.
+    let panel_h = ((body_lines + 2) as u16)
+        .min(content_area.height.saturating_sub(1).max(3))
+        .max(3);
+    let width = content_area.width.saturating_sub(2).max(10);
+    let x = content_area.x.saturating_add(1);
+
+    // Last content-line index of the selection (handles wrap continuations).
+    let last_abs = state
+        .view
+        .selection
+        .as_ref()
+        .and_then(|sel| Controller::last_line_index_of(&lines, sel));
+
+    let y = if let Some(abs) = last_abs {
+        if abs < scroll {
+            // Selection above viewport: dock under content top.
+            content_area.y
+        } else {
+            let row_in_view = abs - scroll;
+            if row_in_view >= vh {
+                // Selection below viewport: dock above content bottom.
+                content_area
+                    .y
+                    .saturating_add(content_area.height.saturating_sub(panel_h))
+            } else {
+                let below = content_area.y.saturating_add((row_in_view as u16).saturating_add(1));
+                let max_y = content_area
+                    .y
+                    .saturating_add(content_area.height.saturating_sub(panel_h));
+                if below > max_y {
+                    // Not enough room below the element: sit just above the bottom.
+                    max_y
+                } else {
+                    below
+                }
+            }
+        }
+    } else {
+        content_area
+            .y
+            .saturating_add(content_area.height.saturating_sub(panel_h))
+    };
+
     let rect = Rect {
         x,
         y,
         width,
-        height,
+        height: panel_h,
+    };
+    let title = if state.view.inspect_follow {
+        "inspect · j/k follows · Esc"
+    } else {
+        "inspect"
     };
     let block = Block::default()
         .borders(Borders::ALL)
-        .title("inspect")
+        .title(title)
         .border_style(theme.chrome_mode())
         .title_style(theme.chrome_mode());
     let inner = block.inner(rect);

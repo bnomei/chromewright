@@ -222,7 +222,7 @@ Keyboard bindings are not shown in the terminal chrome. Defaults are Vimari-comp
 | `Space` | `collapse` | Collapse or expand the selected block. |
 | `zw` | `toggle_wrap` | Toggle soft word-wrap (off by default). When on, long lines wrap to the viewport and `h`/`l` horizontal pan is disabled. |
 | `zs` | `toggle_structure` | Toggle prose (default) vs structure projection. Prose hides landmark/list/group chrome and flattens indent; structure shows DOM-like containers. Collapse (`Space`) only works in structure mode. |
-| `i` | `inspect` | Inspect selected component metadata. |
+| `i` | `inspect` | Open an inspect panel under the selected block; it follows j/k (and other selection moves) until Esc. |
 | `y` | `copy_block` | Copy rendered block text (OSC 52). |
 | `Y` | `copy_ref` | Copy the opaque `semantic_ref` (OSC 52). |
 | `Tab` | `tab_next` | Move to the next focusable control. |

@@ -139,6 +139,8 @@ pub struct ViewState {
     pub search_query: String,
     /// Inspection overlay text (no key legends).
     pub inspect_text: Option<String>,
+    /// When true, inspect stays open and refreshes as selection moves (j/k, tab, …).
+    pub inspect_follow: bool,
     /// Transient status (anchor changed, clipboard fallback, etc.).
     pub status_message: Option<String>,
     /// Pending two-key hint buffer.
@@ -281,6 +283,7 @@ impl TuiState {
             viewport_width: self.view.viewport_width,
             wrap: self.view.wrap,
             projection: self.view.projection,
+            inspect_follow: false,
             ..ViewState::default()
         };
         self.can_go_back = false;
@@ -300,6 +303,7 @@ impl TuiState {
                 self.mode = InteractionMode::Normal;
                 self.view.hint_buffer.clear();
                 self.view.inspect_text = None;
+                self.view.inspect_follow = false;
                 self.view.set_status(format!("dismissed: {message}"));
                 true
             }

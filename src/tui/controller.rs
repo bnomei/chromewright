@@ -561,13 +561,13 @@ impl Controller {
                 }
             }
         }
-        // Inspection text describes the prior capture and must never survive a
-        // recapture unless explicitly regenerated for the new exact ref.
+        // Drop stale inspect text; sticky follow rebuilds for the new selection.
         self.state.view.inspect_text = None;
         self.hints.clear();
         let document = self.state.document().expect("capture published").clone();
         let selection = self.state.view.selection.clone();
         let _ = self.shared.publish_with_selection(document, selection);
+        self.refresh_inspect_panel();
     }
 
     /// After a capture, if the document URL has a fragment, move selection to it.
@@ -764,6 +764,7 @@ impl Controller {
         {
             self.ensure_visible(idx, lines.len());
         }
+        self.refresh_inspect_panel();
     }
 
     /// Move selection to the next addressable content line (and keep it visible).
@@ -812,6 +813,7 @@ impl Controller {
         let line_idx = positions[next];
         self.state.view.selection = lines[line_idx].semantic_ref.clone();
         self.ensure_visible(line_idx, lines.len());
+        self.refresh_inspect_panel();
     }
 
     /// Scroll down by half the content viewport without changing selection.
@@ -927,18 +929,31 @@ impl Controller {
     }
 
     /// Open the inspect overlay for the selected component (no key legends).
+    ///
+    /// Sticky until Escape: while `inspect_follow` is set, selection changes
+    /// (j/k, tab, search, …) refresh the panel under the new target.
     pub fn inspect_selection(&mut self) {
+        self.state.view.inspect_follow = true;
+        self.refresh_inspect_panel();
+    }
+
+    /// Rebuild inspect text for the current selection when follow mode is on.
+    fn refresh_inspect_panel(&mut self) {
+        if !self.state.view.inspect_follow {
+            return;
+        }
         let Some(doc) = self.state.document() else {
+            self.state.view.inspect_text = None;
             return;
         };
         let Some(sel) = &self.state.view.selection else {
-            self.state.view.set_status("no selection");
+            self.state.view.inspect_text = Some("(no selection)".into());
             return;
         };
         match doc.resolve(sel) {
             Ok(c) => {
                 let text = format!(
-                    "kind={:?} ref={} label={:?} text={:?} href={:?} name={:?} value={:?}",
+                    "kind={:?}\nref={}\nlabel={:?}\ntext={:?}\nhref={:?}\nname={:?}\nvalue={:?}",
                     c.kind,
                     c.semantic_ref.as_str(),
                     c.label,
@@ -950,10 +965,23 @@ impl Controller {
                 self.state.view.inspect_text = Some(text);
             }
             Err(e) => {
-                self.state.view.inspect_text = None;
-                self.state.view.set_status(format!("inspect failed: {e}"));
+                self.state.view.inspect_text =
+                    Some(format!("inspect failed: {e}"));
             }
         }
+    }
+
+    /// Last content-line index belonging to `semantic_ref` (for wrap continuations).
+    pub fn last_line_index_of(
+        lines: &[crate::tui::content::ContentLine],
+        semantic_ref: &SemanticRef,
+    ) -> Option<usize> {
+        lines.iter().enumerate().rev().find_map(|(i, l)| {
+            l.semantic_ref
+                .as_ref()
+                .filter(|r| *r == semantic_ref)
+                .map(|_| i)
+        })
     }
 
     /// Rendered plain text for the selected block (clipboard payload for `y`).
@@ -1075,6 +1103,7 @@ impl Controller {
             self.state.view.search_index + 1,
             self.state.view.search_matches.len()
         ));
+        self.refresh_inspect_panel();
     }
 
     /// Focus the first form control (`gi`) and enter form-input mode.
@@ -1138,6 +1167,7 @@ impl Controller {
         if let Some(idx) = line_index_of(&lines, &r) {
             self.ensure_visible(idx, lines.len());
         }
+        self.refresh_inspect_panel();
     }
 
     fn begin_form_edit(&mut self, semantic_ref: SemanticRef) {
@@ -1152,6 +1182,7 @@ impl Controller {
             semantic_ref,
             buffer,
         });
+        self.refresh_inspect_panel();
     }
 
     /// Enter two-key hint mode over viewport-visible links (`f` / `F`).
@@ -1224,6 +1255,7 @@ impl Controller {
             self.state.mode = InteractionMode::Normal;
             self.state.view.hint_buffer.clear();
             self.state.view.inspect_text = None;
+            self.state.view.inspect_follow = false;
         }
         self.hints.clear();
     }
@@ -2024,6 +2056,35 @@ mod tests {
         assert_eq!(ctl.state.view.selection.as_ref(), Some(&refs[1]));
         ctl.scroll_up();
         assert_eq!(ctl.state.view.selection.as_ref(), Some(&refs[0]));
+    }
+
+    #[test]
+    fn inspect_follows_selection_until_escape() {
+        let doc = normalize_fixture(
+            meta("1", "https://example.com/"),
+            vec![
+                raw_text("a", "first"),
+                raw_text("b", "second"),
+            ],
+        )
+        .expect("doc");
+        let refs = doc.semantic_refs();
+        let mut ctl = Controller::new();
+        ctl.set_viewport(80, 20);
+        ctl.state.publish_page(doc);
+        ctl.state.view.selection = Some(refs[0].clone());
+        ctl.inspect_selection();
+        assert!(ctl.state.view.inspect_follow);
+        let first = ctl.state.view.inspect_text.clone().expect("inspect open");
+        assert!(first.contains("first") || first.contains(refs[0].as_str()));
+        ctl.scroll_down();
+        assert_eq!(ctl.state.view.selection.as_ref(), Some(&refs[1]));
+        let second = ctl.state.view.inspect_text.clone().expect("still open");
+        assert_ne!(first, second);
+        assert!(second.contains("second") || second.contains(refs[1].as_str()));
+        ctl.escape();
+        assert!(!ctl.state.view.inspect_follow);
+        assert!(ctl.state.view.inspect_text.is_none());
     }
 
     #[test]
