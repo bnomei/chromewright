@@ -23,6 +23,7 @@
 - Upgrade the MCP runtime to RMCP 2.2 and retain only the server, stdio, and streamable-HTTP transport features.
 - Refresh Rust 1.88-compatible dependencies, including `headless_chrome` 1.0.22.
 - Show TUI search in the footer like Vim: `/{buffer}` while typing and `/{pattern}  n/m` while a search remains active (not in the header URL bar).
+- Show link-hint mode (`f` / `F` + typed keys) in the footer cmdline instead of the header.
 
 ### Fixed
 

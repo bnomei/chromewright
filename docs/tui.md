@@ -37,7 +37,7 @@ Chromewright neither restarts nor terminates that external browser. Do not use
 private to the managed session.
 
 Keyboard bindings are deliberately not shown in the terminal. Navigation defaults follow
-Vimari: `f`/`F` link hints, `j`/`k`/`h`/`l` scrolling, `u`/`d` half pages,
+Vimari: `f`/`F` link hints (footer cmdline while active), `j`/`k`/`h`/`l` scrolling, `u`/`d` half pages,
 `gg`/`G` document ends, `gi` first form field, `H`/`L` history, `r` reload,
 `w`/`q`/`x`/`t` tab actions, `o` URL entry, `/` forward search, `n` next
 match, `N` previous match, Space collapse (structure mode only), `zw` toggle soft

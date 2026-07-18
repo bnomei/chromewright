@@ -76,7 +76,7 @@ fn draw_chrome(frame: &mut Frame, area: Rect, controller: &Controller, theme: &T
     ));
     spans.push(Span::raw(" "));
 
-    // Search lives in the footer (Vim cmdline), not the location bar.
+    // Search + link-hint live in the footer cmdline, not the location bar.
     let (location, location_style) = match &state.mode {
         InteractionMode::Input(InputKind::Url { buffer }) => {
             (format!("URL {buffer}"), theme.chrome_mode())
@@ -84,11 +84,9 @@ fn draw_chrome(frame: &mut Frame, area: Rect, controller: &Controller, theme: &T
         InteractionMode::Input(InputKind::Form { buffer, .. }) => {
             (format!("IN {buffer}"), theme.chrome_mode())
         }
-        InteractionMode::Hint(_) => (
-            format!("hint {}", state.view.hint_buffer),
-            theme.chrome_mode(),
-        ),
-        InteractionMode::Input(InputKind::Search { .. }) | InteractionMode::Normal => {
+        InteractionMode::Input(InputKind::Search { .. })
+        | InteractionMode::Hint(_)
+        | InteractionMode::Normal => {
             let url = state.url();
             if url.is_empty() {
                 (String::new(), theme.muted())
@@ -99,7 +97,7 @@ fn draw_chrome(frame: &mut Frame, area: Rect, controller: &Controller, theme: &T
     };
 
     // Right cluster: lifecycle + non-Normal mode only (no wrap/structure flags).
-    // Search mode is shown in the footer cmdline, not here.
+    // Search / Hint are shown in the footer cmdline, not here.
     let mut right_parts: Vec<(&str, Style)> = Vec::new();
     let life = match &state.lifecycle {
         Lifecycle::Ready => "ready",
@@ -108,7 +106,7 @@ fn draw_chrome(frame: &mut Frame, area: Rect, controller: &Controller, theme: &T
     };
     right_parts.push((life, lifecycle_style));
     let mode = state.mode_label();
-    if mode != "Normal" && mode != "Search" {
+    if mode != "Normal" && mode != "Search" && mode != "Hint" && mode != "Hint+" {
         right_parts.push((mode, theme.chrome_mode()));
     }
 
@@ -246,10 +244,12 @@ fn draw_status(frame: &mut Frame, area: Rect, controller: &Controller, theme: &T
     let state = &controller.state;
     let mut spans = Vec::new();
 
-    // Vim-style search cmdline takes the footer while typing or while a pattern
-    // remains active (query set). Other status rides after it.
-    if let Some((search_text, search_style)) = search_status_line(state, theme) {
-        spans.push(Span::styled(search_text, search_style));
+    // Footer cmdline: search (`/…`) or link-hint (`f …` / `F …`). Other status
+    // rides after it. When neither owns the bar, show lifecycle/rev as usual.
+    let cmdline = footer_cmdline(state, theme);
+    let cmdline_active = cmdline.is_some();
+    if let Some((cmd_text, cmd_style)) = cmdline {
+        spans.push(Span::styled(cmd_text, cmd_style));
     } else {
         match &state.lifecycle {
             Lifecycle::Loading { action } => {
@@ -273,12 +273,8 @@ fn draw_status(frame: &mut Frame, area: Rect, controller: &Controller, theme: &T
         }
     }
 
-    // When search owns the bar, still surface lifecycle errors on the right.
-    if matches!(
-        state.mode,
-        InteractionMode::Input(InputKind::Search { .. })
-    ) || !state.view.search_query.is_empty()
-    {
+    // When cmdline owns the bar, still surface lifecycle errors/loading on the right.
+    if cmdline_active {
         match &state.lifecycle {
             Lifecycle::Loading { action } => {
                 if !spans.is_empty() {
@@ -340,6 +336,40 @@ fn draw_status(frame: &mut Frame, area: Rect, controller: &Controller, theme: &T
         Line::from(spans)
     };
     frame.render_widget(Paragraph::new(line), area);
+}
+
+/// Footer cmdline owner: link-hint or search (hint wins while active).
+fn footer_cmdline(
+    state: &crate::tui::state::TuiState,
+    theme: &TuiTheme,
+) -> Option<(String, Style)> {
+    if let Some(line) = hint_status_line(state, theme) {
+        return Some(line);
+    }
+    search_status_line(state, theme)
+}
+
+/// Link-hint indicator for the footer (`f` / `F`).
+///
+/// - Follow: `f` or `f as` while typing the two-key label
+/// - New tab: `F` or `F as`
+fn hint_status_line(
+    state: &crate::tui::state::TuiState,
+    theme: &TuiTheme,
+) -> Option<(String, Style)> {
+    use crate::tui::state::HintMode;
+    let prefix = match &state.mode {
+        InteractionMode::Hint(HintMode::Follow) => 'f',
+        InteractionMode::Hint(HintMode::NewTab) => 'F',
+        _ => return None,
+    };
+    let buf = state.view.hint_buffer.as_str();
+    let text = if buf.is_empty() {
+        prefix.to_string()
+    } else {
+        format!("{prefix} {buf}")
+    };
+    Some((text, theme.chrome_mode()))
 }
 
 /// Vim-style search indicator for the footer.
@@ -493,8 +523,8 @@ pub fn chrome_lines(controller: &Controller) -> Vec<String> {
     };
     let mut flags = vec![life];
     let mode = state.mode_label();
-    // Search is footer-only (Vim cmdline), not header chrome.
-    if mode != "Normal" && mode != "Search" {
+    // Search / Hint are footer-only, not header chrome.
+    if mode != "Normal" && mode != "Search" && mode != "Hint" && mode != "Hint+" {
         flags.push(mode);
     }
     let mid = if state.title().is_empty() {
@@ -565,6 +595,24 @@ mod tests {
         let ctl = Controller::new();
         let theme = TuiTheme::new();
         assert!(search_status_line(&ctl.state, &theme).is_none());
+    }
+
+    #[test]
+    fn hint_status_shows_in_footer_not_empty() {
+        use crate::tui::state::HintMode;
+        let mut ctl = Controller::new();
+        let theme = TuiTheme::new();
+        ctl.state.mode = InteractionMode::Hint(HintMode::Follow);
+        ctl.state.view.hint_buffer.clear();
+        let (text, _) = hint_status_line(&ctl.state, &theme).expect("hint f");
+        assert_eq!(text, "f");
+        ctl.state.view.hint_buffer = "as".into();
+        let (text, _) = hint_status_line(&ctl.state, &theme).expect("hint f as");
+        assert_eq!(text, "f as");
+        ctl.state.mode = InteractionMode::Hint(HintMode::NewTab);
+        ctl.state.view.hint_buffer = "aa".into();
+        let (text, _) = footer_cmdline(&ctl.state, &theme).expect("hint F");
+        assert_eq!(text, "F aa");
     }
 
     #[test]
