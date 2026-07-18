@@ -21,90 +21,90 @@ impl TuiTheme {
         Style::default()
     }
 
-    /// Full-width white fill for header/footer chrome bars.
+    /// Full-width inverted fill for header/footer chrome bars.
     ///
-    /// Solid white background separates chrome from the content pane. Text on
-    /// the bar uses gray / black / green only — no per-span backgrounds.
+    /// Reverse video separates chrome from the content pane in both light and
+    /// dark terminals without hard-coding absolute bar colors.
     pub fn chrome_bar(&self) -> Style {
-        Style::default().fg(Color::Black).bg(Color::White)
+        Style::default().add_modifier(Modifier::REVERSED)
     }
 
-    /// Accent text on the white chrome bar (green).
+    /// Content-pane style patched onto the inverted chrome bar.
+    pub fn on_bar(&self, style: Style) -> Style {
+        style.add_modifier(Modifier::REVERSED)
+    }
+
     pub fn chrome_mode(&self) -> Style {
-        self.chrome_bar().fg(Color::Green).add_modifier(Modifier::BOLD)
+        self.on_bar(
+            self.base()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        )
     }
 
     pub fn chrome_ready(&self) -> Style {
-        self.chrome_bar().fg(Color::Green).add_modifier(Modifier::BOLD)
+        self.on_bar(self.base().fg(Color::Green).add_modifier(Modifier::BOLD))
     }
 
     pub fn chrome_loading(&self) -> Style {
-        // Yellow on white is hard to read; use black bold for loading on the bar.
-        self.chrome_bar().fg(Color::Black).add_modifier(Modifier::BOLD)
+        self.on_bar(self.base().fg(Color::Yellow).add_modifier(Modifier::BOLD))
     }
 
     pub fn chrome_error(&self) -> Style {
-        // Keep error legible on white without a second background color.
-        self.chrome_bar().fg(Color::Black).add_modifier(Modifier::BOLD)
+        self.on_bar(
+            self.base()
+                .fg(Color::Red)
+                .add_modifier(Modifier::BOLD),
+        )
     }
 
     pub fn chrome_wrap(&self) -> Style {
-        self.chrome_bar().fg(Color::DarkGray)
+        self.on_bar(self.base().fg(Color::Cyan))
     }
 
     pub fn chrome_hist_enabled(&self) -> Style {
-        self.chrome_bar().fg(Color::Green).add_modifier(Modifier::BOLD)
+        self.on_bar(self.base().fg(Color::Green).add_modifier(Modifier::BOLD))
     }
 
     pub fn chrome_hist_disabled(&self) -> Style {
-        self.chrome_bar().fg(Color::DarkGray)
+        self.on_bar(self.base().add_modifier(Modifier::DIM))
     }
 
-    /// Muted text in the content pane.
+    /// Muted text in the content pane (not bar-inverted).
     pub fn muted(&self) -> Style {
         self.base().fg(Color::DarkGray)
     }
 
-    /// Muted / secondary text on the white chrome bar.
+    /// Muted text on the inverted chrome bar.
     pub fn bar_muted(&self) -> Style {
-        self.chrome_bar().fg(Color::DarkGray)
+        self.on_bar(self.base().add_modifier(Modifier::DIM))
     }
 
-    /// Error text in the content pane.
+    /// Error text in the content pane (not bar-inverted).
     pub fn status_error(&self) -> Style {
         self.base()
             .fg(Color::Red)
             .add_modifier(Modifier::BOLD)
     }
 
-    /// Loading text in the content pane.
+    /// Loading text in the content pane (not bar-inverted).
     pub fn status_loading(&self) -> Style {
         self.base().fg(Color::Yellow)
     }
 
-    /// Error text on the white chrome bar.
+    /// Error text on the inverted chrome bar.
     pub fn bar_status_error(&self) -> Style {
         self.chrome_error()
     }
 
-    /// Loading text on the white chrome bar.
+    /// Loading text on the inverted chrome bar.
     pub fn bar_status_loading(&self) -> Style {
         self.chrome_loading()
     }
 
-    /// OK / positive text on the white chrome bar.
+    /// OK / positive text on the inverted chrome bar.
     pub fn bar_status_ok(&self) -> Style {
         self.chrome_ready()
-    }
-
-    /// Scrollbar track (grey line on white gutter).
-    pub fn scrollbar_track(&self) -> Style {
-        Style::default().fg(Color::DarkGray).bg(Color::White)
-    }
-
-    /// Scrollbar thumb (darker mark on white gutter).
-    pub fn scrollbar_thumb(&self) -> Style {
-        Style::default().fg(Color::Black).bg(Color::White)
     }
 
     pub fn attention_overlay(&self) -> Style {
@@ -199,21 +199,21 @@ mod tests {
     }
 
     #[test]
-    fn chrome_bar_is_white_with_dark_text() {
+    fn chrome_bar_is_reversed_content_is_not() {
         let theme = TuiTheme::new();
-        assert_eq!(theme.chrome_bar().bg, Some(Color::White));
-        assert_eq!(theme.chrome_bar().fg, Some(Color::Black));
-        assert_eq!(theme.chrome_mode().bg, Some(Color::White));
-        assert_eq!(theme.chrome_mode().fg, Some(Color::Green));
-        assert_eq!(theme.bar_muted().bg, Some(Color::White));
-        assert_eq!(theme.bar_muted().fg, Some(Color::DarkGray));
-        // No reverse-video on chrome; content stays on default terminal bg.
-        assert!(!theme.chrome_bar().add_modifier.contains(Modifier::REVERSED));
-        assert_ne!(theme.base().bg, Some(Color::White));
-        assert_eq!(theme.scrollbar_track().bg, Some(Color::White));
-        assert_eq!(theme.scrollbar_track().fg, Some(Color::DarkGray));
-        assert_eq!(theme.scrollbar_thumb().bg, Some(Color::White));
-        assert_eq!(theme.scrollbar_thumb().fg, Some(Color::Black));
+        assert!(theme.chrome_bar().add_modifier.contains(Modifier::REVERSED));
+        assert!(theme.chrome_mode().add_modifier.contains(Modifier::REVERSED));
+        assert!(theme.bar_muted().add_modifier.contains(Modifier::REVERSED));
+        // Content-pane styles must stay non-inverted so bars read as separate strips.
+        assert!(!theme.base().add_modifier.contains(Modifier::REVERSED));
+        assert!(!theme.muted().add_modifier.contains(Modifier::REVERSED));
+        assert!(!theme.status_loading().add_modifier.contains(Modifier::REVERSED));
+        assert!(
+            !theme
+                .content_style(Some(SemanticKind::Text), None)
+                .add_modifier
+                .contains(Modifier::REVERSED)
+        );
     }
 
     #[test]
