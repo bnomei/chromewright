@@ -6,6 +6,7 @@ use crate::tui::controller::Controller;
 use crate::tui::dispatch::{DispatchOutcome, Dispatcher, chord_from_crossterm};
 use crate::tui::driver::SessionPageDriver;
 use crate::tui::render;
+use crate::tui::shared::SharedTuiState;
 use crossterm::cursor::{Hide, Show};
 use crossterm::event::{
     self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
@@ -19,6 +20,7 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use std::io::{self, Stdout};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 /// Entry options for `chromewright tui`: optional keymap overlay path.
@@ -26,26 +28,62 @@ use std::time::Duration;
 pub struct TuiOptions {
     /// Explicit keymap config path (`--config`); XDG default when None.
     pub config: Option<PathBuf>,
+    pub companion_port: u16,
+    pub companion_path: String,
 }
 
 /// Load keymap config from [`TuiOptions`] and run the interactive terminal browser.
 ///
 /// Shares the caller's `BrowserSession` (no second browser process). Returns when
 /// the user quits or terminal setup/teardown fails.
-pub fn run_tui(session: &BrowserSession, options: TuiOptions) -> Result<(), String> {
+pub fn run_tui(session: Arc<BrowserSession>, options: TuiOptions) -> Result<(), String> {
     let config = crate::tui::config::load_tui_config(options.config.as_deref())
         .map_err(|e| e.to_string())?;
-    run_tui_with_config(session, config)
+    run_tui_with_config_and_companion(
+        session,
+        config,
+        options.companion_port,
+        options.companion_path,
+    )
 }
 
 /// Run the terminal browser with a pre-loaded [`TuiConfig`] (keymap overlay already resolved).
 ///
 /// Owns the Ratatui event loop: Loading → action dispatch → recapture → Ready | Error.
 /// Application errors are preferred over secondary terminal restore failures.
-pub fn run_tui_with_config(session: &BrowserSession, config: TuiConfig) -> Result<(), String> {
+pub fn run_tui_with_config(session: Arc<BrowserSession>, config: TuiConfig) -> Result<(), String> {
+    run_tui_with_config_and_companion(session, config, 0, "/mcp".into())
+}
+
+fn run_tui_with_config_and_companion(
+    mut session: Arc<BrowserSession>,
+    config: TuiConfig,
+    port: u16,
+    path: String,
+) -> Result<(), String> {
     let mut terminal = TerminalGuard::setup().map_err(|e| e.to_string())?;
-    let result = run_loop(session, config, terminal.terminal_mut());
+    // Register TUI tools while the BrowserSession Arc is still uniquely owned.
+    // The shared coordination state is bound to that same Arc immediately
+    // afterwards, so no second session or disconnected state is created.
+    let shared = SharedTuiState::unbound();
+    let session_mut = Arc::get_mut(&mut session).ok_or("TUI session is already shared")?;
+    for name in crate::tools::tui::NAMES {
+        session_mut
+            .tool_registry_mut()
+            .register(crate::tools::tui::TuiTool::with_shared(
+                name,
+                shared.clone(),
+            ));
+    }
+    shared
+        .bind_session(session.clone())
+        .map_err(|e| e.to_string())?;
+    shared.activate_runtime();
+    let companion = crate::tui::companion::start(session.clone(), shared.clone(), path, port)?;
+    let result = run_loop(&session, shared.clone(), config, terminal.terminal_mut());
+    shared.deactivate_runtime();
     let restore_result = terminal.restore().map_err(|e| e.to_string());
+    companion.stop();
 
     // Do not mask the application failure with a secondary cleanup failure.
     // Drop retries any terminal-state operation that reported an error.
@@ -237,10 +275,11 @@ impl Drop for TerminalGuard {
 
 fn run_loop(
     session: &BrowserSession,
+    shared: SharedTuiState,
     config: TuiConfig,
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
 ) -> Result<(), String> {
-    let mut controller = Controller::new();
+    let mut controller = Controller::with_shared(shared);
     let mut dispatcher = Dispatcher::new(config.keymap);
     let mut driver = SessionPageDriver::new(session);
 
@@ -249,6 +288,7 @@ fn run_loop(
     controller.bootstrap();
 
     loop {
+        controller.synchronize_companion_state();
         let size = terminal.size().map_err(|e| e.to_string())?;
         // Content area is total height minus chrome (2) and status (1).
         let content_h = size.height.saturating_sub(3) as usize;
@@ -280,6 +320,7 @@ fn run_loop(
                             DispatchOutcome::Quit => break,
                             DispatchOutcome::Continue | DispatchOutcome::Redraw => {}
                         }
+                        controller.publish_selection();
                     }
                 }
                 Event::Resize(_, _) => {}

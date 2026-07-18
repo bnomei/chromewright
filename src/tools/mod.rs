@@ -62,6 +62,8 @@ pub use wait::WaitCondition;
 pub use wait::WaitParams;
 
 pub(crate) mod core;
+#[cfg(feature = "tui")]
+pub mod tui;
 
 pub use core::{
     DocumentActionResult, DocumentEnvelope, DocumentResult, DynTool, SnapshotScope, TabSummary,
@@ -186,6 +188,22 @@ mod tests {
         assert!(registry.has("screenshot"));
         assert!(registry.has("set_viewport"));
         assert!(!registry.has("evaluate"));
+    }
+
+    #[cfg(feature = "tui")]
+    #[test]
+    fn standard_registries_exclude_companion_only_tui_tools() {
+        for registry in [
+            ToolRegistry::with_defaults(),
+            ToolRegistry::with_all_tools(),
+        ] {
+            for name in crate::tools::tui::NAMES {
+                assert!(
+                    !registry.has(name),
+                    "{name} must only be registered by chromewright tui's loopback companion"
+                );
+            }
+        }
     }
 
     #[test]

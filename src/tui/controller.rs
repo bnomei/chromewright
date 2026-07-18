@@ -7,11 +7,13 @@ use crate::tui::content::{
 };
 use crate::tui::driver::PageDriver;
 use crate::tui::hints::{HintMatch, LinkHint, assign_hints, match_hint};
-use crate::tui::state::{HintMode, InputKind, InteractionMode, TuiState};
+use crate::tui::shared::SharedTuiState;
+use crate::tui::state::{HintMode, InputKind, InteractionMode, Lifecycle, TuiState};
 
 /// Orchestrates page-changing actions and pure view updates against [`TuiState`].
 pub struct Controller {
     pub state: TuiState,
+    pub shared: SharedTuiState,
     /// Active link hints when in Hint mode.
     pub hints: Vec<LinkHint>,
     /// Browser work that may begin only after the event loop has successfully
@@ -58,9 +60,24 @@ enum PageOperation {
 }
 
 impl Controller {
+    #[cfg(test)]
     pub fn new() -> Self {
+        Self::with_shared(SharedTuiState::new(std::sync::Arc::new(
+            crate::browser::BrowserSession::with_test_backend(
+                crate::browser::backend::FakeSessionBackend::new(),
+            ),
+        )))
+    }
+
+    #[cfg(not(test))]
+    pub fn new() -> Self {
+        panic!("Controller::new requires a shared TUI runtime")
+    }
+
+    pub fn with_shared(shared: SharedTuiState) -> Self {
         Self {
             state: TuiState::new(),
+            shared,
             hints: Vec::new(),
             pending_page_action: None,
         }
@@ -69,6 +86,14 @@ impl Controller {
     pub fn with_state(state: TuiState) -> Self {
         Self {
             state,
+            ..Self::new()
+        }
+    }
+
+    pub fn with_state_and_shared(state: TuiState, shared: SharedTuiState) -> Self {
+        Self {
+            state,
+            shared,
             hints: Vec::new(),
             pending_page_action: None,
         }
@@ -203,6 +228,16 @@ impl Controller {
         hint_mode_after_success: Option<HintMode>,
     ) {
         let action = action.into();
+        // The terminal is one participant in the same lifecycle as the
+        // companion. Do not replace a deferred action, and publish Loading
+        // before browser work can be acknowledged by the event loop.
+        if self.pending_page_action.is_some() {
+            return;
+        }
+        if let Err(error) = self.shared.begin_page_action(action.clone()) {
+            self.state.enter_error(&action, error.to_string());
+            return;
+        }
         let prev_sel = self.state.view.selection.clone();
         let prev_scroll = self.state.view.scroll_y;
         let prev_doc = self.state.document().cloned();
@@ -228,6 +263,70 @@ impl Controller {
         self.pending_page_action.is_some()
     }
 
+    /// Reconcile companion-owned lifecycle and agent attention.
+    ///
+    /// Local page transitions win for lifecycle until their pending action
+    /// completes. Agent attention is independent and is always applied without
+    /// mutating human selection.
+    pub fn synchronize_companion_state(&mut self) {
+        if self.pending_page_action.is_none() {
+            match self.shared.lifecycle() {
+                Lifecycle::Loading { action } => self.state.enter_loading(action),
+                Lifecycle::Error { action, message } => self.state.enter_error(action, message),
+                Lifecycle::Ready => {
+                    if let Ok(document) = self.shared.active() {
+                        if self.state.document().is_none_or(|current| {
+                            current.document.document_id != document.document.document_id
+                                || current.document.revision != document.document.revision
+                        }) {
+                            let prev_sel = self.state.view.selection.clone();
+                            let prev_scroll = self.state.view.scroll_y;
+                            let anchor_offset =
+                                self.anchor_offset_in_viewport(&document, prev_sel.as_ref());
+                            let collapsed = self.state.view.collapsed.clone();
+                            let content_line_of =
+                                move |document: &SemanticDocument, r: &SemanticRef| {
+                                    let lines = build_content_lines(document, &collapsed);
+                                    line_index_of(&lines, r)
+                                };
+                            self.state.reconcile_after_capture(
+                                document,
+                                prev_sel,
+                                prev_scroll,
+                                anchor_offset,
+                                content_line_of,
+                            );
+                        }
+                        self.state.lifecycle = Lifecycle::Ready;
+                    }
+                }
+            }
+        }
+        self.sync_attention_from_shared();
+    }
+
+    /// Apply agent attention from shared state: highlight + scroll into view,
+    /// without changing human selection.
+    fn sync_attention_from_shared(&mut self) {
+        let attention = self.shared.attention();
+        let next = attention.semantic_ref.clone();
+        let changed = self.state.view.attention != next;
+        let previous_selection = self.state.view.selection.clone();
+        self.state.view.attention = next.clone();
+        if !changed {
+            return;
+        }
+        let Some(reference) = next else {
+            return;
+        };
+        let lines = self.content_lines();
+        if let Some(line_idx) = line_index_of(&lines, &reference) {
+            self.ensure_visible(line_idx, lines.len());
+        }
+        // Attention scroll must never retarget human selection.
+        self.state.view.selection = previous_selection;
+    }
+
     /// Record that `Terminal::draw` completed while this transition was Loading.
     pub fn acknowledge_loading_frame(&mut self) {
         if let Some(pending) = &mut self.pending_page_action
@@ -248,6 +347,8 @@ impl Controller {
         if !pending.loading_frame_drawn {
             let message = "browser action rejected before a Loading frame was rendered".to_string();
             self.state.enter_error(&pending.action, message.clone());
+            self.shared
+                .fail_page_action(pending.action.clone(), message.clone());
             return Err(message);
         }
 
@@ -331,6 +432,8 @@ impl Controller {
             Err(msg) => {
                 // Retain last valid page; never publish partial update as Ready.
                 self.state.enter_error(&pending.action, msg.clone());
+                self.shared
+                    .fail_page_action(pending.action.clone(), msg.clone());
                 Err(msg)
             }
         }
@@ -369,6 +472,15 @@ impl Controller {
         // recapture unless explicitly regenerated for the new exact ref.
         self.state.view.inspect_text = None;
         self.hints.clear();
+        let document = self.state.document().expect("capture published").clone();
+        let selection = self.state.view.selection.clone();
+        let _ = self.shared.publish_with_selection(document, selection);
+    }
+
+    pub fn publish_selection(&self) {
+        if let Some(selection) = self.state.view.selection.clone() {
+            let _ = self.shared.set_selection(selection);
+        }
     }
 
     fn refresh_history_availability<D: PageDriver>(&mut self, driver: &mut D) {
@@ -841,6 +953,34 @@ mod tests {
     }
 
     #[test]
+    fn local_transition_publishes_shared_loading_and_serializes_companion_refresh() {
+        let d1 = text_doc("1", "t", "one");
+        let d2 = text_doc("2", "t", "two");
+        let mut driver = FakePageDriver::new(vec![d1.clone(), d2]);
+        let mut ctl = Controller::new();
+        ctl.shared.activate_runtime();
+        ctl.state.publish_page(d1);
+        ctl.navigate_to("https://example.com/two");
+
+        assert!(matches!(ctl.shared.lifecycle(), Lifecycle::Loading { .. }));
+        assert_eq!(
+            ctl.shared.refresh(),
+            Err(crate::tui::CoordinationError::RefreshInProgress)
+        );
+
+        render_loading_and_run(&mut ctl, &mut driver).expect("terminal navigation");
+        assert!(ctl.shared.lifecycle().is_ready());
+        assert_eq!(
+            ctl.shared
+                .active()
+                .expect("shared capture")
+                .document
+                .revision,
+            "2"
+        );
+    }
+
+    #[test]
     fn error_retains_last_valid_render() {
         let d1 = text_doc("1", "t", "one");
         let mut driver = FakePageDriver::new(vec![d1.clone()]);
@@ -851,6 +991,7 @@ mod tests {
         let err = render_loading_and_run(&mut ctl, &mut driver).expect_err("fail");
         assert!(err.contains("network"));
         assert!(matches!(ctl.state.lifecycle, Lifecycle::Error { .. }));
+        assert!(matches!(ctl.shared.lifecycle(), Lifecycle::Error { .. }));
         assert_eq!(ctl.state.revision(), "1");
         assert_eq!(ctl.state.url(), "https://example.com/");
     }
@@ -866,6 +1007,20 @@ mod tests {
         let _ = render_loading_and_run(&mut ctl, &mut driver);
         assert!(matches!(ctl.state.lifecycle, Lifecycle::Error { .. }));
         assert_eq!(ctl.state.revision(), "1");
+    }
+
+    #[test]
+    fn idle_shared_state_cannot_clear_a_local_capture_error() {
+        let d1 = text_doc("1", "t", "one");
+        let mut driver = FakePageDriver::new(vec![d1.clone()]);
+        driver.fail_capture = Some("capture blew up".into());
+        let mut ctl = Controller::new();
+        ctl.state.publish_page(d1);
+        ctl.reload();
+        let _ = render_loading_and_run(&mut ctl, &mut driver);
+
+        ctl.synchronize_companion_state();
+        assert!(matches!(ctl.state.lifecycle, Lifecycle::Error { .. }));
     }
 
     #[test]
@@ -965,5 +1120,65 @@ mod tests {
         assert!(err.contains("Loading frame"));
         assert!(driver.navigate_calls.is_empty());
         assert!(matches!(ctl.state.lifecycle, Lifecycle::Error { .. }));
+    }
+
+    #[test]
+    fn agent_attention_scrolls_into_view_without_mutating_selection() {
+        // Build a tall document so attention can force a scroll away from selection.
+        let mut roots = Vec::new();
+        for index in 0..40 {
+            roots.push(RawSemanticNode {
+                kind: "text".into(),
+                tag: Some("p".into()),
+                id: Some(format!("line-{index}")),
+                unique_id: true,
+                text: Some(format!("line {index}")),
+                href: None,
+                landmark: None,
+                heading_level: None,
+                ordered: None,
+                label: None,
+                src: None,
+                alt: None,
+                name: None,
+                value: None,
+                input_type: None,
+                placeholder: None,
+                checked: None,
+                disabled: None,
+                required: None,
+                readonly: None,
+                multiple: None,
+                button_type: None,
+                options: vec![],
+                children: vec![],
+            });
+        }
+        let document = normalize_fixture(meta("1", "https://example.com/"), roots).expect("doc");
+        let refs = document.semantic_refs();
+        let selection = refs.first().cloned().expect("first");
+        let attention = refs.last().cloned().expect("last");
+
+        let mut ctl = Controller::new();
+        ctl.shared.activate_runtime();
+        ctl.state.publish_page(document.clone());
+        ctl.shared.publish(document);
+        ctl.state.view.selection = Some(selection.clone());
+        ctl.state.view.viewport_height = 5;
+        ctl.state.view.scroll_y = 0;
+        let selection_before = ctl.state.view.selection.clone();
+        let scroll_before = ctl.state.view.scroll_y;
+
+        ctl.shared
+            .set_attention(attention.clone(), Some("look here".into()))
+            .expect("attention");
+        ctl.synchronize_companion_state();
+
+        assert_eq!(ctl.state.view.selection, selection_before);
+        assert_eq!(ctl.state.view.attention.as_ref(), Some(&attention));
+        assert!(
+            ctl.state.view.scroll_y > scroll_before,
+            "attention should scroll the spotlight into view"
+        );
     }
 }

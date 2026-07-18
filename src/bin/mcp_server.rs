@@ -45,6 +45,10 @@ enum Command {
         /// TOML keymap overlay path (default: `$XDG_CONFIG_HOME/chromewright/tui.toml`)
         #[arg(long, value_name = "PATH")]
         config: Option<PathBuf>,
+        #[arg(long, default_value_t = 0)]
+        companion_port: u16,
+        #[arg(long, default_value = "/mcp")]
+        companion_path: String,
     },
 }
 
@@ -224,7 +228,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         #[cfg(feature = "tui")]
-        Some(Command::Tui { config }) => {
+        Some(Command::Tui {
+            config,
+            companion_port,
+            companion_path,
+        }) => {
             info!("Transport: terminal UI");
             if let Some(ref path) = config {
                 info!("TUI config: {}", path.display());
@@ -234,9 +242,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let session = create_browser_session(&browser_mode)
                 .map_err(|e| format!("Failed to create browser session: {e}"))?;
             run_tui(
-                &session,
+                std::sync::Arc::new(session),
                 TuiOptions {
                     config: config.clone(),
+                    companion_port,
+                    companion_path,
                 },
             )
             .map_err(|e| format!("TUI exited with error: {e}"))?;
@@ -417,7 +427,7 @@ mod tests {
         .expect("CLI should parse tui");
 
         match cli.command {
-            Some(Command::Tui { config }) => {
+            Some(Command::Tui { config, .. }) => {
                 assert_eq!(config, Some(PathBuf::from("/tmp/chromewright-tui.toml")));
             }
             other => panic!("expected tui subcommand, got {other:?}"),

@@ -84,6 +84,12 @@ fn draw_content(frame: &mut Frame, area: Rect, controller: &Controller) {
             .as_ref()
             .zip(line.semantic_ref.as_ref())
             .is_some_and(|(s, r)| s == r);
+        let agent_attention = state
+            .view
+            .attention
+            .as_ref()
+            .zip(line.semantic_ref.as_ref())
+            .is_some_and(|(a, r)| a == r);
 
         // Overlay hint labels for links
         if let Some(ref_r) = &line.semantic_ref
@@ -95,8 +101,12 @@ fn draw_content(frame: &mut Frame, area: Rect, controller: &Controller) {
             }
         }
 
+        // Human selection and agent attention are independent: selection wins
+        // for reverse video; attention uses a distinct underline/bold highlight.
         let style = if selected {
             Style::default().add_modifier(Modifier::REVERSED)
+        } else if agent_attention {
+            Style::default().add_modifier(Modifier::UNDERLINED | Modifier::BOLD)
         } else {
             Style::default()
         };

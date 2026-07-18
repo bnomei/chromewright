@@ -3,6 +3,8 @@
 //! Structured tool failures preserve document, target, and recovery fields expected by MCP clients.
 
 pub mod handler;
+#[cfg(feature = "tui")]
+pub mod resources;
 pub use handler::BrowserServer;
 
 use crate::tools::ToolResult as InternalToolResult;

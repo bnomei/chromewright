@@ -105,6 +105,8 @@ pub struct ViewState {
     pub viewport_width: usize,
     /// Currently selected addressable component (exact ref).
     pub selection: Option<SemanticRef>,
+    /// Agent attention spotlight (exact ref), independent of human selection.
+    pub attention: Option<SemanticRef>,
     /// Collapsed component refs (exact).
     pub collapsed: HashSet<SemanticRef>,
     /// Forward-search matches (exact refs, document order).

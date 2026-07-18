@@ -652,6 +652,38 @@ impl SessionBackend for FakeSessionBackend {
     }
 
     fn evaluate(&self, script: &str, _await_promise: bool) -> Result<ScriptEvaluation> {
+        if script.contains("Hydrated DOM semantic capture for the tui-gated SemanticDocument path")
+        {
+            let state = self.lock_state()?;
+            let document = Self::current_document(&state)?;
+            return Ok(ScriptEvaluation {
+                value: Some(serde_json::json!({
+                    "document": document,
+                    "nodes": [{
+                        "kind": "landmark",
+                        "tag": "main",
+                        "id": "fake-main",
+                        "unique_id": true,
+                        "landmark": "main",
+                        "text": "Fake semantic content",
+                        "children": []
+                    }],
+                    "truncated": false,
+                    "error": null
+                })),
+                description: None,
+                type_name: Some("Object".to_string()),
+            });
+        }
+        if script.contains("location.reload()") {
+            let mut state = self.lock_state()?;
+            Self::bump_revision(&mut state);
+            return Ok(ScriptEvaluation {
+                value: Some(serde_json::json!(true)),
+                description: None,
+                type_name: Some("Boolean".to_string()),
+            });
+        }
         let state = self.lock_state()?;
         let active_tab = Self::active_tab_from_state(&state)?;
         self.scripted_result_with_url(script, Some(active_tab.url.as_str()))
