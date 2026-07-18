@@ -14,7 +14,6 @@ use std::io::{self, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -44,7 +43,11 @@ struct LeaseRecord {
 
 /// A connected session and the lease responsible for safe shutdown.
 pub struct ManagedHeadlessSession {
-    session: Arc<BrowserSession>,
+    // The TUI must receive the only `Arc<BrowserSession>` so it can register
+    // its tools before sharing that session with the companion server. Keep
+    // the plain session here until `take_session` transfers ownership; this
+    // manager otherwise only owns the lease, child, and shutdown policy.
+    session: Option<BrowserSession>,
     root: PathBuf,
     lease: LeaseRecord,
     child: Option<Child>,
@@ -77,7 +80,7 @@ impl ManagedHeadlessSession {
                     && listener_belongs_to(&existing)
                 {
                     return Ok(Self {
-                        session: Arc::new(session),
+                        session: Some(session),
                         root,
                         lease: existing,
                         child: None,
@@ -117,8 +120,14 @@ impl ManagedHeadlessSession {
         Err(last_error.unwrap_or_else(|| "unable to start managed headless Chrome".into()))
     }
 
-    pub fn session(&self) -> Arc<BrowserSession> {
-        self.session.clone()
+    /// Transfer the browser session to the TUI without creating a second
+    /// strong reference. The manager remains alive to retain its runtime lock
+    /// and safely terminate the owned Chrome process afterwards.
+    pub fn take_session(&mut self) -> Result<std::sync::Arc<BrowserSession>, String> {
+        self.session
+            .take()
+            .map(std::sync::Arc::new)
+            .ok_or_else(|| "managed headless browser session was already transferred".into())
     }
 
     /// Shut down only the browser whose ownership can still be proven.
@@ -248,7 +257,7 @@ fn launch_new(
             && listener_belongs_to(&lease)
         {
             return Ok(ManagedHeadlessSession {
-                session: Arc::new(session),
+                session: Some(session),
                 root: root.to_path_buf(),
                 lease,
                 child: Some(child),
@@ -606,6 +615,35 @@ fn stop_spawned_child(mut child: Child) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_transfer_gives_tui_the_only_arc() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().to_path_buf();
+        let mut managed = ManagedHeadlessSession {
+            session: Some(BrowserSession::with_test_backend(
+                crate::browser::backend::FakeSessionBackend::new(),
+            )),
+            root: root.clone(),
+            lease: LeaseRecord {
+                version: 1,
+                nonce: "transfer-test".into(),
+                pid: 1,
+                port: 1,
+                profile: root.join("profile-transfer-test"),
+            },
+            child: None,
+            _lock: RootLock::acquire(&root).unwrap(),
+        };
+
+        let mut session = managed.take_session().expect("transfer session to TUI");
+        assert!(
+            std::sync::Arc::get_mut(&mut session).is_some(),
+            "the TUI must be able to register its tools before sharing the session"
+        );
+        assert!(managed.take_session().is_err());
+    }
+
     #[test]
     fn nonce_and_free_port_are_usable() {
         assert_ne!(nonce(), nonce());

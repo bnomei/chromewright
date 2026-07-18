@@ -291,11 +291,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "Headless TUI browser session: {:?}",
                     cli.browser_session.unwrap_or_default()
                 );
-                let managed = managed_headless_tui_session(&cli).map_err(|e| {
+                let mut managed = managed_headless_tui_session(&cli).map_err(|e| {
                     format!("Failed to create managed headless browser session: {e}")
                 })?;
-                let tui_result = run_tui(managed.session(), options)
-                    .map_err(|e| format!("TUI exited with error: {e}"));
+                let session = managed.take_session().map_err(|e| {
+                    format!("Failed to transfer managed headless browser session: {e}")
+                })?;
+                let tui_result =
+                    run_tui(session, options).map_err(|e| format!("TUI exited with error: {e}"));
                 let shutdown_result = managed
                     .shutdown()
                     .map_err(|e| format!("managed headless browser shutdown failed: {e}"));
