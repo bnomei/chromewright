@@ -70,11 +70,13 @@ impl TuiTheme {
     }
 
     pub fn attention_overlay(&self) -> Style {
-        // Distinct from selection reverse: magenta + underline stays visible on
-        // colored headings/links without stealing the human caret.
+        // Background fill is the readable cue: fg-only magenta was invisible on
+        // cyan h2s (and images already use magenta). Selection still wins via
+        // reverse when both apply to the same line.
         Style::default()
-            .fg(Color::Magenta)
-            .add_modifier(Modifier::UNDERLINED | Modifier::BOLD)
+            .fg(Color::Black)
+            .bg(Color::Magenta)
+            .add_modifier(Modifier::BOLD)
     }
 
     /// Applied last so selection remains visible over kind colors.
@@ -156,6 +158,19 @@ mod tests {
         let style = theme.line_style(Some(SemanticKind::Link), None, true, true);
         assert!(style.add_modifier.contains(Modifier::REVERSED));
         assert!(style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn attention_overlay_uses_magenta_background() {
+        let theme = TuiTheme::new();
+        // Attention alone: solid magenta bar (not fg-only).
+        let style = theme.line_style(Some(SemanticKind::Heading), Some(2), false, true);
+        assert_eq!(style.bg, Some(Color::Magenta));
+        assert_eq!(style.fg, Some(Color::Black));
+        assert!(style.add_modifier.contains(Modifier::BOLD));
+        // Selection still wins when both apply.
+        let both = theme.line_style(Some(SemanticKind::Heading), Some(2), true, true);
+        assert!(both.add_modifier.contains(Modifier::REVERSED));
     }
 
     #[test]

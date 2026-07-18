@@ -25,7 +25,7 @@
 
 ### Fixed
 
-- Make agent attention visible in prose mode: paint the whole subtree, scroll to the first visible descendant, status feedback, and a stronger magenta spotlight.
+- Make agent attention visible in prose mode: paint the whole subtree, scroll to the first visible descendant, status feedback, and a magenta background spotlight (fg-only was invisible on cyan headings).
 
 - Dismiss TUI Error lifecycle with Escape so a failed history/navigation action no longer leaves the terminal browser unresponsive; keep the retained page and log the failure when `CHROMEWRIGHT_LOG` is set.
 - Fall back to navigating a link's captured href when the live DOM click locator is stale/missing, and retry post-capture metadata matching a few times on dynamic pages.
