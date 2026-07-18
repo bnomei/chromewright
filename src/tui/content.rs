@@ -442,6 +442,21 @@ pub fn first_visible_descendant_ref(
     found
 }
 
+/// Exact `root` plus every descendant ref (document order walk).
+///
+/// Used so agent attention on a prose-hidden landmark still paints/scrolls via
+/// its visible children.
+pub fn subtree_refs(document: &SemanticDocument, root: &SemanticRef) -> HashSet<SemanticRef> {
+    let mut out = HashSet::new();
+    let Ok(component) = document.resolve(root) else {
+        return out;
+    };
+    component.walk(&mut |c| {
+        out.insert(c.semantic_ref.clone());
+    });
+    out
+}
+
 fn landmark_name(component: &SemanticComponent) -> String {
     component
         .attrs

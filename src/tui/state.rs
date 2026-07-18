@@ -130,6 +130,11 @@ pub struct ViewState {
     pub selection: Option<SemanticRef>,
     /// Agent attention spotlight (exact ref), independent of human selection.
     pub attention: Option<SemanticRef>,
+    /// Refs painted for the current attention (root + descendants). Empty when clear.
+    ///
+    /// Lets prose-hidden containers (landmarks) still show a spotlight on their
+    /// visible children without retargeting human selection.
+    pub attention_paint: HashSet<SemanticRef>,
     /// Collapsed component refs (exact).
     pub collapsed: HashSet<SemanticRef>,
     /// Forward-search matches (exact refs, document order).

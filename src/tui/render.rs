@@ -190,12 +190,11 @@ fn draw_content(frame: &mut Frame, area: Rect, controller: &Controller, theme: &
             .as_ref()
             .zip(line.semantic_ref.as_ref())
             .is_some_and(|(s, r)| s == r);
-        let agent_attention = state
-            .view
-            .attention
-            .as_ref()
-            .zip(line.semantic_ref.as_ref())
-            .is_some_and(|(a, r)| a == r);
+        // Paint root + descendants so prose-hidden containers still spotlight kids.
+        let agent_attention = line.semantic_ref.as_ref().is_some_and(|r| {
+            state.view.attention_paint.contains(r)
+                || state.view.attention.as_ref().is_some_and(|a| a == r)
+        });
 
         let mut spans = Vec::new();
         if let Some(ref_r) = &line.semantic_ref

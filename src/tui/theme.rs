@@ -70,7 +70,11 @@ impl TuiTheme {
     }
 
     pub fn attention_overlay(&self) -> Style {
-        Style::default().add_modifier(Modifier::UNDERLINED | Modifier::BOLD)
+        // Distinct from selection reverse: magenta + underline stays visible on
+        // colored headings/links without stealing the human caret.
+        Style::default()
+            .fg(Color::Magenta)
+            .add_modifier(Modifier::UNDERLINED | Modifier::BOLD)
     }
 
     /// Applied last so selection remains visible over kind colors.

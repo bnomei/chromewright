@@ -8,7 +8,7 @@
 use crate::semantic::{FragmentResolution, SemanticDocument, SemanticRef};
 use crate::tui::content::{
     build_content_lines_with, first_visible_descendant_ref, focusable_refs, form_control_refs,
-    line_index_of, rendered_block_text, search_refs, ContentProjection,
+    line_index_of, rendered_block_text, search_refs, subtree_refs, ContentProjection,
 };
 use crate::tui::driver::PageDriver;
 use crate::tui::hints::{HintMatch, LinkHint, assign_hints, match_hint};
@@ -348,22 +348,51 @@ impl Controller {
 
     /// Apply agent attention from shared state: highlight + scroll into view,
     /// without changing human selection.
+    ///
+    /// In prose mode landmarks/lists often have no content line. Attention still
+    /// paints the whole subtree and scrolls to the first visible descendant.
     fn sync_attention_from_shared(&mut self) {
         let attention = self.shared.attention();
         let next = attention.semantic_ref.clone();
         let changed = self.state.view.attention != next;
         let previous_selection = self.state.view.selection.clone();
         self.state.view.attention = next.clone();
+
+        // Rebuild paint set every sync so projection/collapse changes stay correct.
+        self.state.view.attention_paint.clear();
+        if let (Some(reference), Some(document)) = (next.as_ref(), self.state.document()) {
+            self.state.view.attention_paint = subtree_refs(document, reference);
+        }
+
         if !changed {
+            // Still restore selection in case a prior path touched it (defensive).
+            self.state.view.selection = previous_selection;
             return;
         }
+
         let Some(reference) = next else {
+            self.state.view.set_status("attention cleared");
+            self.state.view.selection = previous_selection;
             return;
         };
+
         let lines = self.content_lines();
-        if let Some(line_idx) = line_index_of(&lines, &reference) {
-            self.ensure_visible(line_idx, lines.len());
+        let scroll_target = line_index_of(&lines, &reference).or_else(|| {
+            let document = self.state.document()?;
+            let desc = first_visible_descendant_ref(document, &reference, &lines)?;
+            line_index_of(&lines, &desc)
+        });
+        if let Some(line_idx) = scroll_target {
+            // Top-ish placement so the spotlight is obvious, not just barely on-screen.
+            self.scroll_line_with_top_margin(line_idx, lines.len(), 5);
         }
+
+        if let Some(message) = attention.message.filter(|m| !m.is_empty()) {
+            self.state.view.set_status(format!("attention: {message}"));
+        } else {
+            self.state.view.set_status("attention set");
+        }
+
         // Attention scroll must never retarget human selection.
         self.state.view.selection = previous_selection;
     }
@@ -2299,6 +2328,147 @@ mod tests {
         assert!(
             ctl.state.view.scroll_y > scroll_before,
             "attention should scroll the spotlight into view"
+        );
+        assert!(ctl.state.view.attention_paint.contains(&attention));
+        assert_eq!(
+            ctl.state.view.status_message.as_deref(),
+            Some("attention: look here")
+        );
+    }
+
+    #[test]
+    fn agent_attention_on_prose_hidden_landmark_paints_and_scrolls_descendants() {
+        // Landmark has no prose line; attention must still reach the child heading.
+        let mut roots = Vec::new();
+        for index in 0..25 {
+            roots.push(raw_text(&format!("pad-{index}"), &format!("pad {index}")));
+        }
+        roots.push(RawSemanticNode {
+                    kind: "landmark".into(),
+                    tag: Some("section".into()),
+                    id: Some("block".into()),
+                    unique_id: true,
+                    selector: None,
+                    text: None,
+                    href: None,
+                    landmark: Some("section".into()),
+                    heading_level: None,
+                    ordered: None,
+                    label: None,
+                    src: None,
+                    alt: None,
+                    name: None,
+                    value: None,
+                    input_type: None,
+                    placeholder: None,
+                    checked: None,
+                    disabled: None,
+                    required: None,
+                    readonly: None,
+                    multiple: None,
+                    button_type: None,
+                    options: vec![],
+                    children: {
+                        let mut kids = Vec::new();
+                        for index in 0..30 {
+                            kids.push(RawSemanticNode {
+                                kind: "heading".into(),
+                                tag: Some("h2".into()),
+                                id: Some(format!("h-{index}")),
+                                unique_id: true,
+                                selector: None,
+                                text: Some(format!("Heading {index}")),
+                                href: None,
+                                landmark: None,
+                                heading_level: Some(2),
+                                ordered: None,
+                                label: Some(format!("Heading {index}")),
+                                src: None,
+                                alt: None,
+                                name: None,
+                                value: None,
+                                input_type: None,
+                                placeholder: None,
+                                checked: None,
+                                disabled: None,
+                                required: None,
+                                readonly: None,
+                                multiple: None,
+                                button_type: None,
+                                options: vec![],
+                                children: vec![],
+                            });
+                        }
+                        kids
+                    },
+                });
+        let document = normalize_fixture(meta("1", "https://example.com/"), roots).expect("doc");
+        let section = document
+            .components()
+            .find(|c| c.attrs.element_id.as_deref() == Some("block"))
+            .expect("section")
+            .semantic_ref
+            .clone();
+        let first_heading = document
+            .components()
+            .find(|c| c.attrs.element_id.as_deref() == Some("h-0"))
+            .expect("first heading")
+            .semantic_ref
+            .clone();
+        let pad0 = document
+            .components()
+            .find(|c| c.attrs.element_id.as_deref() == Some("pad-0"))
+            .expect("pad")
+            .semantic_ref
+            .clone();
+
+        let mut ctl = Controller::new();
+        ctl.shared.activate_runtime();
+        ctl.state.publish_page(document.clone());
+        ctl.shared.publish(document);
+        // Default projection is prose — landmark chrome hidden.
+        assert!(ctl.state.view.projection.is_prose());
+        ctl.state.view.selection = Some(pad0.clone());
+        ctl.set_viewport(80, 6);
+        ctl.state.view.scroll_y = 0;
+        let scroll_before = ctl.state.view.scroll_y;
+
+        // Prose lines must not include the section ref itself.
+        let lines = ctl.content_lines();
+        assert!(
+            line_index_of(&lines, &section).is_none(),
+            "section must be prose-hidden"
+        );
+        let heading_line = line_index_of(&lines, &first_heading).expect("heading line");
+        assert!(heading_line > 10, "heading should sit below padding");
+
+        ctl.shared
+            .set_attention(section.clone(), Some("section spotlight".into()))
+            .expect("attention");
+        ctl.synchronize_companion_state();
+
+        assert_eq!(ctl.state.view.selection.as_ref(), Some(&pad0));
+        assert_eq!(ctl.state.view.attention.as_ref(), Some(&section));
+        assert!(
+            ctl.state.view.attention_paint.contains(&section),
+            "paint set includes root"
+        );
+        assert!(
+            ctl.state.view.attention_paint.contains(&first_heading),
+            "paint set includes descendant heading"
+        );
+        assert!(
+            ctl.state.view.scroll_y > scroll_before,
+            "should scroll toward first visible descendant under section; scroll={} before={}",
+            ctl.state.view.scroll_y,
+            scroll_before
+        );
+        // Target should be near top of viewport (margin 5).
+        assert!(
+            ctl.state.view.scroll_y <= heading_line,
+            "scroll {} should not pass heading {}",
+            ctl.state.view.scroll_y,
+            heading_line
         );
     }
 }
