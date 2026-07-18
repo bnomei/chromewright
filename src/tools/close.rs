@@ -23,9 +23,13 @@ pub struct CloseTool;
 /// Counts and scope of tabs closed by the session close tool.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CloseOutput {
+    /// Tabs actually closed in this call.
     pub closed_tabs: usize,
+    /// Unmanaged tabs left open (attach mode without `confirm_destructive`).
     pub skipped_tabs: usize,
+    /// Close scope: `managed_only` or `all_tabs`.
     pub scope: String,
+    /// Session origin label (`launch` vs connected/attach).
     pub session_origin: String,
     pub message: String,
 }

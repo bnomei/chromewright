@@ -23,17 +23,17 @@ pub use session::{BrowserSession, ClosedTabSummary, ScreenshotArtifact, TabInfo}
 
 use crate::error::Result;
 
-/// Initialize a new browser session with default options
+/// Launch a disposable BrowserSession with default [`LaunchOptions`] (launch mode).
 pub fn init() -> Result<BrowserSession> {
     BrowserSession::new()
 }
 
-/// Initialize a new browser session with custom launch options
+/// Launch a disposable BrowserSession with custom process options (launch mode).
 pub fn init_with_options(options: LaunchOptions) -> Result<BrowserSession> {
     BrowserSession::launch(options)
 }
 
-/// Connect to an existing browser instance.
+/// Attach a BrowserSession to an existing DevTools endpoint (attach mode).
 ///
 /// Accepts either the browser-scoped DevTools WebSocket URL or a stable
 /// DevTools HTTP endpoint such as `http://127.0.0.1:9222`.

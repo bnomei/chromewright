@@ -209,6 +209,7 @@ pub enum BrowserError {
 }
 
 impl BrowserError {
+    /// Construct a structured resource-limit failure for tool and capture boundaries.
     pub(crate) fn resource_limit_exceeded(
         resource: impl Into<String>,
         detail: impl Into<String>,

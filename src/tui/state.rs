@@ -1,9 +1,18 @@
 //! Terminal browser state: lifecycle, interaction modes, viewport, and chrome fields.
+//!
+//! [`TuiState`] is the local UI mirror of page readiness and interaction mode.
+//! Shared companion coordination lives in [`crate::tui::shared::SharedTuiState`];
+//! both use the same Loading → Ready | Error lifecycle vocabulary so neither
+//! can claim Ready while the other still owns a page action.
 
 use crate::semantic::{SemanticDocument, SemanticRef};
 use std::collections::HashSet;
 
 /// Page lifecycle: Ready → Loading → Ready | Error (atomic publish on success).
+///
+/// Shared by the terminal controller and companion tools. Loading blocks normal
+/// key actions. Error retains the last published page and blocks normal keys
+/// until Escape dismisses it back to Ready (without requiring a new capture).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Lifecycle {
     /// Settled document is published; normal commands and scrolling apply.
@@ -23,6 +32,7 @@ impl Lifecycle {
         matches!(self, Self::Ready)
     }
 
+    /// Short chrome/status label for the lifecycle state (not a key legend).
     pub fn status_label(&self) -> &str {
         match self {
             Self::Ready => "Ready",
@@ -32,7 +42,7 @@ impl Lifecycle {
     }
 }
 
-/// Interaction mode while lifecycle is Ready (or Error, which still allows Escape/retry).
+/// Interaction mode while lifecycle is Ready (or Error, until Escape dismisses it).
 ///
 /// The dispatcher routes keys by mode so Normal action maps never fire during
 /// URL/search/form editing or two-key hint selection.
@@ -70,6 +80,9 @@ pub enum HintMode {
 }
 
 /// Snapshot published only after wait/settle + capture + reconciliation.
+///
+/// Chrome fields (url/title/revision) are copied from the SemanticDocument so
+/// the UI never shows metadata from a different capture than the body.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PublishedPage {
     pub document: SemanticDocument,
@@ -79,6 +92,7 @@ pub struct PublishedPage {
 }
 
 impl PublishedPage {
+    /// Derive chrome fields from a complete semantic capture.
     pub fn from_document(document: SemanticDocument) -> Self {
         let url = document.document.url.clone();
         let title = document.document.title.clone();
@@ -92,17 +106,23 @@ impl PublishedPage {
     }
 }
 
-/// Viewport and selection state keyed by exact semantic_ref.
+/// Viewport and selection state keyed by exact `semantic_ref`.
+///
+/// Human selection and agent attention are independent exact refs. Collapse and
+/// search match lists also store exact refs so recapture can rebind survivors
+/// without fuzzy identity.
 #[derive(Debug, Clone, Default)]
 pub struct ViewState {
     /// Vertical scroll offset in content lines.
     pub scroll_y: usize,
-    /// Horizontal scroll offset in columns.
+    /// Horizontal scroll offset in columns (ignored while word-wrap is on).
     pub scroll_x: usize,
     /// Viewport height in lines (content area).
     pub viewport_height: usize,
     /// Viewport width in columns.
     pub viewport_width: usize,
+    /// Soft-wrap long content lines to the viewport width (off by default).
+    pub wrap: bool,
     /// Currently selected addressable component (exact ref).
     pub selection: Option<SemanticRef>,
     /// Agent attention spotlight (exact ref), independent of human selection.
@@ -133,6 +153,10 @@ impl ViewState {
 }
 
 /// Full terminal browser state shared by controller and renderer.
+///
+/// Local only: does not own the BrowserSession. History affordances come from
+/// the active browser tab; page content is the last successfully published
+/// SemanticDocument (retained across Error).
 #[derive(Debug, Clone)]
 pub struct TuiState {
     pub lifecycle: Lifecycle,
@@ -167,6 +191,7 @@ impl TuiState {
         Self::default()
     }
 
+    /// Chrome mode label shown beside lifecycle (not a shortcut legend).
     pub fn mode_label(&self) -> &'static str {
         match &self.mode {
             InteractionMode::Normal => "Normal",
@@ -186,7 +211,11 @@ impl TuiState {
         matches!(self.mode, InteractionMode::Hint(_))
     }
 
-    /// Normal-mode commands must not fire while editing URL or form input.
+    /// Whether keymap-driven Normal actions may run.
+    ///
+    /// Requires both Normal mode and Ready lifecycle. Error retains the page
+    /// for display; Escape dismisses Error back to Ready so scrolling and
+    /// further page actions can resume. Quit remains available while Error.
     pub fn allows_normal_commands(&self) -> bool {
         matches!(self.mode, InteractionMode::Normal) && self.lifecycle.is_ready()
     }
@@ -206,16 +235,18 @@ impl TuiState {
             .unwrap_or("")
     }
 
+    /// Active SemanticDocument when a page has been published.
     pub fn document(&self) -> Option<&SemanticDocument> {
         self.page.as_ref().map(|p| &p.document)
     }
 
-    /// Atomically publish document + url + title + revision.
+    /// Atomically publish document + url + title + revision and mark Ready.
     pub fn publish_page(&mut self, document: SemanticDocument) {
         self.page = Some(PublishedPage::from_document(document));
         self.lifecycle = Lifecycle::Ready;
     }
 
+    /// Enter Loading and leave transient Input/Hint modes so keys cannot race the capture.
     pub fn enter_loading(&mut self, action: impl Into<String>) {
         self.lifecycle = Lifecycle::Loading {
             action: action.into(),
@@ -227,6 +258,7 @@ impl TuiState {
         }
     }
 
+    /// Enter Error while retaining `page` for recovery; clear transient modes.
     pub fn enter_error(&mut self, action: impl Into<String>, message: impl Into<String>) {
         self.lifecycle = Lifecycle::Error {
             action: action.into(),
@@ -234,6 +266,27 @@ impl TuiState {
         };
         self.mode = InteractionMode::Normal;
         self.view.hint_buffer.clear();
+    }
+
+    /// Dismiss Error back to Ready while retaining the last published page.
+    ///
+    /// Returns `true` when an Error was cleared. Loading and Ready are left
+    /// unchanged. The prior error message is kept as a transient status so the
+    /// operator can still see why the last action failed after recovery.
+    pub fn clear_error(&mut self) -> bool {
+        match std::mem::replace(&mut self.lifecycle, Lifecycle::Ready) {
+            Lifecycle::Error { message, .. } => {
+                self.mode = InteractionMode::Normal;
+                self.view.hint_buffer.clear();
+                self.view.inspect_text = None;
+                self.view.set_status(format!("dismissed: {message}"));
+                true
+            }
+            other => {
+                self.lifecycle = other;
+                false
+            }
+        }
     }
 
     /// Set chrome affordances from the active browser tab, never from a local
@@ -313,6 +366,7 @@ impl TuiState {
         self.publish_page(new_document);
     }
 
+    /// Keep vertical scroll within the current content length and viewport height.
     pub fn clamp_scroll(&mut self, content_len: usize) {
         let max_scroll = content_len.saturating_sub(self.view.viewport_height.max(1));
         if self.view.scroll_y > max_scroll {
@@ -363,9 +417,25 @@ mod tests {
     }
 
     #[test]
-    fn error_never_reenables_semantic_actions() {
+    fn error_blocks_semantic_actions_until_dismissed() {
         let mut state = TuiState::new();
         state.enter_error("reload", "failed");
         assert!(!state.allows_normal_commands());
+        assert!(state.clear_error());
+        assert!(state.lifecycle.is_ready());
+        assert!(state.allows_normal_commands());
+        assert_eq!(
+            state.view.status_message.as_deref(),
+            Some("dismissed: failed")
+        );
+    }
+
+    #[test]
+    fn clear_error_is_noop_when_ready_or_loading() {
+        let mut state = TuiState::new();
+        assert!(!state.clear_error());
+        state.enter_loading("navigate");
+        assert!(!state.clear_error());
+        assert!(state.lifecycle.is_loading());
     }
 }

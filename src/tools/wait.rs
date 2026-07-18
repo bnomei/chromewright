@@ -23,16 +23,27 @@ pub(crate) use crate::tools::services::wait::{
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum WaitCondition {
+    /// Document load/navigation has settled (no target required; default when omitted).
     NavigationSettled,
+    /// Target node exists in the live DOM.
     Present,
+    /// Target is visible (layout + visibility checks).
     Visible,
+    /// Target is enabled (not disabled).
     Enabled,
+    /// Target is editable (input/textarea and not readonly/disabled).
     Editable,
+    /// Target passes the full actionability set used by interaction tools.
     Actionable,
+    /// Target geometry has stopped moving across consecutive probes.
     Stable,
+    /// Target receives pointer events at its hit-test point.
     ReceivesEvents,
+    /// Target text content contains the required fragment (`text` required).
     TextContains,
+    /// Target form value equals the required string (`value` required).
     ValueEquals,
+    /// Document revision differs from `since_revision` (or the baseline at wait start).
     RevisionChanged,
 }
 

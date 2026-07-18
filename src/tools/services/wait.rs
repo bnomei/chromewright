@@ -1,4 +1,8 @@
 //! `wait` condition validation and polling loop shared by the wait tool.
+//!
+//! Document waits (`navigation_settled`, `revision_changed`) reject targets. Target waits
+//! resolve with interaction-style fail-closed targeting, poll actionability predicates, and
+//! return an interaction handoff on success.
 
 use crate::error::{BrowserError, Result};
 use crate::tools::{

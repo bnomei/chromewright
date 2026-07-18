@@ -1,4 +1,8 @@
 //! Readability-based main-content extraction, markdown conversion, and session cache reuse.
+//!
+//! Cache hits skip re-extraction and only paginate. Cache misses wait for document readiness
+//! and a short settle window, run in-page Readability under resource limits, convert HTML to
+//! markdown, and store a revision-keyed session cache entry for subsequent pages.
 
 use crate::browser::{MarkdownCacheEntry, MarkdownCacheMetadata};
 use crate::error::{BrowserError, Result};
@@ -347,7 +351,7 @@ fn json_type_name(value: &serde_json::Value) -> &'static str {
     }
 }
 
-/// Structure for extraction result returned from JavaScript
+/// In-page Readability / conversion payload (camelCase) returned from the extraction script.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ExtractionResult {

@@ -40,9 +40,17 @@ Keyboard bindings are deliberately not shown in the terminal. Navigation default
 Vimari: `f`/`F` link hints, `j`/`k`/`h`/`l` scrolling, `u`/`d` half pages,
 `gg`/`G` document ends, `gi` first form field, `H`/`L` history, `r` reload,
 `w`/`q`/`x`/`t` tab actions, `o` URL entry, `/` forward search, `n` next
-match, `N` previous match, Space collapse, `i`
+match, `N` previous match, Space collapse, `zw` toggle soft word-wrap (off by
+default; Vim-style `z`-prefix view command), `i`
 inspection, `y` content copy, `Y` semantic-ref copy, Tab/Shift-Tab focus,
-Enter confirm, Escape cancel, and Ctrl-C quit.
+Enter confirm, Escape cancel (and dismiss a failed page-action Error back to
+Ready while retaining the last good page), and Ctrl-C quit.
+
+Failed page actions (history, navigate, reload, tab changes, …) enter the
+Error lifecycle, keep the last published page on screen, and block normal
+keys until Escape dismisses the error. With `CHROMEWRIGHT_LOG` set, those
+failures are also written at `error` level (for example
+`tui page action 'history_back' failed: …`).
 
 Search follows Vim semantics: a new `/pattern` starts after the current
 selection and wraps at the end; `n` repeats forward, `N` repeats backward, and
@@ -68,6 +76,22 @@ startup rather than silently changing terminal behavior.
 The TUI is part of the default binary but remains isolated behind the `tui`
 Cargo feature. A server-only build can omit terminal code and dependencies with
 `cargo build --no-default-features --features mcp-server`.
+
+## Logging
+
+Process logging is installed only after the CLI subcommand is known so server
+stderr output cannot paint over the alternate-screen UI.
+
+- Default: TUI logging is off (`LevelFilter::Off`). Startup `info!` lines and
+  library `log` records are discarded.
+- Optional file: set `CHROMEWRIGHT_LOG=/path/to/tui.log` to append env_logger
+  output to that path (default filter `info`, overridable with `RUST_LOG`).
+  If the file cannot be opened, logging stays off rather than writing to
+  stderr.
+- stdio MCP and `serve` are unchanged: env_logger still targets stderr.
+
+Managed `--headless tui` Chrome already has its process stdout/stderr nulled
+separately from this logger policy.
 
 ## Co-hosted loopback MCP companion
 

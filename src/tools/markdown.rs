@@ -43,6 +43,7 @@ impl Default for GetMarkdownParams {
 }
 
 impl GetMarkdownParams {
+    /// Enforce non-zero page size and the configured Markdown page-size resource limit.
     pub(crate) fn validate(&self) -> Result<()> {
         if self.page_size == 0 {
             return Err(BrowserError::InvalidArgument(

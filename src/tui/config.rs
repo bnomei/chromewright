@@ -1,4 +1,7 @@
 //! TOML keymap configuration: explicit `--config` path or XDG default.
+//!
+//! Loads an Action-name overlay onto Vimari defaults. Explicit paths must exist
+//! and parse; a missing XDG default file is valid and keeps built-in bindings.
 
 use crate::tui::keymap::{KeymapError, TuiKeymap};
 use std::collections::HashMap;

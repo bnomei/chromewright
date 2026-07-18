@@ -52,6 +52,7 @@ impl BrowserSession {
         }
     }
 
+    /// History back with settle metrics; reverts and fails closed on unsafe schemes unless opted in.
     pub(crate) fn go_back_with_metrics(
         &self,
         allow_unsafe: bool,
@@ -59,6 +60,7 @@ impl BrowserSession {
         self.history_navigate(HistoryDirection::Back, allow_unsafe)
     }
 
+    /// History forward with settle metrics; reverts and fails closed on unsafe schemes unless opted in.
     pub(crate) fn go_forward_with_metrics(
         &self,
         allow_unsafe: bool,
@@ -66,6 +68,7 @@ impl BrowserSession {
         self.history_navigate(HistoryDirection::Forward, allow_unsafe)
     }
 
+    /// Perform history navigation, invalidate caches, settle, and optionally reverse unsafe landings.
     fn history_navigate(
         &self,
         direction: HistoryDirection,
@@ -76,10 +79,12 @@ impl BrowserSession {
         self.evaluate(direction.move_js(), false).map_err(|e| {
             BrowserError::NavigationFailed(format!("Failed to {}: {}", direction.verb(), e))
         })?;
+        // Invalidate before settle so a failed wait cannot leave a pre-navigation cache entry.
         self.invalidate_snapshot_cache()?;
         let settle_metrics = self.wait_for_history_settle(&previous_url, Duration::from_secs(5))?;
 
         let landed_url = self.document_metadata()?.url;
+        // Fail closed: reverse the history move when the destination scheme is not allowlisted.
         if !allow_unsafe && is_unsafe_history_scheme(&landed_url) {
             let reverse = direction.reverse();
             if self.evaluate(reverse.move_js(), false).is_ok() {

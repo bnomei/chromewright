@@ -31,10 +31,14 @@ pub struct EvaluateTool;
 /// Runtime value and CDP type metadata returned from an evaluate call.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct EvaluateOutput {
+    /// JSON-encoded evaluation result (`null` when absent).
     pub result: Value,
+    /// Whether CDP returned a concrete value (false for undefined).
     pub value_present: bool,
+    /// CDP remote-object type name when available.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub type_name: Option<String>,
+    /// CDP remote-object description when available.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
 }

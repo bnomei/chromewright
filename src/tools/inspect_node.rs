@@ -23,7 +23,9 @@ static INSPECT_NODE_SHELL: OnceLock<crate::tools::browser_kernel::BrowserKernelT
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum InspectDetail {
+    /// Identity, a11y, form, and layout only — preferred for agent loops (default).
     Compact,
+    /// Include bounded text/HTML/attribute/style sections with truncation metadata.
     Full,
 }
 

@@ -1,7 +1,8 @@
 //! Addressable semantic content lines for scrolling, selection, and copy.
 //!
-//! Built from the shared `SemanticDocument` without re-parsing HTML. Each line
-//! carries the owning component's exact `semantic_ref` when addressable.
+//! Built from the published SemanticDocument without re-parsing HTML. Each line
+//! carries the owning component's exact `semantic_ref` when addressable so
+//! selection, hints, search, and collapse stay revision-scoped.
 
 use crate::semantic::{
     SemanticComponent, SemanticDocument, SemanticKind, SemanticRatatuiView, SemanticRef,
@@ -9,6 +10,9 @@ use crate::semantic::{
 use std::collections::HashSet;
 
 /// One display line in the TUI content pane.
+///
+/// `semantic_ref` is the selection/copy/hint identity for that line when the
+/// component is addressable; structural padding lines may omit it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContentLine {
     pub text: String,
@@ -18,7 +22,7 @@ pub struct ContentLine {
     pub block_start: bool,
 }
 
-/// Flatten a document into content lines, honoring collapsed refs.
+/// Flatten a SemanticDocument into content lines, honoring collapsed exact refs.
 pub fn build_content_lines(
     document: &SemanticDocument,
     collapsed: &HashSet<SemanticRef>,
@@ -28,6 +32,75 @@ pub fn build_content_lines(
         push_component(root, 0, collapsed, &mut lines);
     }
     lines
+}
+
+/// Soft-wrap content lines to `width` columns (Unicode scalar count).
+///
+/// Prefers breaks at whitespace; falls back to a hard split when a single token
+/// exceeds the width. Continuation rows keep the same `semantic_ref` / `kind`
+/// and set `block_start = false` so selection still addresses the component.
+///
+/// `width == 0` is treated as 1 so callers never produce empty geometry.
+pub fn wrap_content_lines(lines: &[ContentLine], width: usize) -> Vec<ContentLine> {
+    let width = width.max(1);
+    let mut out = Vec::with_capacity(lines.len());
+    for line in lines {
+        wrap_one_line(line, width, &mut out);
+    }
+    out
+}
+
+fn wrap_one_line(line: &ContentLine, width: usize, out: &mut Vec<ContentLine>) {
+    let chars: Vec<char> = line.text.chars().collect();
+    if chars.is_empty() {
+        out.push(ContentLine {
+            text: String::new(),
+            semantic_ref: line.semantic_ref.clone(),
+            kind: line.kind,
+            block_start: line.block_start,
+        });
+        return;
+    }
+
+    let mut start = 0usize;
+    let mut first = true;
+    while start < chars.len() {
+        let remaining = chars.len() - start;
+        if remaining <= width {
+            push_wrapped_segment(line, &chars[start..], first, out);
+            break;
+        }
+
+        // Prefer the last whitespace break inside the window.
+        let window = &chars[start..start + width];
+        let break_at = window
+            .iter()
+            .rposition(|c| c.is_whitespace())
+            .filter(|&idx| idx > 0)
+            .unwrap_or(width);
+
+        push_wrapped_segment(line, &chars[start..start + break_at], first, out);
+        first = false;
+        start += break_at;
+        // Drop a single leading space on the next row after a word break.
+        if start < chars.len() && chars[start] == ' ' {
+            start += 1;
+        }
+    }
+}
+
+fn push_wrapped_segment(
+    line: &ContentLine,
+    segment: &[char],
+    first: bool,
+    out: &mut Vec<ContentLine>,
+) {
+    out.push(ContentLine {
+        text: segment.iter().collect(),
+        semantic_ref: line.semantic_ref.clone(),
+        kind: line.kind,
+        block_start: first && line.block_start,
+    });
 }
 
 fn push_component(
@@ -393,5 +466,43 @@ mod tests {
     #[test]
     fn ordinary_press_content_is_not_a_shortcut_legend() {
         assert!(!contains_shortcut_legend("Press releases"));
+    }
+
+    #[test]
+    fn wrap_breaks_on_spaces_and_preserves_refs() {
+        let line = ContentLine {
+            text: "hello beautiful world".into(),
+            semantic_ref: Some(SemanticRef::from_opaque("r1")),
+            kind: Some(SemanticKind::Text),
+            block_start: true,
+        };
+        // "hello " is 6; width 10 → "hello" then "beautiful" then "world"
+        let wrapped = wrap_content_lines(std::slice::from_ref(&line), 10);
+        assert!(wrapped.len() >= 2);
+        assert_eq!(wrapped[0].text, "hello");
+        assert!(wrapped[0].block_start);
+        for row in &wrapped {
+            assert_eq!(row.semantic_ref.as_ref().map(|r| r.as_str()), Some("r1"));
+        }
+        assert!(!wrapped[1].block_start);
+        assert!(wrapped.iter().all(|r| r.text.chars().count() <= 10));
+    }
+
+    #[test]
+    fn wrap_hard_splits_overlong_tokens() {
+        let line = ContentLine {
+            text: "abcdefghij".into(),
+            semantic_ref: None,
+            kind: Some(SemanticKind::Text),
+            block_start: true,
+        };
+        let wrapped = wrap_content_lines(std::slice::from_ref(&line), 4);
+        assert_eq!(
+            wrapped
+                .iter()
+                .map(|l| l.text.as_str())
+                .collect::<Vec<_>>(),
+            vec!["abcd", "efgh", "ij"]
+        );
     }
 }

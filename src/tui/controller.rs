@@ -306,9 +306,16 @@ impl Controller {
                             let anchor_offset =
                                 self.anchor_offset_in_viewport(&document, prev_sel.as_ref());
                             let collapsed = self.state.view.collapsed.clone();
+                            let wrap = self.state.view.wrap;
+                            let width = self.state.view.viewport_width.max(1);
                             let content_line_of =
                                 move |document: &SemanticDocument, r: &SemanticRef| {
                                     let lines = build_content_lines(document, &collapsed);
+                                    let lines = if wrap {
+                                        crate::tui::content::wrap_content_lines(&lines, width)
+                                    } else {
+                                        lines
+                                    };
                                     line_index_of(&lines, r)
                                 };
                             self.state.reconcile_after_capture(
@@ -456,6 +463,7 @@ impl Controller {
             }
             Err(msg) => {
                 // Retain last valid page; never publish partial update as Ready.
+                log::error!("tui page action '{}' failed: {msg}", pending.action);
                 self.state.enter_error(&pending.action, msg.clone());
                 self.shared
                     .fail_page_action(pending.action.clone(), msg.clone());
@@ -472,8 +480,15 @@ impl Controller {
         anchor_offset: usize,
     ) {
         let collapsed = self.state.view.collapsed.clone();
+        let wrap = self.state.view.wrap;
+        let width = self.state.view.viewport_width.max(1);
         let content_line_of = move |document: &SemanticDocument, r: &SemanticRef| {
             let lines = build_content_lines(document, &collapsed);
+            let lines = if wrap {
+                crate::tui::content::wrap_content_lines(&lines, width)
+            } else {
+                lines
+            };
             line_index_of(&lines, r)
         };
         self.state.reconcile_after_capture(
@@ -483,8 +498,8 @@ impl Controller {
             anchor_offset,
             content_line_of,
         );
-        if let Some(document) = self.state.document() {
-            let lines = build_content_lines(document, &self.state.view.collapsed);
+        if let Some(document) = self.state.document().cloned() {
+            let lines = self.lines_for_document(&document);
             self.state.clamp_scroll(lines.len());
             // Ensure selection exists
             if self.state.view.selection.is_none()
@@ -522,20 +537,56 @@ impl Controller {
         let Some(sel) = selection else {
             return 0;
         };
-        let lines = build_content_lines(document, &self.state.view.collapsed);
+        let lines = self.lines_for_document(document);
         let Some(line) = line_index_of(&lines, sel) else {
             return 0;
         };
         line.saturating_sub(self.state.view.scroll_y)
     }
 
+    /// Content lines for a document under the current collapse + wrap settings.
+    fn lines_for_document(
+        &self,
+        document: &SemanticDocument,
+    ) -> Vec<crate::tui::content::ContentLine> {
+        let lines = build_content_lines(document, &self.state.view.collapsed);
+        if self.state.view.wrap {
+            crate::tui::content::wrap_content_lines(&lines, self.state.view.viewport_width.max(1))
+        } else {
+            lines
+        }
+    }
+
     // --- Pure view operations (no driver) ---
 
     /// Flatten the active SemanticDocument into addressable content lines.
+    ///
+    /// When word-wrap is enabled, long lines are soft-wrapped to the current
+    /// viewport width so scroll, selection, search, and hints share one list.
     pub fn content_lines(&self) -> Vec<crate::tui::content::ContentLine> {
         match self.state.document() {
-            Some(doc) => build_content_lines(doc, &self.state.view.collapsed),
+            Some(doc) => self.lines_for_document(doc),
             None => Vec::new(),
+        }
+    }
+
+    /// Toggle soft word-wrap. Off by default; enabling clears horizontal pan.
+    pub fn toggle_wrap(&mut self) {
+        self.state.view.wrap = !self.state.view.wrap;
+        if self.state.view.wrap {
+            self.state.view.scroll_x = 0;
+            self.state.view.set_status("wrap: on");
+        } else {
+            self.state.view.set_status("wrap: off");
+        }
+        let len = self.content_lines().len();
+        self.state.clamp_scroll(len);
+        // Keep the current selection visible after the line grid changes.
+        if let Some(sel) = self.state.view.selection.clone() {
+            let lines = self.content_lines();
+            if let Some(idx) = line_index_of(&lines, &sel) {
+                self.ensure_visible(idx, lines.len());
+            }
         }
     }
 
@@ -610,12 +661,22 @@ impl Controller {
     }
 
     /// Horizontal pan left when a content line overflows the viewport width.
+    ///
+    /// No-op while word-wrap is on (lines already fit the viewport).
     pub fn scroll_left(&mut self) {
+        if self.state.view.wrap {
+            return;
+        }
         self.state.view.scroll_x = self.state.view.scroll_x.saturating_sub(4);
     }
 
     /// Horizontal pan right when a content line overflows the viewport width.
+    ///
+    /// No-op while word-wrap is on (lines already fit the viewport).
     pub fn scroll_right(&mut self) {
+        if self.state.view.wrap {
+            return;
+        }
         self.state.view.scroll_x = self.state.view.scroll_x.saturating_add(4);
     }
 
@@ -931,20 +992,37 @@ impl Controller {
         }
     }
 
-    /// Leave Input/Hint/inspect overlays and return to Normal mode (does not clear Error lifecycle).
+    /// Leave Input/Hint/inspect overlays and return to Normal mode.
+    ///
+    /// When lifecycle is Error, also dismiss Error → Ready (local + shared) so
+    /// the retained page becomes interactive again. Loading is never cleared
+    /// here; only Escape after a failed page action recovers the session.
     pub fn escape(&mut self) {
-        self.state.mode = InteractionMode::Normal;
-        self.state.view.hint_buffer.clear();
-        self.state.view.inspect_text = None;
+        if self.state.clear_error() {
+            let _ = self.shared.clear_error();
+        } else {
+            self.state.mode = InteractionMode::Normal;
+            self.state.view.hint_buffer.clear();
+            self.state.view.inspect_text = None;
+        }
         self.hints.clear();
     }
 
     /// Update content-area dimensions after a terminal resize and clamp scroll.
+    ///
+    /// When word-wrap is on, width changes rewrite the line grid, so the current
+    /// selection is re-scrolled into view after clamping.
     pub fn set_viewport(&mut self, width: usize, height: usize) {
         self.state.view.viewport_width = width;
         self.state.view.viewport_height = height;
-        let len = self.content_lines().len();
-        self.state.clamp_scroll(len);
+        let lines = self.content_lines();
+        self.state.clamp_scroll(lines.len());
+        if self.state.view.wrap
+            && let Some(sel) = self.state.view.selection.as_ref()
+            && let Some(idx) = line_index_of(&lines, sel)
+        {
+            self.ensure_visible(idx, lines.len());
+        }
     }
 }
 
@@ -1281,6 +1359,35 @@ mod tests {
             ctl.state.view.status_message.as_deref(),
             Some("anchor changed")
         );
+    }
+
+    #[test]
+    fn toggle_wrap_reflows_lines_and_disables_horizontal_pan() {
+        let long = "word ".repeat(20);
+        let doc = text_doc("1", "body", long.trim());
+        let mut ctl = Controller::new();
+        ctl.state.publish_page(doc);
+        ctl.set_viewport(20, 10);
+        assert!(!ctl.state.view.wrap);
+        let unwrapped = ctl.content_lines().len();
+        ctl.state.view.scroll_x = 12;
+        ctl.toggle_wrap();
+        assert!(ctl.state.view.wrap);
+        assert_eq!(ctl.state.view.scroll_x, 0);
+        assert_eq!(ctl.state.view.status_message.as_deref(), Some("wrap: on"));
+        let wrapped = ctl.content_lines().len();
+        assert!(wrapped > unwrapped);
+        assert!(
+            ctl.content_lines()
+                .iter()
+                .all(|l| l.text.chars().count() <= 20)
+        );
+        ctl.scroll_right();
+        assert_eq!(ctl.state.view.scroll_x, 0, "h-pan disabled while wrapped");
+        ctl.toggle_wrap();
+        assert!(!ctl.state.view.wrap);
+        assert_eq!(ctl.state.view.status_message.as_deref(), Some("wrap: off"));
+        assert_eq!(ctl.content_lines().len(), unwrapped);
     }
 
     #[test]

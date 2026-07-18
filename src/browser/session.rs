@@ -106,7 +106,7 @@ pub(crate) struct ManagedTabsCloseSummary {
 }
 
 impl BrowserSession {
-    /// Launch a new browser instance with the given options
+    /// Launch a disposable browser (launch mode) with the given process options.
     pub fn launch(options: LaunchOptions) -> Result<Self> {
         Self::from_backend_with_origin(
             ChromeSessionBackend::launch(options)?,
@@ -114,8 +114,10 @@ impl BrowserSession {
         )
     }
 
-    /// Connect to an existing browser instance via the browser WebSocket URL or
-    /// a stable DevTools HTTP endpoint such as `http://127.0.0.1:9222`.
+    /// Attach to an existing browser via WebSocket URL or DevTools HTTP endpoint (attach mode).
+    ///
+    /// Accepts either the browser-scoped DevTools WebSocket URL or a stable HTTP origin such as
+    /// `http://127.0.0.1:9222`. Pre-existing tabs are not treated as managed tabs.
     pub fn connect(options: ConnectionOptions) -> Result<Self> {
         Self::from_backend_with_origin(
             ChromeSessionBackend::connect(options)?,
@@ -123,42 +125,43 @@ impl BrowserSession {
         )
     }
 
-    /// Launch a browser with default options
+    /// Launch a disposable browser with default [`LaunchOptions`].
     pub fn new() -> Result<Self> {
         Self::launch(LaunchOptions::default())
     }
 
-    /// Navigate to a URL using the active tab
+    /// Navigate the active tab and invalidate the Snapshot cache (markdown misses via revision/url keys).
     pub fn navigate(&self, url: &str) -> Result<()> {
         self.backend.navigate(url)?;
         self.invalidate_snapshot_cache()
     }
 
-    /// Read document metadata from the active tab without rebuilding the full DOM snapshot.
+    /// Read document metadata (id, revision, url, ready state) from the active tab.
     pub fn document_metadata(&self) -> Result<DocumentMetadata> {
         self.backend.document_metadata()
     }
 
+    /// Read document metadata for `tab_id` without activating that tab when the backend supports it.
     pub(crate) fn document_metadata_for_tab(&self, tab_id: &str) -> Result<DocumentMetadata> {
         self.backend.document_metadata_for_tab(tab_id)
     }
 
-    /// Wait for navigation to complete
+    /// Block until the active tab's in-flight navigation settles.
     pub fn wait_for_navigation(&self) -> Result<()> {
         self.backend.wait_for_navigation()
     }
 
-    /// Read the current document ready state from the active tab.
+    /// Read `document.readyState` from the active tab via document metadata.
     pub fn document_ready_state(&self) -> Result<String> {
         Ok(self.document_metadata()?.ready_state)
     }
 
-    /// Wait for the current document to reach the `complete` ready state.
+    /// Poll until the active document reaches `readyState === "complete"` or `timeout` elapses.
     pub fn wait_for_document_ready_with_timeout(&self, timeout: Duration) -> Result<()> {
         self.backend.wait_for_document_ready_with_timeout(timeout)
     }
 
-    /// Extract the DOM tree from the active tab
+    /// Extract the actionability/ARIA DOM tree from the active tab.
     pub fn extract_dom(&self) -> Result<DomTree> {
         self.backend.extract_dom()
     }
@@ -172,27 +175,27 @@ impl BrowserSession {
         crate::semantic::extract_semantic_document(self)
     }
 
-    /// Extract the DOM tree from a specific tab without activating it.
+    /// Extract the DOM tree from `tab_id` without activating it when the backend supports it.
     pub(crate) fn extract_dom_for_tab(&self, tab_id: &str) -> Result<DomTree> {
         self.backend.extract_dom_for_tab(tab_id)
     }
 
-    /// Extract the DOM tree with a custom ref prefix (for iframe handling)
+    /// Extract the DOM tree with a custom node-ref prefix (iframe / nested-document handling).
     pub fn extract_dom_with_prefix(&self, prefix: &str) -> Result<DomTree> {
         self.backend.extract_dom_with_prefix(prefix)
     }
 
-    /// Get the tool registry
+    /// Shared tool registry used as the MCP/tool-dispatch surface for this session.
     pub fn tool_registry(&self) -> &ToolRegistry {
         &self.tool_registry
     }
 
-    /// Get mutable tool registry
+    /// Mutable access to the session tool registry (tests and custom registration).
     pub fn tool_registry_mut(&mut self) -> &mut ToolRegistry {
         &mut self.tool_registry
     }
 
-    /// Execute a tool by name
+    /// Execute a registered tool by name with a fresh [`ToolContext`] bound to this session.
     pub fn execute_tool(
         &self,
         name: &str,
@@ -202,17 +205,17 @@ impl BrowserSession {
         self.tool_registry.execute(name, params, &mut context)
     }
 
-    /// List browser tabs using backend-neutral descriptors.
+    /// List all backend tabs with active-flag resolution (attach-safe when page target is lost).
     pub fn list_tabs(&self) -> Result<Vec<TabInfo>> {
         self.tab_overview()
     }
 
-    /// Activate a tab by backend-neutral tab id.
+    /// Activate a tab by stable `tab_id` and invalidate revision-scoped caches.
     pub fn activate_tab(&self, tab_id: &str) -> Result<()> {
         self.activate_tab_by_id(tab_id)
     }
 
-    /// Open a new tab and mark it active.
+    /// Open a new tab, record it as a managed tab, and mark it active.
     pub fn open_tab(&self, url: &str) -> Result<TabInfo> {
         let tab = self.open_tab_entry(url)?;
 
@@ -224,15 +227,20 @@ impl BrowserSession {
         })
     }
 
-    /// Close the active tab and return its summary.
+    /// Close the active tab, drop managed ownership, and return a close summary.
     pub fn close_active_tab(&self) -> Result<ClosedTabSummary> {
         self.close_active_tab_summary()
     }
 
+    /// Evaluate JavaScript on the active page target via the SessionBackend.
+    ///
+    /// Prefer typed [`BrowserCommand`] paths for product interactions; this is the escape hatch
+    /// used by history navigation, readiness probes, and the guarded `evaluate` tool.
     pub(crate) fn evaluate(&self, script: &str, await_promise: bool) -> Result<ScriptEvaluation> {
         self.backend.evaluate(script, await_promise)
     }
 
+    /// Evaluate JavaScript on a specific `tab_id` without requiring it to be active.
     pub(crate) fn evaluate_on_tab(
         &self,
         tab_id: &str,
@@ -242,14 +250,17 @@ impl BrowserSession {
         self.backend.evaluate_on_tab(tab_id, script, await_promise)
     }
 
+    /// Read CSS viewport metrics (width, height, DPR) for the active tab or optional `tab_id`.
     pub(crate) fn viewport_metrics(&self, tab_id: Option<&str>) -> Result<ViewportMetrics> {
         self.backend.viewport_metrics(tab_id)
     }
 
+    /// Compile and run a [`BrowserCommand`] (probe or interaction) on the active page target.
     pub(crate) fn execute_command(&self, command: BrowserCommand) -> Result<BrowserCommandResult> {
         self.backend.execute_command(command)
     }
 
+    /// Capture a PNG via the legacy full-page flag and return raw bytes (tests only).
     #[cfg(test)]
     pub(crate) fn capture_screenshot(&self, full_page: bool) -> Result<Vec<u8>> {
         let artifact =
@@ -257,6 +268,7 @@ impl BrowserSession {
         Ok(artifact.bytes().as_ref().to_vec())
     }
 
+    /// Capture a screenshot and store it as a managed private artifact under the session root.
     #[allow(dead_code)]
     pub(crate) fn capture_screenshot_artifact(
         &self,
@@ -266,6 +278,7 @@ impl BrowserSession {
         self.store_screenshot_artifact(capture)
     }
 
+    /// Capture a screenshot, store the managed artifact, and return both artifact and raw capture.
     pub(crate) fn capture_screenshot_artifact_with_capture(
         &self,
         request: ScreenshotRequest,
@@ -275,6 +288,7 @@ impl BrowserSession {
         Ok((artifact, capture))
     }
 
+    /// Apply CDP device-metrics Viewport emulation and invalidate Snapshot cache.
     pub(crate) fn apply_viewport_emulation(
         &self,
         request: ViewportEmulationRequest,
@@ -284,6 +298,7 @@ impl BrowserSession {
         Ok(result)
     }
 
+    /// Clear Viewport emulation overrides and invalidate Snapshot cache.
     pub(crate) fn reset_viewport_emulation(
         &self,
         request: ViewportResetRequest,
@@ -293,6 +308,7 @@ impl BrowserSession {
         Ok(result)
     }
 
+    /// Dispatch a CDP key press to the active page target (no automatic cache invalidation).
     pub(crate) fn press_key(&self, key: &str) -> Result<()> {
         self.backend.press_key(key)
     }
@@ -307,7 +323,10 @@ impl BrowserSession {
         self.go_forward_with_metrics(false).map(|_| ())
     }
 
-    /// Close all open tabs in the current session backend.
+    /// Tear down the session: close backend tabs, clear screenshot artifacts, caches, and managed tabs.
+    ///
+    /// In attach mode this closes every backend-listed tab the backend `close` path targets; prefer
+    /// [`Self::close_managed_tabs`] when only session-owned tabs should be removed.
     pub fn close(&self) -> Result<()> {
         self.backend.close()?;
         self.clear_screenshot_artifacts()?;
@@ -315,10 +334,13 @@ impl BrowserSession {
         self.clear_managed_tabs()
     }
 
+    /// Build a session around an existing backend, seeding managed tabs only in launch mode.
     fn from_backend_with_origin<B: SessionBackend + 'static>(
         backend: B,
         origin: SessionOrigin,
     ) -> Result<Self> {
+        // Launch mode owns the process's initial tabs; attach mode starts with an empty managed set
+        // so pre-existing user tabs are never closed as session-owned.
         let managed_tab_ids = match origin {
             SessionOrigin::Launched => backend
                 .list_tabs()?
@@ -364,21 +386,25 @@ impl BrowserSession {
         })
     }
 
+    /// Return whether this session is launch mode or attach mode.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn session_origin(&self) -> SessionOrigin {
         self.origin
     }
 
+    /// True when this session attached to an existing DevTools endpoint (attach mode).
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn is_connected_session(&self) -> bool {
         self.origin == SessionOrigin::Connected
     }
 
+    /// True when `tab_id` is among the session-owned managed tabs.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn is_tab_managed(&self, tab_id: &str) -> Result<bool> {
         Ok(self.managed_tab_ids()?.contains(tab_id))
     }
 
+    /// Stable wire label for session origin (`"launched"` or `"connected"`).
     pub(crate) fn session_origin_label(&self) -> &'static str {
         match self.origin {
             SessionOrigin::Launched => "launched",
@@ -386,11 +412,13 @@ impl BrowserSession {
         }
     }
 
+    /// Record a newly opened tab as session-owned (attach-mode ownership boundary).
     pub(crate) fn remember_managed_tab(&self, tab_id: impl Into<String>) -> Result<()> {
         self.managed_tab_ids()?.insert(tab_id.into());
         Ok(())
     }
 
+    /// Drop managed ownership for a closed or released tab without closing it.
     pub(crate) fn forget_managed_tab(&self, tab_id: &str) -> Result<()> {
         self.managed_tab_ids()?.remove(tab_id);
         Ok(())
@@ -407,12 +435,14 @@ impl BrowserSession {
         })
     }
 
+    /// Wrap a test SessionBackend as a launch-mode BrowserSession.
     #[cfg(test)]
     pub(crate) fn with_test_backend<B: SessionBackend + 'static>(backend: B) -> Self {
         Self::from_backend_with_origin(backend, SessionOrigin::Launched)
             .expect("test backend should construct")
     }
 
+    /// Wrap a test SessionBackend with an explicit launch/attach origin.
     #[cfg(test)]
     pub(crate) fn with_test_backend_origin<B: SessionBackend + 'static>(
         backend: B,

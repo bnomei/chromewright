@@ -50,6 +50,8 @@ impl BrowserServer {
             shared: None,
         }
     }
+
+    /// Wrap an already-shared session (tools-only; no companion resource catalog).
     pub fn from_shared_session(session: Arc<BrowserSession>) -> Self {
         Self {
             session,

@@ -1,4 +1,8 @@
 //! Terminal chrome + content rendering (no shortcut legends).
+//!
+//! Draws lifecycle/mode chrome, addressable content lines (with independent
+//! human selection vs agent attention styles), and status. Never renders key
+//! binding legends in the UI.
 
 use crate::tui::controller::Controller;
 use crate::tui::state::{InputKind, InteractionMode, Lifecycle};
@@ -38,6 +42,7 @@ fn draw_chrome(frame: &mut Frame, area: Rect, controller: &Controller) {
         if state.can_go_back { "●" } else { "○" },
         if state.can_go_forward { "●" } else { "○" }
     );
+    let wrap = if state.view.wrap { " wrap" } else { "" };
 
     let url_line = match &state.mode {
         InteractionMode::Input(InputKind::Url { buffer }) => format!("URL> {buffer}"),
@@ -50,7 +55,7 @@ fn draw_chrome(frame: &mut Frame, area: Rect, controller: &Controller) {
     };
 
     let title = state.title();
-    let line1 = format!("[{mode}] [{lifecycle}] {hist}  {title}");
+    let line1 = format!("[{mode}] [{lifecycle}]{wrap} {hist}  {title}");
     let line2 = truncate(&url_line, area.width as usize);
 
     let para = Paragraph::new(vec![
@@ -69,7 +74,12 @@ fn draw_content(frame: &mut Frame, area: Rect, controller: &Controller) {
     let scroll = state.view.scroll_y;
     let height = area.height as usize;
     let width = area.width as usize;
-    let hscroll = state.view.scroll_x;
+    // Horizontal pan only applies when wrap is off; wrapped lines already fit.
+    let hscroll = if state.view.wrap {
+        0
+    } else {
+        state.view.scroll_x
+    };
 
     let mut text_lines = Vec::new();
     for line in lines.iter().skip(scroll).take(height) {

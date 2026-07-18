@@ -3,27 +3,31 @@
 use serde_json::Value;
 use std::collections::HashMap;
 
-/// Success or failure payload produced by a tool, with optional structured data and metadata.
+/// Success or failure payload produced by a tool before MCP `CallToolResult` conversion.
+///
+/// Tool-local failures set `success = false` and still travel as structured
+/// `CallToolResult` content (preserving `document` / `target` / `recovery` in `data`).
+/// Infrastructure faults bypass this type and become MCP internal errors.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ToolResult {
-    /// Whether the tool execution was successful
+    /// Tool-local success; false yields a structured error envelope, not an MCP internal error.
     pub success: bool,
 
-    /// Result data (JSON value)
+    /// Structured success payload or tool-error fields (`code`, `error`, envelopes).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<Value>,
 
-    /// Error message if execution failed
+    /// Human-readable tool-local error when `success` is false.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 
-    /// Additional metadata
+    /// Operation metrics and adapter hints (duration, browser evaluations, …).
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub metadata: HashMap<String, Value>,
 }
 
 impl ToolResult {
-    /// Create a successful result
+    /// Successful tool-local result with optional structured JSON data.
     pub fn success(data: Option<Value>) -> Self {
         Self {
             success: true,
@@ -33,7 +37,7 @@ impl ToolResult {
         }
     }
 
-    /// Create a successful result with data
+    /// Successful tool-local result serializing `data` to JSON.
     pub fn success_with<T: serde::Serialize>(data: T) -> Self {
         Self {
             success: true,
@@ -43,7 +47,7 @@ impl ToolResult {
         }
     }
 
-    /// Create a failure result
+    /// Tool-local failure with a message and no structured error body.
     pub fn failure(error: impl Into<String>) -> Self {
         Self {
             success: false,
@@ -53,7 +57,7 @@ impl ToolResult {
         }
     }
 
-    /// Create a failure result with structured error data.
+    /// Tool-local failure with a message plus structured error fields for MCP clients.
     pub fn failure_with<T: serde::Serialize>(error: impl Into<String>, data: T) -> Self {
         Self {
             success: false,
@@ -63,7 +67,7 @@ impl ToolResult {
         }
     }
 
-    /// Add metadata to the result
+    /// Attach a metadata entry (metrics, tool name) without changing success state.
     pub fn with_metadata(mut self, key: impl Into<String>, value: Value) -> Self {
         self.metadata.insert(key.into(), value);
         self

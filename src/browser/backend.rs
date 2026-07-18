@@ -72,6 +72,7 @@ pub enum ScreenshotMode {
 }
 
 impl ScreenshotMode {
+    /// Map the legacy `full_page: bool` tool parameter onto [`ScreenshotMode`].
     pub(crate) fn from_legacy_full_page(full_page: bool) -> Self {
         if full_page {
             Self::FullPage
@@ -114,12 +115,14 @@ pub enum ScreenshotFormat {
 }
 
 impl ScreenshotFormat {
+    /// File extension for managed artifact paths under the session screenshot root.
     pub(crate) fn extension(self) -> &'static str {
         match self {
             Self::Png => "png",
         }
     }
 
+    /// MIME type advertised on screenshot tool outputs for this format.
     pub(crate) fn mime_type(self) -> &'static str {
         match self {
             Self::Png => "image/png",
@@ -198,6 +201,7 @@ impl ViewportOrientation {
 }
 
 impl ViewportEmulationRequest {
+    /// Validate tab id, dimension bounds (including large-canvas opt-in), and device scale factor.
     pub(crate) fn validate(&self) -> Result<()> {
         validate_optional_tab_id(self.tab_id.as_deref(), "viewport tab_id")?;
 
@@ -248,6 +252,7 @@ impl ViewportEmulationRequest {
         Ok(())
     }
 
+    /// Project the request into the CDP device-metrics payload after validation.
     pub(crate) fn normalized_emulation(&self) -> ViewportEmulation {
         ViewportEmulation {
             width: self.width,
@@ -261,6 +266,7 @@ impl ViewportEmulationRequest {
 }
 
 impl ViewportResetRequest {
+    /// Validate optional tab targeting before clearing device-metrics overrides.
     pub(crate) fn validate(&self) -> Result<()> {
         validate_optional_tab_id(self.tab_id.as_deref(), "viewport tab_id")
     }
@@ -285,6 +291,7 @@ pub struct ScreenshotRequest {
 }
 
 impl ScreenshotRequest {
+    /// Build a device-scale request from the legacy `full_page` boolean (no tab or clip).
     pub(crate) fn from_legacy_full_page(full_page: bool) -> Self {
         Self {
             mode: ScreenshotMode::from_legacy_full_page(full_page),
@@ -294,6 +301,7 @@ impl ScreenshotRequest {
         }
     }
 
+    /// Reject empty tab ids and clip+full-page combinations before CDP capture.
     pub(crate) fn validate(&self) -> Result<()> {
         validate_optional_tab_id(self.tab_id.as_deref(), "screenshot tab_id")?;
 
@@ -630,10 +638,15 @@ pub(crate) struct ScriptEvaluation {
 /// [`BrowserError::BackendUnsupported`] when a capability is not available; attach mode may
 /// surface page target loss via [`BrowserError::PageTargetLost`].
 pub(crate) trait SessionBackend: Send + Sync {
+    /// Navigate the active page target to `url`.
     fn navigate(&self, url: &str) -> Result<()>;
+    /// Wait until the active tab's navigation settles.
     fn wait_for_navigation(&self) -> Result<()>;
+    /// Poll until `document.readyState` is `complete` or `timeout` elapses.
     fn wait_for_document_ready_with_timeout(&self, timeout: Duration) -> Result<()>;
+    /// Read revision-scoped document identity metadata from the active tab.
     fn document_metadata(&self) -> Result<DocumentMetadata>;
+    /// Read document metadata for `tab_id` without activating it when supported.
     fn document_metadata_for_tab(&self, tab_id: &str) -> Result<DocumentMetadata> {
         if self.active_tab()?.id == tab_id {
             return self.document_metadata();
@@ -646,7 +659,9 @@ pub(crate) trait SessionBackend: Send + Sync {
             ),
         ))
     }
+    /// Extract the actionability/ARIA DOM tree from the active tab.
     fn extract_dom(&self) -> Result<DomTree>;
+    /// Extract the DOM tree from `tab_id` without activating it when supported.
     fn extract_dom_for_tab(&self, tab_id: &str) -> Result<DomTree> {
         if self.active_tab()?.id == tab_id {
             return self.extract_dom();
@@ -656,8 +671,11 @@ pub(crate) trait SessionBackend: Send + Sync {
             BackendUnsupportedDetails::new("extract_dom_for_tab", "extract_dom_for_tab"),
         ))
     }
+    /// Extract the DOM tree with a custom node-ref prefix (iframe handling).
     fn extract_dom_with_prefix(&self, prefix: &str) -> Result<DomTree>;
+    /// Evaluate JavaScript on the active page target.
     fn evaluate(&self, script: &str, await_promise: bool) -> Result<ScriptEvaluation>;
+    /// Evaluate JavaScript on a specific `tab_id` without requiring activation when supported.
     fn evaluate_on_tab(
         &self,
         tab_id: &str,
@@ -672,12 +690,15 @@ pub(crate) trait SessionBackend: Send + Sync {
             BackendUnsupportedDetails::new("evaluate_on_tab", "evaluate_on_tab"),
         ))
     }
+    /// Execute a compiled [`BrowserCommand`] (probes and interactions) on the active target.
     fn execute_command(&self, command: BrowserCommand) -> Result<BrowserCommandResult> {
         Err(BrowserError::BackendUnsupported(
             BackendUnsupportedDetails::new(command.capability(), command.operation()),
         ))
     }
+    /// Capture PNG bytes from the active tab using the legacy full-page flag.
     fn capture_screenshot(&self, full_page: bool) -> Result<Vec<u8>>;
+    /// Capture a structured screenshot; default path rejects tab targeting and clips.
     fn capture_screenshot_with_request(
         &self,
         request: &ScreenshotRequest,
@@ -709,11 +730,13 @@ pub(crate) trait SessionBackend: Send + Sync {
             bytes,
         )
     }
+    /// Read CSS viewport metrics for the active tab or optional `tab_id`.
     fn viewport_metrics(&self, _tab_id: Option<&str>) -> Result<ViewportMetrics> {
         Err(BrowserError::BackendUnsupported(
             BackendUnsupportedDetails::new("viewport_metrics", "viewport_metrics"),
         ))
     }
+    /// Apply CDP device-metrics Viewport emulation.
     fn apply_viewport_emulation(
         &self,
         _request: &ViewportEmulationRequest,
@@ -722,6 +745,7 @@ pub(crate) trait SessionBackend: Send + Sync {
             BackendUnsupportedDetails::new("viewport_emulation", "apply_viewport_emulation"),
         ))
     }
+    /// Clear CDP device-metrics Viewport emulation overrides.
     fn reset_viewport_emulation(
         &self,
         _request: &ViewportResetRequest,
@@ -730,12 +754,19 @@ pub(crate) trait SessionBackend: Send + Sync {
             BackendUnsupportedDetails::new("viewport_emulation", "reset_viewport_emulation"),
         ))
     }
+    /// Dispatch a key press to the active page target.
     fn press_key(&self, key: &str) -> Result<()>;
+    /// List all page targets as backend-neutral descriptors.
     fn list_tabs(&self) -> Result<Vec<TabDescriptor>>;
+    /// Resolve the currently active page target.
     fn active_tab(&self) -> Result<TabDescriptor>;
+    /// Open a new tab, navigate to `url`, and activate it.
     fn open_tab(&self, url: &str) -> Result<TabDescriptor>;
+    /// Activate the page target identified by stable `tab_id`.
     fn activate_tab(&self, tab_id: &str) -> Result<()>;
+    /// Close the tab identified by `tab_id`; `with_unload` requests beforeunload handling.
     fn close_tab(&self, tab_id: &str, with_unload: bool) -> Result<()>;
+    /// Close remaining tabs / tear down the backend connection.
     fn close(&self) -> Result<()>;
 }
 
@@ -799,6 +830,7 @@ enum TabOpRetry {
 }
 
 impl ChromeSessionBackend {
+    /// Spawn a disposable Chrome process (launch mode) and seed an initial page target.
     pub(crate) fn launch(options: LaunchOptions) -> Result<Self> {
         let launch_opts = build_launch_options(options);
         let browser =
@@ -815,6 +847,7 @@ impl ChromeSessionBackend {
         })
     }
 
+    /// Connect to an existing DevTools endpoint (attach mode); active tab is discovered on demand.
     pub(crate) fn connect(options: ConnectionOptions) -> Result<Self> {
         let ws_url = options.resolved_ws_url()?;
         let browser = Browser::connect_with_timeout(ws_url, CHROME_BROWSER_IDLE_TIMEOUT)
@@ -828,6 +861,7 @@ impl ChromeSessionBackend {
         })
     }
 
+    /// Resolve the live headless_chrome tab handle for the active page target.
     pub(crate) fn active_tab_handle(&self) -> Result<Arc<Tab>> {
         if let Some(tab) = self.cached_active_tab()? {
             return Ok(tab);
@@ -884,6 +918,7 @@ impl ChromeSessionBackend {
         ))
     }
 
+    /// Snapshot the current headless_chrome tab handles held by the browser process.
     pub(crate) fn tabs(&self) -> Result<Vec<Arc<Tab>>> {
         let tabs = self
             .browser
@@ -894,6 +929,7 @@ impl ChromeSessionBackend {
         Ok(tabs)
     }
 
+    /// Activate a real CDP tab, refresh the active-tab hint, and clear attach page-target degradation.
     pub(crate) fn activate_real_tab(&self, tab: &Arc<Tab>) -> Result<()> {
         tab.activate().map_err(|e| {
             BrowserError::TabOperationFailed(format!("Failed to activate tab: {}", e))
@@ -903,6 +939,7 @@ impl ChromeSessionBackend {
         Ok(())
     }
 
+    /// Create a tab, navigate to `url`, wait for navigation, and activate it.
     pub(crate) fn open_real_tab(&self, url: &str) -> Result<Arc<Tab>> {
         let tab = self.browser.new_tab().map_err(|e| {
             BrowserError::TabOperationFailed(format!("Failed to create tab: {}", e))

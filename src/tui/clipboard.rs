@@ -1,4 +1,7 @@
 //! OSC 52 clipboard copy with a visible non-destructive fallback.
+//!
+//! Used by copy-block / copy-ref Actions. Failure never panics or mutates
+//! browser state; the payload is retained for status display instead.
 
 use base64::Engine;
 use std::io::{self, Write};

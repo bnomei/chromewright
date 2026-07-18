@@ -171,8 +171,85 @@ chromewright --headless --user-data-dir /tmp/chromewright-profile serve
 | `--executable-path <PATH>` | auto-detected by the browser backend | Uses a specific browser executable in launch mode. |
 | `--user-data-dir <DIR>` | backend default | Uses a persistent browser profile directory in launch mode. |
 | `--debug-port <PORT>` | auto-selected | Uses a specific DevTools port for a locally launched browser. |
+| `chromewright tui` | (feature `tui`, default-on) | Starts the semantic terminal browser against the same browser session. Always co-hosts a loopback MCP companion. |
+| `tui --config <PATH>` | `$XDG_CONFIG_HOME/chromewright/tui.toml` or `~/.config/chromewright/tui.toml` | TOML keymap overlay. An explicit path must exist and parse; a missing default file keeps built-in bindings. |
+| `tui --companion-port <PORT>` | `0` (ephemeral) | Loopback port for the co-hosted streamable-HTTP MCP companion. |
+| `tui --companion-path <PATH>` | `/mcp` | HTTP path for the co-hosted companion. |
+| `--browser-session <reuse\|restart>` | `reuse` with `--headless tui` | Reuse or replace Chromewright's owned managed headless browser. Only valid with `--headless tui`. |
 
 Source: [src/bin/mcp_server.rs](src/bin/mcp_server.rs).
+
+## Terminal browser (TUI)
+
+The default build includes a semantic terminal browser. It attaches to the same Chromewright browser session and renders semantic DOM content only (not pixels, CSS, or browser layout).
+
+```bash
+# Attach to an existing DevTools endpoint (default http://127.0.0.1:9222).
+chromewright tui
+
+# Managed private headless Chrome for the normal terminal-browser flow.
+chromewright --headless tui
+```
+
+Keyboard bindings are not shown in the terminal chrome. Defaults are Vimari-compatible. Multi-key sequences such as `gg` and `gi` wait for the full chord; an unbound prefix is rejected rather than re-firing the last key.
+
+### Default keymap
+
+| Key | Action name | Behavior |
+| --- | --- | --- |
+| `f` | `link_hints_follow` | Enter link-hint mode; follow the chosen link in the current tab. |
+| `F` | `link_hints_new_tab` | Enter link-hint mode; open the chosen link in a new tab. |
+| `j` | `scroll_down` | Scroll or move selection down one block. |
+| `k` | `scroll_up` | Scroll or move selection up one block. |
+| `h` | `scroll_left` | Horizontal scroll left when content overflows. |
+| `l` | `scroll_right` | Horizontal scroll right when content overflows. |
+| `u` | `half_page_up` | Half-page up. |
+| `d` | `half_page_down` | Half-page down. |
+| `gg` | `go_top` | Jump to the document top. |
+| `G` | `go_bottom` | Jump to the document bottom. |
+| `gi` | `focus_first_input` | Focus the first focusable form control. |
+| `H` | `history_back` | Browser history back. |
+| `L` | `history_forward` | Browser history forward. |
+| `r` | `reload` | Reload the active page. |
+| `w` | `next_tab` | Switch to the next tab. |
+| `q` | `prev_tab` | Switch to the previous tab. |
+| `x` | `close_tab` | Close the current tab. |
+| `t` | `new_tab` | Open a new tab. |
+| `o` | `open_url` | Open the URL entry prompt. |
+| `/` | `search` | Start forward search by exact semantic content. |
+| `n` | `search_next` | Repeat the last search forward. |
+| `N` | `search_previous` | Repeat the last search backward. |
+| `Space` | `collapse` | Collapse or expand the selected block. |
+| `zw` | `toggle_wrap` | Toggle soft word-wrap (off by default). When on, long lines wrap to the viewport and `h`/`l` horizontal pan is disabled. |
+| `i` | `inspect` | Inspect selected component metadata. |
+| `y` | `copy_block` | Copy rendered block text (OSC 52). |
+| `Y` | `copy_ref` | Copy the opaque `semantic_ref` (OSC 52). |
+| `Tab` | `tab_next` | Move to the next focusable control. |
+| `Shift-Tab` | `tab_prev` | Move to the previous focusable control. |
+| `Enter` | `confirm` | Confirm URL, search, or form input submission. |
+| `Esc` | `escape` | Leave prompt, hint, or inspect mode. After a failed page action, dismiss Error back to Ready (retained page stays) so keys work again. |
+| `Ctrl-c` | `quit` | Quit the TUI. |
+
+Link hints use deterministic two-key labels from the alphabet `asdfgqwertzxcvb` (for example `aa`, `as`), assigned only to viewport-visible links.
+
+Search follows Vim semantics: a new `/pattern` starts after the current selection and wraps at the end; `n` repeats forward, `N` repeats backward, and submitting an empty `/` prompt repeats the previous pattern. Bracketed paste is accepted only in URL, search, and form input modes and is bounded to 4096 characters.
+
+### Custom keymap
+
+Bindings are replaceable by action name. `--config PATH` takes precedence; if omitted, Chromewright reads `$XDG_CONFIG_HOME/chromewright/tui.toml`, falling back to `~/.config/chromewright/tui.toml`. A missing default file keeps the built-ins; an explicitly requested file must parse successfully.
+
+```toml
+# Only list actions you want to rebind. Unknown actions or conflicting
+# sequences abort startup rather than partially applying the overlay.
+[keymap]
+reload = "ctrl-r"
+quit = "ctrl-q"
+tab_prev = "shift-tab"
+```
+
+Binding specs accept single keys (`r`, `space`, `esc`, `enter`, `tab`), multi-key letter sequences (`gg`, `gi`), and chords with `-`, `+`, or space separators (`ctrl-c`, `C-c`, `shift-tab`). Supported named keys include `esc`, `enter`, `tab`, `backtab` / `shift-tab`, `backspace`, arrow keys, `home`, `end`, `pageup` / `pgup`, `pagedown` / `pgdn`, `space`, and function keys such as `f1`.
+
+More detail on managed headless sessions, logging, and the co-hosted `tui_*` companion lives in [docs/tui.md](docs/tui.md). Source of truth for defaults: [src/tui/keymap.rs](src/tui/keymap.rs) and [src/tui/action.rs](src/tui/action.rs).
 
 ## Tool workflow
 
@@ -309,16 +386,14 @@ Browser smoke checks launch a local browser and are intended for maintainer work
 
 ## Source anchors
 
-The default-enabled, compile-time-optional semantic terminal browser, its
-Vim-compatible search, Vimari-compatible navigation defaults, and TOML
-configuration precedence are documented in [docs/tui.md](docs/tui.md).
-
 - Package metadata and Rust version: [Cargo.toml](Cargo.toml)
 - CLI flags and transports: [src/bin/mcp_server.rs](src/bin/mcp_server.rs)
 - Tool registry: [src/tools/core/mod.rs](src/tools/core/mod.rs)
 - MCP handler: [src/mcp/handler.rs](src/mcp/handler.rs)
 - Public target contract: [src/contract/target.rs](src/contract/target.rs)
 - Screenshot contract: [src/tools/screenshot.rs](src/tools/screenshot.rs)
+- TUI overview (managed headless, companion, resources): [docs/tui.md](docs/tui.md)
+- TUI default keymap and actions: [src/tui/keymap.rs](src/tui/keymap.rs), [src/tui/action.rs](src/tui/action.rs)
 - Browser smoke script: [scripts/browser-smoke.sh](scripts/browser-smoke.sh)
 
 ## License

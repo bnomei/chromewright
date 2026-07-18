@@ -1,8 +1,14 @@
 //! HTML-to-Markdown conversion used after Readability main-content extraction.
+//!
+//! Pure string transform with no browser session access; callers enforce resource limits
+//! on HTML size before invoking this path.
 
 use html2md;
 
-/// Converts extracted article HTML into Markdown via the `html2md` parser.
+/// Convert extracted article HTML into Markdown via the `html2md` parser.
+///
+/// Empty input yields an empty string. Output fidelity follows `html2md` (structure may
+/// differ slightly from source HTML).
 pub fn convert_html_to_markdown(html: &str) -> String {
     if html.is_empty() {
         return String::new();

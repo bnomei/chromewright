@@ -1,10 +1,16 @@
-//! Named TUI actions resolved by the keymap (never hard-coded in the event loop).
+//! Named TUI Actions resolved by the Keymap (never hard-coded in the event loop).
+//!
+//! Physical KeyChord bindings live in [`crate::tui::keymap`]; this module owns
+//! the stable action vocabulary used by TOML overlays, the dispatcher, and
+//! [`Action::is_page_changing`] lifecycle classification.
 
 use serde::{Deserialize, Serialize};
 
 /// Semantic actions the terminal browser can perform.
 ///
 /// Key bindings map to these names via [`crate::tui::keymap::TuiKeymap`].
+/// Default chords in docs (e.g. `f`, `j`) are illustrative only—runtime
+/// resolution always goes through the keymap.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Action {
@@ -54,6 +60,8 @@ pub enum Action {
     SearchPrevious,
     /// `Space` — collapse / expand selected block.
     Collapse,
+    /// `zw` — toggle soft word-wrap of content lines (off by default).
+    ToggleWrap,
     /// `i` — inspect selected component metadata.
     Inspect,
     /// `y` — copy rendered block text (OSC 52).
@@ -66,7 +74,7 @@ pub enum Action {
     TabPrev,
     /// `Enter` — confirm URL/search/input submission.
     Confirm,
-    /// `Escape` — leave prompt, hint, inspect, or clear error overlay.
+    /// `Escape` — leave prompt, hint, or inspect; dismiss Error → Ready.
     Escape,
     /// `Ctrl-c` — quit the TUI.
     Quit,
@@ -99,6 +107,7 @@ impl Action {
             Self::SearchNext => "search_next",
             Self::SearchPrevious => "search_previous",
             Self::Collapse => "collapse",
+            Self::ToggleWrap => "toggle_wrap",
             Self::Inspect => "inspect",
             Self::CopyBlock => "copy_block",
             Self::CopyRef => "copy_ref",
@@ -136,6 +145,7 @@ impl Action {
             "search_next" => Some(Self::SearchNext),
             "search_previous" => Some(Self::SearchPrevious),
             "collapse" => Some(Self::Collapse),
+            "toggle_wrap" => Some(Self::ToggleWrap),
             "inspect" => Some(Self::Inspect),
             "copy_block" => Some(Self::CopyBlock),
             "copy_ref" => Some(Self::CopyRef),
@@ -172,7 +182,7 @@ impl Action {
     }
 }
 
-const ALL_ACTIONS: [Action; 31] = [
+const ALL_ACTIONS: [Action; 32] = [
     Action::LinkHintsFollow,
     Action::LinkHintsNewTab,
     Action::ScrollDown,
@@ -196,6 +206,7 @@ const ALL_ACTIONS: [Action; 31] = [
     Action::SearchNext,
     Action::SearchPrevious,
     Action::Collapse,
+    Action::ToggleWrap,
     Action::Inspect,
     Action::CopyBlock,
     Action::CopyRef,

@@ -1,4 +1,8 @@
 //! `inspect_node` orchestration: target resolution, in-page probe, and envelope assembly.
+//!
+//! Allows read-only selector rebound for stale cursors, then verifies probe identity against
+//! the pre-probe actionable fingerprint. On revision drift or fingerprint mismatch, handle
+//! fields are downgraded to CSS-only so agents do not reuse unverified cursors.
 
 use crate::error::Result;
 use crate::tools::ResolvedTarget;

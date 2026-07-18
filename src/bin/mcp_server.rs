@@ -176,12 +176,99 @@ fn validate_tui_session_policy(cli: &Cli) -> Result<(), String> {
     Ok(())
 }
 
+/// How process logging is installed after the CLI subcommand is known.
+///
+/// TUI mode must not write to stderr: the alternate-screen canvas is corrupted
+/// by any plain terminal output while ratatui owns the display.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum LoggingMode {
+    /// stdio MCP and HTTP `serve`: env_logger → stderr (default filter `info`).
+    ServerStderr { default_filter: &'static str },
+    /// `tui` without a log file: discard all records.
+    TuiQuiet,
+    /// `tui` with `CHROMEWRIGHT_LOG`: env_logger → append-only file.
+    TuiFile {
+        path: PathBuf,
+        default_filter: &'static str,
+    },
+}
+
+/// Decide logging after CLI parse. `chromewright_log` is the raw
+/// `CHROMEWRIGHT_LOG` value when present (tests inject; production reads env).
+fn logging_mode_for(command: &Option<Command>, chromewright_log: Option<&str>) -> LoggingMode {
+    #[cfg(feature = "tui")]
+    if matches!(command, Some(Command::Tui { .. })) {
+        if let Some(path) = chromewright_log {
+            let path = path.trim();
+            if !path.is_empty() {
+                return LoggingMode::TuiFile {
+                    path: PathBuf::from(path),
+                    default_filter: "info",
+                };
+            }
+        }
+        return LoggingMode::TuiQuiet;
+    }
+
+    let _ = chromewright_log;
+    LoggingMode::ServerStderr {
+        default_filter: "info",
+    }
+}
+
+fn init_logging(mode: LoggingMode) {
+    match mode {
+        LoggingMode::ServerStderr { default_filter } => {
+            env_logger::Builder::from_env(
+                env_logger::Env::default().default_filter_or(default_filter),
+            )
+            .init();
+        }
+        LoggingMode::TuiQuiet => {
+            // Install a no-op logger so later `log` macros stay silent and do
+            // not fall through to a stderr default if something else inits.
+            env_logger::Builder::new()
+                .filter_level(log::LevelFilter::Off)
+                .init();
+        }
+        LoggingMode::TuiFile {
+            path,
+            default_filter,
+        } => match std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+        {
+            Ok(file) => {
+                env_logger::Builder::from_env(
+                    env_logger::Env::default().default_filter_or(default_filter),
+                )
+                .target(env_logger::Target::Pipe(Box::new(file)))
+                .init();
+            }
+            Err(_) => {
+                // Fail closed: never paint open errors onto the alternate screen.
+                env_logger::Builder::new()
+                    .filter_level(log::LevelFilter::Off)
+                    .init();
+            }
+        },
+    }
+}
+
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     #[cfg(feature = "tui")]
     validate_tui_session_policy(&cli)?;
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    // Install logging only after the transport is known so TUI never shares the
+    // server stderr target (which would spoil the alternate-screen UI).
+    init_logging(logging_mode_for(
+        &cli.command,
+        std::env::var_os("CHROMEWRIGHT_LOG")
+            .as_ref()
+            .and_then(|v| v.to_str()),
+    ));
     let browser_mode = browser_mode_from_cli(&cli);
 
     info!("chromewright MCP server v{}", env!("CARGO_PKG_VERSION"));
@@ -554,5 +641,66 @@ mod tests {
             }
             _ => panic!("expected serve"),
         }
+    }
+
+    #[test]
+    fn test_logging_mode_server_transports_use_stderr() {
+        let stdio = Cli::try_parse_from(["chromewright"]).expect("stdio");
+        assert_eq!(
+            logging_mode_for(&stdio.command, None),
+            LoggingMode::ServerStderr {
+                default_filter: "info"
+            }
+        );
+        // CHROMEWRIGHT_LOG is TUI-only; server modes ignore it.
+        assert_eq!(
+            logging_mode_for(&stdio.command, Some("/tmp/ignored.log")),
+            LoggingMode::ServerStderr {
+                default_filter: "info"
+            }
+        );
+
+        let serve = Cli::try_parse_from(["chromewright", "serve"]).expect("serve");
+        assert_eq!(
+            logging_mode_for(&serve.command, None),
+            LoggingMode::ServerStderr {
+                default_filter: "info"
+            }
+        );
+    }
+
+    #[cfg(feature = "tui")]
+    #[test]
+    fn test_logging_mode_tui_is_quiet_by_default() {
+        let cli = Cli::try_parse_from(["chromewright", "tui"]).expect("tui");
+        assert_eq!(logging_mode_for(&cli.command, None), LoggingMode::TuiQuiet);
+        assert_eq!(
+            logging_mode_for(&cli.command, Some("")),
+            LoggingMode::TuiQuiet
+        );
+        assert_eq!(
+            logging_mode_for(&cli.command, Some("   ")),
+            LoggingMode::TuiQuiet
+        );
+    }
+
+    #[cfg(feature = "tui")]
+    #[test]
+    fn test_logging_mode_tui_file_when_chromewright_log_set() {
+        let cli = Cli::try_parse_from(["chromewright", "tui"]).expect("tui");
+        assert_eq!(
+            logging_mode_for(&cli.command, Some("/tmp/chromewright-tui.log")),
+            LoggingMode::TuiFile {
+                path: PathBuf::from("/tmp/chromewright-tui.log"),
+                default_filter: "info",
+            }
+        );
+        assert_eq!(
+            logging_mode_for(&cli.command, Some("  /tmp/padded.log  ")),
+            LoggingMode::TuiFile {
+                path: PathBuf::from("/tmp/padded.log"),
+                default_filter: "info",
+            }
+        );
     }
 }

@@ -1,8 +1,14 @@
 //! URL normalization and navigation safety checks for high-level browser tools.
+//!
+//! Non-http(s) absolute schemes and protocol-relative targets require explicit opt-in
+//! (`allow_unsafe` / confirm-style gates at the tool boundary). Relative paths pass through.
 
 use crate::error::{BrowserError, Result};
 
 /// Normalize an incomplete URL by adding a protocol when the input looks like a host or domain.
+///
+/// Leaves absolute schemes, relative paths, and special protocols (`about:`, `data:`,
+/// `file:`, `chrome:`) unchanged. Bare hosts get `https://`; localhost/loopback get `http://`.
 pub fn normalize_url(url: &str) -> String {
     let trimmed = url.trim();
 
@@ -59,7 +65,13 @@ fn is_protocol_relative(url: &str) -> bool {
     )
 }
 
-/// Validate a high-level navigation target. Unsafe absolute schemes require explicit opt-in.
+/// Validate a high-level navigation target after normalization.
+///
+/// # Errors
+///
+/// Returns [`BrowserError::InvalidArgument`] when an unsafe absolute scheme or protocol-
+/// relative URL is used without `allow_unsafe = true`. Safe http(s) and same-origin relative
+/// paths succeed without opt-in.
 pub fn validate_navigation_url(url: &str, allow_unsafe: bool) -> Result<String> {
     let normalized = normalize_url(url);
     if allow_unsafe {

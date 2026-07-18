@@ -1,4 +1,9 @@
-//! Viewport-biased snapshot projection and delta encoding against the session snapshot cache.
+//! Snapshot projection for document envelopes: full, viewport-biased, and delta modes.
+//!
+//! Viewport mode keeps interactive/local anchors; when none qualify it falls back through
+//! persistent chrome and document-visible scopes, recording `locality_fallback_reason`.
+//! Delta mode diffs against the session snapshot cache baseline and falls back to a
+//! viewport projection when no compatible cache entry exists.
 
 use super::duration_micros;
 use crate::browser::{SnapshotCacheEntry, SnapshotCacheScope};
@@ -14,8 +19,11 @@ use std::time::Instant;
 
 /// Inputs for viewport projection or delta snapshot encoding against a cache baseline.
 pub(crate) struct SnapshotProjectionInput<'a> {
+    /// Current DOM tree to project (revision already established by the caller).
     pub dom: &'a DomTree,
+    /// Snapshot mode: full document, viewport-biased, or delta vs `base`.
     pub mode: SnapshotMode,
+    /// Global interactive count for scope metadata (usually from the full DOM).
     pub global_interactive_count: Option<usize>,
     /// Prior viewport projection used only for delta mode; ignored otherwise.
     pub base: Option<&'a SnapshotCacheEntry>,

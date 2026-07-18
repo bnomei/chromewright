@@ -9,11 +9,17 @@
   headless Chrome sessions, and exact fail-closed id-less element interaction.
 - Add the co-hosted loopback MCP companion with the complete `tui_*` tool
   family and bounded active/revisioned semantic resources.
+- Add TUI soft word-wrap toggled with `zw` (`toggle_wrap`), off by default; wrap reflows content lines to the viewport and disables horizontal pan while active.
 
 ### Changed
 
+- Document the full default TUI keymap, action names, and TOML overlay syntax in `README.md`.
 - Upgrade the MCP runtime to RMCP 2.2 and retain only the server, stdio, and streamable-HTTP transport features.
 - Refresh Rust 1.88-compatible dependencies, including `headless_chrome` 1.0.22.
+
+### Fixed
+
+- Dismiss TUI Error lifecycle with Escape so a failed history/navigation action no longer leaves the terminal browser unresponsive; keep the retained page and log the failure when `CHROMEWRIGHT_LOG` is set.
 
 ## 0.7.1 - 2026-06-28
 
@@ -24,6 +30,7 @@
 
 ### Fixed
 
+- Keep `chromewright tui` free of stderr log spill by deferring logger install until the transport is known: TUI defaults to a quiet logger, optional `CHROMEWRIGHT_LOG` file target, while stdio and HTTP `serve` keep stderr logging.
 - Reveal and capture same-origin iframe screenshot targets using frame-aware viewport geometry.
 - Invalidate scroll snapshot cache state before parsing scroll results so malformed payloads cannot preserve stale delta bases.
 - Quote YAML `~` scalar values so snapshot text round-trips as a string instead of YAML null.

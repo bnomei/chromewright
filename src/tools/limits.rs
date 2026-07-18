@@ -1,4 +1,8 @@
-//! Resource budgets enforced before DOM extraction, snapshots, screenshots, and waits.
+//! Resource limits and budgets for DOM extraction, snapshots, screenshots, markdown, and waits.
+//!
+//! Validators fail closed with [`BrowserError::ResourceLimitExceeded`] (or
+//! [`BrowserError::InvalidArgument`] for wait timeouts) before oversized payloads are stored
+//! or returned to agents.
 
 use crate::error::{BrowserError, Result};
 

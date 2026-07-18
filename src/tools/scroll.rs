@@ -31,8 +31,11 @@ const SCROLL_JS: &str = include_str!("scroll.js");
 /// Scroll position and edge flags after a scroll action.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct ViewportAfter {
+    /// Vertical scroll offset in CSS pixels after the action.
     pub scroll_y: i64,
+    /// True when the page cannot scroll further up.
     pub is_at_top: bool,
+    /// True when the page cannot scroll further down.
     pub is_at_bottom: bool,
 }
 
@@ -41,13 +44,16 @@ pub struct ViewportAfter {
 pub struct ScrollOutput {
     #[serde(flatten)]
     pub result: DocumentActionResult,
+    /// Actual pixels scrolled (may be less than requested near edges).
     pub scrolled: i64,
+    /// Whether the viewport is at the bottom after scrolling.
     pub is_at_bottom: bool,
     pub message: String,
+    /// Preferred post-scroll metrics field.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scroll_after: Option<ViewportAfter>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     /// Compatibility alias for `scroll_after`.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub viewport_after: Option<ViewportAfter>,
 }
 

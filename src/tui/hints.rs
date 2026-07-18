@@ -1,4 +1,8 @@
-//! Deterministic two-key link hints (Vimari-style).
+//! Deterministic two-key link hints (Vimari-style Hint mode).
+//!
+//! Assigns unique labels only to viewport-visible links, each bound to an exact
+//! `semantic_ref`. Matching fails closed on ambiguity; partial prefixes keep
+//! collecting keys until Exact or None.
 
 use crate::semantic::{SemanticComponent, SemanticRef};
 use crate::tui::content::ContentLine;

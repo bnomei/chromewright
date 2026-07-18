@@ -1,7 +1,11 @@
-//! Tool framework: registry, execution context, target resolution, and document envelopes.
+//! Tool framework: [`ToolRegistry`], [`ToolContext`], target resolution, and document
+//! envelopes.
 //!
-//! Every MCP tool implements `Tool`; outcomes pass through `ToolContext` so operation
-//! metrics and DOM cache invalidation stay consistent across mutations.
+//! Every MCP tool implements [`Tool`]. Outcomes pass through [`ToolContext`] so
+//! operation metrics attach consistently, the DOM cache invalidates after mutations,
+//! and recoverable browser errors normalize into structured [`ToolResult`] failures.
+//! Target resolution is exclusive (selector / index / node_ref / cursor) and
+//! revision-scoped; stale-cursor rebinding is read-only and policy-gated.
 
 use crate::browser::BrowserSession;
 use crate::browser::backend::{ATTACH_PAGE_TARGET_LOST_CODE, ATTACH_SESSION_PAGE_TARGET_LOSS_KIND};
@@ -36,16 +40,25 @@ pub(crate) const OPERATION_METRICS_METADATA_KEY: &str = "operation_metrics";
 /// Per-tool-call counters for browser evaluations, polls, DOM work, and output size.
 ///
 /// Attached to successful and structured-failure results via [`ToolContext::finish`] so agents
-/// can reason about cost without separate telemetry plumbing.
+/// can reason about cost without separate telemetry plumbing. Empty metrics are omitted from
+/// result metadata entirely.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub(crate) struct OperationMetrics {
+    /// In-page `evaluate` / command executions charged to this tool call.
     pub browser_evaluations: u64,
+    /// Wait / actionability poll loop ticks.
     pub poll_iterations: u64,
+    /// Full DOM extractions performed (usually via [`ToolContext::get_dom`]).
     pub dom_extractions: u64,
+    /// Wall time spent inside DOM extraction, in microseconds.
     pub dom_extraction_micros: u64,
+    /// Node count from the most recent DOM extraction.
     pub dom_nodes_last: usize,
+    /// Wall time spent rendering snapshot text/nodes, in microseconds.
     pub snapshot_render_micros: u64,
+    /// Post-mutation interaction handoff rebuilds (target continuity after actions).
     pub handoff_rebuilds: u64,
+    /// Wall time spent rebuilding interaction handoffs, in microseconds.
     pub handoff_rebuild_micros: u64,
     /// Exact serialized output size in bytes when the tool path measured it; omitted otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -72,7 +85,13 @@ pub(crate) fn duration_micros(duration: std::time::Duration) -> u64 {
 }
 
 /// Per-invocation state for one tool call: session access, DOM cache, and operation metrics.
+///
+/// Tools must call [`Self::invalidate_dom`] (or [`Self::refresh_dom`]) after any navigation,
+/// scroll/viewport change, tab switch, or DOM mutation that could stale the cached tree.
+/// Prefer recording metrics at the boundary that pays the cost so [`Self::finish`] and
+/// [`normalize_tool_outcome`] publish accurate operation metrics.
 pub struct ToolContext<'a> {
+    /// Live browser session for this invocation (launch- or attach-owned).
     pub session: &'a BrowserSession,
 
     /// Lazily extracted DOM tree; invalidated after page mutations.
@@ -106,6 +125,11 @@ impl<'a> ToolContext<'a> {
     }
 
     /// Return the cached DOM tree, extracting once from the session when missing.
+    ///
+    /// # Errors
+    ///
+    /// Propagates session DOM extraction failures. Records a browser evaluation and
+    /// DOM extraction metrics on a cache miss.
     pub fn get_dom(&mut self) -> Result<&DomTree> {
         if self.dom_tree.is_none() {
             let started = Instant::now();
@@ -119,41 +143,60 @@ impl<'a> ToolContext<'a> {
         Ok(self.dom_tree.as_ref().unwrap())
     }
 
-    /// Refresh and return the latest DOM tree after a document mutation.
+    /// Invalidate then re-extract so callers observe post-mutation document state.
+    ///
+    /// # Errors
+    ///
+    /// Propagates session DOM extraction failures.
     pub fn refresh_dom(&mut self) -> Result<&DomTree> {
         self.invalidate_dom();
         self.get_dom()
     }
 
+    /// Charge one browser evaluation (in-page script or command) to operation metrics.
     pub(crate) fn record_browser_evaluation(&mut self) {
         self.record_browser_evaluations(1);
     }
 
+    /// Charge `count` browser evaluations to operation metrics.
     pub(crate) fn record_browser_evaluations(&mut self, count: u64) {
         self.metrics.browser_evaluations += count;
     }
 
+    /// Charge one wait/actionability poll iteration to operation metrics.
     pub(crate) fn record_poll_iteration(&mut self) {
         self.record_poll_iterations(1);
     }
 
+    /// Charge `count` poll iterations to operation metrics.
     pub(crate) fn record_poll_iterations(&mut self, count: u64) {
         self.metrics.poll_iterations += count;
     }
 
+    /// Accumulate snapshot projection render time (microseconds).
     pub(crate) fn record_snapshot_render_micros(&mut self, micros: u64) {
         self.metrics.snapshot_render_micros += micros;
     }
 
+    /// Record one interaction handoff rebuild and its wall time (microseconds).
     pub(crate) fn record_handoff_rebuild_micros(&mut self, micros: u64) {
         self.metrics.handoff_rebuilds += 1;
         self.metrics.handoff_rebuild_micros += micros;
     }
 
+    /// Store the exact serialized output size when a tool path measured it.
+    ///
+    /// Overwrites any previous measurement for this invocation. Omitted from metadata
+    /// when never set.
     pub(crate) fn record_output_bytes(&mut self, byte_count: usize) {
         self.metrics.output_bytes = Some(byte_count);
     }
 
+    /// Attach non-empty operation metrics under [`OPERATION_METRICS_METADATA_KEY`].
+    ///
+    /// Does not mutate the session or DOM cache. Call at the end of a successful tool
+    /// path or structured soft failure; registry execution also applies this via
+    /// [`normalize_tool_outcome`].
     pub(crate) fn finish(&self, mut result: ToolResult) -> ToolResult {
         if !self.metrics.is_empty() {
             result.metadata.insert(
@@ -169,8 +212,11 @@ impl<'a> ToolContext<'a> {
 /// Controls which snapshot fields [`build_document_envelope`] materializes into a document envelope.
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct DocumentEnvelopeOptions {
+    /// Include rendered snapshot text (viewport / delta / full projection).
     pub include_snapshot: bool,
+    /// Include the structured node list paired with the snapshot text.
     pub include_nodes: bool,
+    /// Snapshot mode: viewport-biased, delta against the session cache, or full document.
     pub snapshot_mode: SnapshotMode,
 }
 
@@ -205,10 +251,15 @@ impl DocumentEnvelopeOptions {
     Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema, PartialEq, Eq,
 )]
 pub struct TabSummary {
+    /// Stable session tab id (not a DOM document revision).
     pub tab_id: String,
+    /// Zero-based position in the session's current tab list.
     pub index: usize,
+    /// Whether this tab is the session's focused/active tab.
     pub active: bool,
+    /// Last-known page title (may be empty for about:blank and similar).
     pub title: String,
+    /// Last-known page URL for the tab.
     pub url: String,
 }
 
@@ -228,12 +279,19 @@ impl TabSummary {
 /// Single resolved interaction target after exclusive selector / index / node_ref / cursor choice.
 ///
 /// `method` may encode a selector rebound recovery path (see [`encode_selector_rebound_method`]).
+/// Cursors and node refs are document-revision scoped; mutations must fail closed on stale
+/// handles unless a read-only rebind policy applies.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ResolvedTarget {
+    /// Resolution method (`css`, `index`, `node_ref`, `cursor`, or rebound-encoded form).
     pub method: String,
+    /// CSS selector used for browser commands and continuity probes.
     pub selector: String,
+    /// Actionable index when the target was resolved from index/cursor/node_ref.
     pub index: Option<usize>,
+    /// Revision-scoped node reference when available.
     pub node_ref: Option<NodeRef>,
+    /// Full cursor handle (index + role/name/selector + node_ref) when available.
     pub cursor: Option<Cursor>,
 }
 
@@ -287,12 +345,17 @@ fn default_target_resolution_status() -> String {
 }
 
 /// Which handle family triggered selector rebound recovery after a revision mismatch.
+///
+/// Surfaced on the public target envelope as `recovered_from` when resolution_status is
+/// `selector_rebound`. Only applies under [`StaleCursorPolicy::AllowRebind`] (read-only tools).
 #[derive(
     Debug, Clone, Copy, serde::Serialize, serde::Deserialize, schemars::JsonSchema, PartialEq, Eq,
 )]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum TargetRecoveredFrom {
+    /// Cursor-family handle that selector-rebound (or attempted rebound under AllowRebind).
     Cursor,
+    /// Node-ref-family handle involved in a stale failure (node_ref never selector-rebinds).
     NodeRef,
 }
 
@@ -597,6 +660,10 @@ pub(crate) fn structured_error_payload(
 }
 
 /// Soft tool failure carrying a structured error payload agents can branch on.
+///
+/// Returns `success = false` with a JSON `data` object (`code`, `error`, optional document/
+/// target/recovery/details). Prefer this over bare string failures when recovery guidance
+/// or fail-closed diagnostics matter.
 pub(crate) fn structured_tool_failure(
     code: impl Into<String>,
     error: impl Into<String>,
@@ -636,7 +703,9 @@ fn attach_session_degraded_failure(details: PageTargetLostDetails) -> ToolResult
 
 /// Map recoverable [`BrowserError`] variants into structured tool failures.
 ///
-/// Launch/connection/Chrome process failures remain hard errors for the session layer.
+/// Launch, connection, and Chrome-process failures remain hard `Err` values for the session
+/// layer. Everything else becomes a soft [`ToolResult`] with a stable `code` agents can branch
+/// on (timeouts, stale targets, resource limits, attach page-target loss, etc.).
 pub(crate) fn tool_result_from_browser_error(
     error: BrowserError,
 ) -> std::result::Result<ToolResult, BrowserError> {
@@ -734,6 +803,10 @@ pub(crate) fn tool_result_from_browser_error(
 }
 
 /// Attach operation metrics and convert recoverable browser errors into tool results.
+///
+/// Registry execution always routes through this path so metrics and error shaping stay
+/// consistent even when tools return early with `Err`. Hard session failures (launch /
+/// connection / Chrome process) still propagate as `Err`.
 pub(crate) fn normalize_tool_outcome(
     outcome: Result<ToolResult>,
     context: &ToolContext<'_>,
@@ -755,7 +828,13 @@ fn live_viewport_metrics(context: &mut ToolContext<'_>) -> Result<ViewportMetric
 /// Assemble a document envelope: live metadata, optional target, and optional snapshot projection.
 ///
 /// When snapshot fields are requested, runs viewport / delta / full projection, enforces the
-/// snapshot byte budget, and may refresh the session snapshot cache for later delta baselines.
+/// snapshot byte budget, records output-byte and render metrics, and may refresh the session
+/// snapshot cache for later delta baselines. Minimal options skip DOM extraction and only
+/// fetch document metadata.
+///
+/// # Errors
+///
+/// Propagates DOM extraction, viewport metrics, cache, and snapshot byte-budget failures.
 pub(crate) fn build_document_envelope(
     context: &mut ToolContext,
     target: Option<&ResolvedTarget>,
@@ -849,33 +928,47 @@ pub(crate) fn build_document_envelope(
 }
 
 /// Typed MCP tool contract: name, schemas, safety hints, and synchronous execution.
+///
+/// Implementors own validation, confirm gates (`confirm_unsafe` / `confirm_destructive`),
+/// cache invalidation, and result shaping for one tool name. Prefer returning structured
+/// soft failures for agent-recoverable cases; leave session-fatal errors as `Err`.
 pub trait Tool: Send + Sync + Default {
-    /// Associated parameter type for this tool
+    /// Deserialized input contract (JSON Schema is generated for MCP clients).
     type Params: serde::Serialize + for<'de> serde::Deserialize<'de> + schemars::JsonSchema;
 
-    /// Associated success output type for this tool
+    /// Success payload type used for the tool's output schema.
     type Output: serde::Serialize + schemars::JsonSchema + 'static;
 
-    /// Get tool name
+    /// Stable MCP tool name (registry key).
     fn name(&self) -> &str;
 
-    /// Get tool description for registry and MCP surfaces.
+    /// Human-readable description shown on registry and MCP surfaces.
     fn description(&self) -> &str;
 
-    /// Get tool parameter schema (JSON Schema)
+    /// JSON Schema for parameters; must stay MCP-client compatible (no top-level oneOf/anyOf/allOf/enum/not).
     fn parameters_schema(&self) -> Value {
         serde_json::to_value(schemars::schema_for!(Self::Params)).unwrap_or_default()
     }
 
-    /// Get tool success output schema (JSON Schema)
+    /// JSON Schema for the success output payload.
     fn output_schema(&self) -> Value {
         serde_json::to_value(schemars::schema_for!(Self::Output)).unwrap_or_default()
     }
 
-    /// Execute the tool with strongly-typed parameters
+    /// Run the tool with typed parameters against the per-call [`ToolContext`].
+    ///
+    /// # Errors
+    ///
+    /// Hard browser/session failures. Prefer structured [`ToolResult`] soft failures for
+    /// validation, stale targets, and other agent-recoverable conditions.
     fn execute_typed(&self, params: Self::Params, context: &mut ToolContext) -> Result<ToolResult>;
 
-    /// Execute the tool with JSON parameters (default implementation)
+    /// Deserialize JSON parameters then delegate to [`Self::execute_typed`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrowserError::InvalidArgument`] when JSON does not match `Params`, or
+    /// propagates errors from [`Self::execute_typed`].
     fn execute(&self, params: Value, context: &mut ToolContext) -> Result<ToolResult> {
         let typed_params: Self::Params = serde_json::from_value(params).map_err(|e| {
             crate::error::BrowserError::InvalidArgument(format!("Invalid parameters: {}", e))
@@ -884,12 +977,17 @@ pub trait Tool: Send + Sync + Default {
     }
 }
 
-/// Type-erased tool trait for dynamic dispatch
+/// Type-erased tool trait for dynamic dispatch through [`ToolRegistry`].
 pub trait DynTool: Send + Sync {
+    /// Stable MCP tool name (registry key).
     fn name(&self) -> &str;
+    /// Human-readable description for MCP listing.
     fn description(&self) -> &str;
+    /// JSON Schema for tool parameters.
     fn parameters_schema(&self) -> Value;
+    /// JSON Schema for the success output payload.
     fn output_schema(&self) -> Value;
+    /// Execute with JSON parameters; registry wraps the outcome in [`normalize_tool_outcome`].
     fn execute(&self, params: Value, context: &mut ToolContext) -> Result<ToolResult>;
 }
 
@@ -919,10 +1017,15 @@ impl<T: Tool> DynTool for T {
 /// Registry entry describing one MCP tool: schemas plus safety annotation hints.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolDescriptor {
+    /// Stable MCP tool name.
     pub name: String,
+    /// Human-readable description for clients.
     pub description: String,
+    /// JSON Schema for parameters.
     pub parameters_schema: Value,
+    /// JSON Schema for the success output payload.
     pub output_schema: Value,
+    /// MCP safety annotation hints (not runtime enforcement).
     pub annotations: ToolSafetyAnnotations,
 }
 
@@ -933,9 +1036,13 @@ pub struct ToolDescriptor {
 /// need them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ToolSafetyAnnotations {
+    /// Tool is expected not to mutate page or session state.
     pub read_only_hint: bool,
+    /// Tool may destroy tabs, evaluate arbitrary JS, or otherwise be high-impact.
     pub destructive_hint: bool,
+    /// Repeated calls with the same inputs are expected to be safe/idempotent.
     pub idempotent_hint: bool,
+    /// Tool may interact with the open web / external content.
     pub open_world_hint: bool,
 }
 
@@ -984,33 +1091,41 @@ fn tool_safety_annotations(name: &str) -> ToolSafetyAnnotations {
 }
 
 /// Name-indexed collection of registered tools with default and operator subsets.
+///
+/// Default registries exclude operator tools (`evaluate`) and companion-only TUI tools.
+/// Execution always normalizes outcomes (operation metrics + recoverable error shaping).
 pub struct ToolRegistry {
     tools: HashMap<String, Arc<dyn DynTool>>,
 }
 
 impl ToolRegistry {
-    /// Create a new empty tool registry
+    /// Empty registry; callers must register tools before execute.
     pub fn new() -> Self {
         Self {
             tools: HashMap::new(),
         }
     }
 
-    /// Create a registry with the default high-level agent tools.
+    /// Default high-level agent tools (navigation, interaction, reading, tabs).
+    ///
+    /// Excludes operator tools such as `evaluate` and companion-only TUI tools.
     pub fn with_defaults() -> Self {
         let mut registry = Self::new();
         registry.register_default_tools();
         registry
     }
 
-    /// Create a registry with the normal production tool surface, including operator tools.
+    /// Production tool surface including operator tools (`evaluate`).
+    ///
+    /// Still excludes companion-only TUI tools, which register only with co-hosted
+    /// [`crate::tui::SharedTuiState`].
     pub fn with_all_tools() -> Self {
         let mut registry = Self::with_defaults();
         registry.register_operator_tools();
         registry
     }
 
-    /// Register the default high-level agent tool surface.
+    /// Install the default high-level agent tool surface (no operator tools).
     pub fn register_default_tools(&mut self) {
         // Register navigation tools
         self.register(navigate::NavigateTool);
@@ -1051,35 +1166,35 @@ impl ToolRegistry {
         self.register(evaluate::EvaluateTool);
     }
 
-    /// Register a tool
+    /// Insert or replace a typed tool under its [`Tool::name`].
     pub fn register<T: Tool + 'static>(&mut self, tool: T) {
         let name = tool.name().to_string();
         self.tools.insert(name, Arc::new(tool));
     }
 
-    /// Get a tool by name
+    /// Borrow a registered tool by MCP name, if present.
     pub fn get(&self, name: &str) -> Option<&Arc<dyn DynTool>> {
         self.tools.get(name)
     }
 
-    /// Check if a tool exists
+    /// Whether `name` is registered.
     pub fn has(&self, name: &str) -> bool {
         self.tools.contains_key(name)
     }
 
-    /// List all tool names
+    /// Sorted list of registered MCP tool names.
     pub fn list_names(&self) -> Vec<String> {
         let mut names: Vec<_> = self.tools.keys().cloned().collect();
         names.sort();
         names
     }
 
-    /// Get all tools
+    /// Cloned handles to every registered tool (order is not stable).
     pub fn all_tools(&self) -> Vec<Arc<dyn DynTool>> {
         self.tools.values().cloned().collect()
     }
 
-    /// List registry tool descriptors in a stable order.
+    /// MCP descriptors (schemas + safety annotations) sorted by tool name.
     pub fn descriptors(&self) -> Vec<ToolDescriptor> {
         let mut descriptors: Vec<_> = self
             .tools
@@ -1096,7 +1211,13 @@ impl ToolRegistry {
         descriptors
     }
 
-    /// Execute a tool by name
+    /// Dispatch `name` with JSON params, then normalize metrics and recoverable errors.
+    ///
+    /// Unknown tool names yield a soft failure result rather than `Err`.
+    ///
+    /// # Errors
+    ///
+    /// Session-fatal browser errors that [`normalize_tool_outcome`] does not soften.
     pub fn execute(
         &self,
         name: &str,
@@ -1111,7 +1232,7 @@ impl ToolRegistry {
         normalize_tool_outcome(outcome, context)
     }
 
-    /// Get the number of registered tools
+    /// Number of registered tools.
     pub fn count(&self) -> usize {
         self.tools.len()
     }

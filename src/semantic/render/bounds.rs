@@ -15,9 +15,13 @@ pub const TRUNCATION_MARKER: &str = "\n\n…[truncated]\n";
 /// JSON projections never truncate: over-budget payloads fail as [`RenderError::OutputLimit`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RenderedOutput {
+    /// Projection body (Markdown, JSON text, or line-oriented view).
     pub content: String,
+    /// True when a text projection clipped at the character budget (JSON never truncates).
     pub truncated: bool,
+    /// Source document id for consumers correlating resources and captures.
     pub document_id: String,
+    /// Source document revision for fail-closed ref and retention checks.
     pub revision: String,
 }
 

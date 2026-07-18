@@ -1,8 +1,13 @@
 //! Terminal browser (`chromewright tui`): lifecycle, keymap, and semantic navigation.
 //!
-//! Compiled only with the default-enabled, optional `tui` feature. Shares one `BrowserSession` and one
-//! semantic document with its Phase 5 loopback MCP companion, `tui_*` tools,
-//! and bounded revisioned resources. Standard stdio MCP remains separate.
+//! Compiled only with the default-enabled, optional `tui` feature. Shares one
+//! [`BrowserSession`](crate::browser::BrowserSession) and one SemanticDocument
+//! with its loopback MCP Companion, `tui_*` tools, and bounded revisioned
+//! resources via [`SharedTuiState`]. Standard stdio MCP remains separate.
+//!
+//! Layers: app event loop, controller lifecycle, dispatch/keymap
+//! (KeyChord → Action), content lines, and managed_headless
+//! BrowserSessionPolicy for `--headless tui`.
 
 mod action;
 mod app;

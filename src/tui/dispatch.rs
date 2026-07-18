@@ -1,4 +1,8 @@
-//! Key event → action dispatch with Normal / Input / Hint mode boundaries.
+//! Key event → Action dispatch with Normal / Input / Hint mode boundaries.
+//!
+//! Never hard-codes physical keys for Normal-mode commands: chords resolve
+//! through [`TuiKeymap`] / [`KeyResolver`]. Loading ignores normal commands;
+//! Input and Hint modes only honor a narrow set of named Actions plus text entry.
 
 use crate::tui::action::Action;
 use crate::tui::clipboard::{ClipboardResult, copy_status, copy_text};
@@ -30,6 +34,7 @@ pub struct Dispatcher {
 }
 
 impl Dispatcher {
+    /// Create a dispatcher with an empty multi-key resolver and the given keymap.
     pub fn new(keymap: TuiKeymap) -> Self {
         Self {
             keymap,
@@ -37,8 +42,13 @@ impl Dispatcher {
         }
     }
 
+    /// Route one chord under the current interaction mode and lifecycle gates.
+    ///
+    /// Loading suppresses Normal commands so page actions cannot race an in-flight
+    /// capture; Input/Hint honor only their narrow action sets.
     pub fn handle_key(&mut self, controller: &mut Controller, chord: KeyChord) -> DispatchOutcome {
-        // Loading: ignore normal commands (Escape still clears error after load fails).
+        // Loading: ignore normal commands. Escape after a failed load dismisses
+        // Error once lifecycle is no longer Loading (handled in Normal mode).
         if controller.state.lifecycle.is_loading() {
             return DispatchOutcome::Continue;
         }
@@ -73,7 +83,8 @@ impl Dispatcher {
     }
 
     fn handle_normal(&mut self, controller: &mut Controller, chord: KeyChord) -> DispatchOutcome {
-        // Escape clears error / inspect even without action map.
+        // Escape dismisses Error → Ready and clears inspect/hint overlays even
+        // when the action map is not consulted (hard-coded Esc path).
         if chord.code == KeyCode::Esc {
             self.resolver.clear();
             controller.escape();
@@ -261,6 +272,10 @@ impl Dispatcher {
                 controller.toggle_collapse();
                 DispatchOutcome::Redraw
             }
+            Action::ToggleWrap => {
+                controller.toggle_wrap();
+                DispatchOutcome::Redraw
+            }
             Action::Inspect => {
                 controller.inspect_selection();
                 DispatchOutcome::Redraw
@@ -359,7 +374,10 @@ fn apply_clipboard(controller: &mut Controller, result: ClipboardResult, kind: &
     controller.state.view.set_status(copy_status(&result, kind));
 }
 
-/// Convert crossterm key event into our KeyChord (feature-gated callers).
+/// Normalize a crossterm key event into a KeyChord for Keymap resolution.
+///
+/// Strips redundant Shift from uppercase chars and BackTab so bindings match
+/// the TOML parser and default Vimari sequences.
 pub fn chord_from_crossterm(
     code: crossterm::event::KeyCode,
     modifiers: crossterm::event::KeyModifiers,
@@ -565,10 +583,12 @@ mod tests {
     }
 
     #[test]
-    fn escape_clears_pending_prefix_and_does_not_promote_error() {
+    fn escape_dismisses_error_and_clears_pending_prefix() {
         let mut ctl = Controller::new();
         ctl.state.publish_page(empty_doc());
-        ctl.state.enter_error("reload", "nope");
+        ctl.state.enter_error("history_back", "settle timeout");
+        ctl.shared
+            .fail_page_action("history_back", "settle timeout");
         let mut dispatcher = Dispatcher::new(TuiKeymap::defaults());
         dispatcher.handle_key(&mut ctl, KeySequence::chars("g").0[0].clone());
         dispatcher.handle_key(
@@ -578,15 +598,24 @@ mod tests {
                 modifiers: KeyModifiers::NONE,
             },
         );
-        assert!(matches!(
-            ctl.state.lifecycle,
-            crate::tui::state::Lifecycle::Error { .. }
-        ));
+        assert!(ctl.state.lifecycle.is_ready());
+        assert!(ctl.shared.lifecycle().is_ready());
+        assert!(ctl.state.allows_normal_commands());
+        assert_eq!(
+            ctl.state.view.status_message.as_deref(),
+            Some("dismissed: settle timeout")
+        );
         assert!(dispatcher.resolver.pending().is_empty());
+        // After dismiss, normal page actions are available again.
+        assert_eq!(
+            dispatcher.dispatch_action(&mut ctl, Action::HistoryBack),
+            DispatchOutcome::Redraw
+        );
+        assert!(ctl.has_pending_page_action());
     }
 
     #[test]
-    fn error_state_blocks_confirm_and_other_semantic_actions() {
+    fn error_state_blocks_confirm_until_escape_dismisses() {
         let mut ctl = Controller::new();
         ctl.state.publish_page(empty_doc());
         ctl.state.enter_error("reload", "nope");
@@ -597,6 +626,18 @@ mod tests {
             DispatchOutcome::Continue
         );
         assert!(!ctl.has_pending_page_action());
+
+        assert_eq!(
+            dispatcher.handle_key(
+                &mut ctl,
+                KeyChord {
+                    code: KeyCode::Esc,
+                    modifiers: KeyModifiers::NONE,
+                }
+            ),
+            DispatchOutcome::Redraw
+        );
+        assert!(ctl.state.lifecycle.is_ready());
     }
 
     #[test]

@@ -76,6 +76,7 @@ pub(crate) struct MarkdownCacheEntry {
 }
 
 impl MarkdownCacheEntry {
+    /// Build a revision-keyed entry and precompute pagination checkpoints for char-offset slices.
     pub(crate) fn new(metadata: MarkdownCacheMetadata, full_markdown: Arc<str>) -> Self {
         Self {
             document_id: metadata.document_id,
@@ -90,10 +91,12 @@ impl MarkdownCacheEntry {
         }
     }
 
+    /// Total Unicode scalar count of the cached markdown body.
     pub(crate) fn pagination_total_chars(&self) -> usize {
         self.pagination.total_chars
     }
 
+    /// Nearest pagination checkpoint at or before `char_offset` as `(char_offset, byte_offset)`.
     pub(crate) fn pagination_checkpoint(&self, char_offset: usize) -> (usize, usize) {
         let checkpoint_index = (char_offset / self.pagination.checkpoint_interval).min(
             self.pagination
@@ -221,6 +224,7 @@ fn create_screenshot_artifact_file(path: &Path, bytes: &[u8]) -> Result<()> {
 }
 
 impl BrowserSession {
+    /// Look up the Markdown cache hit for `document` (requires matching id, revision, and URL).
     pub(crate) fn markdown_cache_entry(
         &self,
         document: &crate::dom::DocumentMetadata,
@@ -233,6 +237,7 @@ impl BrowserSession {
                 reason: format!("Failed to read markdown cache: {}", e),
             })?;
 
+        // URL is part of the key so SPA pushState without a revision bump still misses.
         Ok(guard.as_ref().and_then(|entry| {
             (entry.document_id == document.document_id
                 && entry.revision == document.revision
@@ -241,6 +246,7 @@ impl BrowserSession {
         }))
     }
 
+    /// Replace the single Markdown cache slot with a freshly extracted entry.
     pub(crate) fn store_markdown_cache(&self, entry: Arc<MarkdownCacheEntry>) -> Result<()> {
         *self
             .markdown_cache
@@ -252,6 +258,10 @@ impl BrowserSession {
         Ok(())
     }
 
+    /// Look up the Snapshot cache base for delta reads, keyed primarily by document identity.
+    ///
+    /// Same `document_id` reuses a prior revision as the delta base; a different document identity
+    /// evicts the entry on read so stale cross-document bases cannot leak.
     pub(crate) fn snapshot_cache_entry(
         &self,
         document: &DocumentMetadata,
@@ -276,6 +286,7 @@ impl BrowserSession {
         Ok(None)
     }
 
+    /// Store a revision-scoped Snapshot cache base for later delta comparison.
     pub(crate) fn store_snapshot_cache(&self, entry: Arc<SnapshotCacheEntry>) -> Result<()> {
         *self
             .snapshot_cache
@@ -287,6 +298,7 @@ impl BrowserSession {
         Ok(())
     }
 
+    /// Drop the Snapshot cache after navigation, scroll, tab change, viewport, or DOM mutation.
     pub(crate) fn invalidate_snapshot_cache(&self) -> Result<()> {
         *self
             .snapshot_cache
@@ -298,6 +310,10 @@ impl BrowserSession {
         Ok(())
     }
 
+    /// Persist a capture under the private session root and retain it in the artifact ring buffer.
+    ///
+    /// Enforces the PNG byte cap before write; oldest artifacts are pruned when the ring is full.
+    /// Callers never choose output paths—storage is always session-managed.
     pub(crate) fn store_screenshot_artifact(
         &self,
         capture: ScreenshotCapture,
@@ -350,6 +366,7 @@ impl BrowserSession {
         Ok(artifact)
     }
 
+    /// Remove all retained screenshot files and clear the in-memory artifact ring.
     pub(crate) fn clear_screenshot_artifacts(&self) -> Result<()> {
         let drained = {
             let mut guard = self.screenshot_artifacts.lock().map_err(|e| {

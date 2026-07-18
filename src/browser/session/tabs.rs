@@ -7,6 +7,10 @@ use crate::error::PageTargetLostDetails;
 use crate::error::{BrowserError, Result};
 
 impl BrowserSession {
+    /// List backend tabs as [`TabInfo`], resolving the active flag without failing attach-degraded sessions.
+    ///
+    /// When the active page target is lost in attach mode, tabs remain listable with `active: false`
+    /// so callers can reacquire via `switch_tab` / activate.
     pub(crate) fn tab_overview(&self) -> Result<Vec<TabInfo>> {
         let tabs = self.backend.list_tabs()?;
         let active_id = match self.backend.active_tab() {
@@ -33,11 +37,13 @@ impl BrowserSession {
             .collect())
     }
 
+    /// Activate a tab by stable `tab_id` and invalidate Snapshot cache.
     pub(crate) fn activate_tab_by_id(&self, tab_id: &str) -> Result<()> {
         self.backend.activate_tab(tab_id)?;
         self.invalidate_snapshot_cache()
     }
 
+    /// Open a tab, record it as a managed tab, invalidate caches, and return the backend descriptor.
     pub(crate) fn open_tab_entry(&self, url: &str) -> Result<TabDescriptor> {
         let tab = self.backend.open_tab(url)?;
         self.remember_managed_tab(tab.id.clone())?;
@@ -45,6 +51,7 @@ impl BrowserSession {
         Ok(tab)
     }
 
+    /// Close the active tab (with unload), drop managed ownership, and report the new active tab.
     pub(crate) fn close_active_tab_summary(&self) -> Result<ClosedTabSummary> {
         let tabs = self.backend.list_tabs()?;
         let active = self.backend.active_tab()?;
@@ -64,6 +71,10 @@ impl BrowserSession {
         })
     }
 
+    /// Close only session-owned managed tabs, leaving pre-existing attach-mode tabs open.
+    ///
+    /// Non-managed tabs are counted as `skipped_tabs`. Cache invalidation runs only when at least
+    /// one managed tab was actually closed.
     pub(crate) fn close_managed_tabs(&self) -> Result<ManagedTabsCloseSummary> {
         let tabs = self.tab_overview()?;
         let mut managed_tabs = Vec::new();

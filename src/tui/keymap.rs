@@ -1,4 +1,8 @@
 //! Deterministic Vimari-compatible key bindings with TOML overlay support.
+//!
+//! Maps KeyChord sequences to named [`Action`] values. The event loop must
+//! never hard-code keys; all Normal-mode bindings go through [`TuiKeymap`] and
+//! the multi-key [`KeyResolver`]. Unknown/conflicting overlays fail startup.
 
 use crate::tui::action::Action;
 use std::collections::HashMap;
@@ -59,7 +63,7 @@ impl KeyModifiers {
     };
 }
 
-/// Ordered sequence of chords bound to one action (e.g. `gg`, `gi`).
+/// Ordered sequence of chords bound to one Action (e.g. `gg`, `gi`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct KeySequence(pub Vec<KeyChord>);
 
@@ -75,6 +79,7 @@ impl KeySequence {
         Self(vec![KeyChord { code, modifiers }])
     }
 
+    /// One chord per character (no modifiers); used for multi-key letter sequences.
     pub fn chars(chars: &str) -> Self {
         Self(
             chars
@@ -87,6 +92,10 @@ impl KeySequence {
         )
     }
 
+    /// Parse a TOML binding string (`gg`, `ctrl-c`, `shift-tab`, …).
+    ///
+    /// # Errors
+    /// Returns [`KeymapError`] for empty, unknown, or ambiguous specs.
     pub fn parse(spec: &str) -> Result<Self, KeymapError> {
         let trimmed = spec.trim();
         if trimmed.is_empty() {
@@ -224,6 +233,8 @@ impl TuiKeymap {
             Action::Collapse,
             KeySequence::single(KeyCode::Char(' ')),
         );
+        // Vim-style z-prefix view command: toggle soft wrap (off by default).
+        insert(&mut map, Action::ToggleWrap, KeySequence::chars("zw"));
         insert(&mut map, Action::Inspect, KeySequence::chars("i"));
         insert(&mut map, Action::CopyBlock, KeySequence::chars("y"));
         insert(&mut map, Action::CopyRef, KeySequence::chars("Y"));
@@ -264,7 +275,10 @@ impl TuiKeymap {
         })
     }
 
-    /// Overlay action bindings from a TOML table of `action = "binding"`.
+    /// Overlay Action bindings from a TOML table of `action = "binding"`.
+    ///
+    /// Only listed actions are replaced; unknown action names or conflicting
+    /// sequences fail closed rather than partially applying the overlay.
     pub fn overlay_from_map(
         &self,
         overrides: &HashMap<String, String>,
@@ -445,6 +459,10 @@ mod tests {
         assert_eq!(
             km.resolve_sequence(&KeySequence::chars("gi")),
             Some(Action::FocusFirstInput)
+        );
+        assert_eq!(
+            km.resolve_sequence(&KeySequence::chars("zw")),
+            Some(Action::ToggleWrap)
         );
         assert_eq!(
             km.resolve_sequence(&KeySequence::chars("o")),

@@ -2,6 +2,8 @@
 //!
 //! Production uses [`SessionPageDriver`] over a shared [`BrowserSession`].
 //! Tests inject [`FakePageDriver`] for lifecycle atomicity without Chrome.
+//! Activations always resolve an exact current-document `semantic_ref` and
+//! fail closed on stale document identity or ambiguous locators.
 
 use crate::browser::BrowserSession;
 use crate::dom::DocumentMetadata;
@@ -11,26 +13,36 @@ use crate::tools::utils::validate_navigation_url;
 use std::time::Duration;
 
 /// Page-mutating and capture operations the controller needs.
+///
+/// Implementations must not invent local history or rebind stale refs. Settle
+/// uses document readiness rather than requiring a navigation event, because
+/// form focus/fill may not navigate.
 pub trait PageDriver {
     fn navigate(&mut self, url: &str) -> Result<()>;
     fn go_back(&mut self) -> Result<()>;
     fn go_forward(&mut self) -> Result<()>;
     fn reload(&mut self) -> Result<()>;
+    /// Wait until the active document is ready after a mutation.
     fn wait_settle(&mut self) -> Result<()>;
+    /// Capture a complete SemanticDocument for atomic publish.
     fn capture_semantic(&mut self) -> Result<SemanticDocument>;
+    /// Freshness barrier metadata; must match the just-captured document.
     fn document_metadata(&mut self) -> Result<DocumentMetadata>;
     fn open_tab(&mut self, url: &str) -> Result<()>;
     fn close_active_tab(&mut self) -> Result<()>;
     fn next_tab(&mut self) -> Result<()>;
     fn prev_tab(&mut self) -> Result<()>;
-    /// Activate a link or control identified by an exact current-document semantic_ref.
+    /// Activate a link or control identified by an exact current-document `semantic_ref`.
+    ///
+    /// Returns whether the action is expected to change the page (true for
+    /// links/buttons; false when only focusing a form control).
     fn activate_ref(
         &mut self,
         document: &SemanticDocument,
         semantic_ref: &SemanticRef,
         new_tab: bool,
     ) -> Result<bool>;
-    /// Submit text into an input/textarea/select by exact semantic_ref.
+    /// Submit text into an input/textarea/select by exact `semantic_ref`.
     fn fill_control(
         &mut self,
         document: &SemanticDocument,
@@ -409,7 +421,10 @@ fn resolved_link_target(
         .ok_or_else(|| BrowserError::InvalidArgument("target link not found in page".into()))
 }
 
-/// Scripted fake driver for unit tests.
+/// Scripted fake driver for unit tests of lifecycle atomicity without Chrome.
+///
+/// Pages advance on navigation/history/reload; failures and metadata handoffs
+/// are injectable so tests can assert Loading → Ready | Error without a browser.
 #[derive(Debug, Default)]
 pub struct FakePageDriver {
     pub pages: Vec<SemanticDocument>,

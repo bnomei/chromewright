@@ -15,26 +15,25 @@ pub(crate) const CHROME_BROWSER_IDLE_TIMEOUT: Duration = Duration::from_secs(60 
 /// Launch-mode browser process settings: headless, profile, window size, and DevTools port.
 #[derive(Debug, Clone)]
 pub struct LaunchOptions {
-    /// Whether to run browser in headless mode (default: true)
+    /// Run Chrome headless (default: `true`).
     pub headless: bool,
 
-    /// Custom Chrome/Chromium binary path
+    /// Override auto-detected Chrome/Chromium binary path.
     pub chrome_path: Option<PathBuf>,
 
-    /// Browser window width (default: 1280)
+    /// Initial window width in CSS pixels (default: 1280).
     pub window_width: u32,
 
-    /// Browser window height (default: 720)
+    /// Initial window height in CSS pixels (default: 720).
     pub window_height: u32,
 
-    /// User data directory for browser profile
+    /// Optional persistent profile directory; when unset Chrome uses a temporary profile.
     pub user_data_dir: Option<PathBuf>,
 
-    /// DevTools debugging port for the launched browser.
-    /// If not provided, the library chooses an available local port.
+    /// Pin the DevTools debug port; when unset a port is chosen from the launch range.
     pub debug_port: Option<u16>,
 
-    /// Enable sandbox mode (default: true)
+    /// Keep the Chrome sandbox enabled (default: `true`; disable only for constrained hosts).
     pub sandbox: bool,
 }
 
@@ -53,43 +52,43 @@ impl Default for LaunchOptions {
 }
 
 impl LaunchOptions {
-    /// Create new LaunchOptions with default values
+    /// Defaults suitable for local launch-mode sessions (headless, sandboxed, 1280×720).
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Builder method: set headless mode
+    /// Set headless mode (fluent builder).
     pub fn headless(mut self, headless: bool) -> Self {
         self.headless = headless;
         self
     }
 
-    /// Builder method: set Chrome binary path
+    /// Set a custom Chrome/Chromium binary path (fluent builder).
     pub fn chrome_path(mut self, path: PathBuf) -> Self {
         self.chrome_path = Some(path);
         self
     }
 
-    /// Builder method: set window dimensions
+    /// Set initial window width and height in CSS pixels (fluent builder).
     pub fn window_size(mut self, width: u32, height: u32) -> Self {
         self.window_width = width;
         self.window_height = height;
         self
     }
 
-    /// Builder method: set user data directory
+    /// Set a persistent user-data/profile directory (fluent builder).
     pub fn user_data_dir(mut self, dir: PathBuf) -> Self {
         self.user_data_dir = Some(dir);
         self
     }
 
-    /// Builder method: set DevTools debugging port
+    /// Pin the DevTools debug port instead of auto-allocating (fluent builder).
     pub fn debug_port(mut self, port: u16) -> Self {
         self.debug_port = Some(port);
         self
     }
 
-    /// Builder method: enable/disable sandbox
+    /// Enable or disable the Chrome process sandbox (fluent builder).
     pub fn sandbox(mut self, sandbox: bool) -> Self {
         self.sandbox = sandbox;
         self

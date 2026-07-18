@@ -65,6 +65,7 @@ struct FakeState {
 }
 
 impl FakeSessionBackend {
+    /// Single `about:blank` tab as the active page target; revision starts at `1`.
     pub(crate) fn new() -> Self {
         Self::with_close_failures(std::iter::empty::<String>())
     }
@@ -79,6 +80,7 @@ impl FakeSessionBackend {
         backend
     }
 
+    /// Tabs exist but no active tab is selected (attach-degraded inventory scenarios).
     pub(crate) fn with_no_active_tab() -> Self {
         let backend = Self::new();
         backend
@@ -89,6 +91,7 @@ impl FakeSessionBackend {
         backend
     }
 
+    /// Empty tab list with no active target (session-close and inventory edge cases).
     pub(crate) fn with_no_tabs() -> Self {
         let backend = Self::new();
         let mut state = backend
@@ -101,6 +104,7 @@ impl FakeSessionBackend {
         backend
     }
 
+    /// One non-blank tab at `url` with no active selection (reacquire / activate tests).
     pub(crate) fn with_nonblank_tab_without_active(url: &str) -> Self {
         let backend = Self::new();
         let mut state = backend
@@ -118,6 +122,7 @@ impl FakeSessionBackend {
         backend
     }
 
+    /// Script close failures for matching tab URLs; base fixture for other constructors.
     pub(crate) fn with_close_failures<I, S>(close_failure_urls: I) -> Self
     where
         I: IntoIterator<Item = S>,

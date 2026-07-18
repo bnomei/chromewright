@@ -161,6 +161,7 @@ pub(crate) enum BrowserCommand {
 }
 
 impl BrowserCommand {
+    /// Stable capability id used in metrics and [`BrowserError::BackendUnsupported`] payloads.
     pub(crate) fn capability(&self) -> &'static str {
         match self {
             Self::ActionabilityProbe(_) => "actionability_probe",
@@ -169,6 +170,7 @@ impl BrowserCommand {
         }
     }
 
+    /// Stable operation id for this command (mirrors capability for probes; interaction name for mutations).
     pub(crate) fn operation(&self) -> &'static str {
         match self {
             Self::ActionabilityProbe(_) => "actionability_probe",
@@ -177,6 +179,9 @@ impl BrowserCommand {
         }
     }
 
+    /// True for read-only probes; false for interactions that may mutate the page.
+    ///
+    /// Non-idempotent commands must not be auto-replayed during connection recovery.
     pub(crate) fn is_idempotent(&self) -> bool {
         match self {
             Self::ActionabilityProbe(_) | Self::SelectorIdentityProbe(_) => true,
@@ -184,6 +189,7 @@ impl BrowserCommand {
         }
     }
 
+    /// Render the in-page JavaScript by injecting JSON config into the compiled browser-kernel template.
     pub(crate) fn render_script(&self) -> String {
         match self {
             Self::ActionabilityProbe(request) => {
@@ -268,6 +274,7 @@ pub(crate) enum ActionabilityPredicate {
 }
 
 impl ActionabilityPredicate {
+    /// Wire key embedded in the probe config JSON consumed by the in-page script.
     pub(crate) const fn key(self) -> &'static str {
         match self {
             ActionabilityPredicate::Present => "present",
@@ -323,6 +330,7 @@ pub(crate) struct ActionabilityElementSummary {
 }
 
 impl ActionabilityProbeResult {
+    /// Read one predicate outcome; `None` when that predicate was not requested by the probe.
     pub(crate) fn predicate(&self, predicate: ActionabilityPredicate) -> Option<bool> {
         match predicate {
             ActionabilityPredicate::Present => Some(self.present),

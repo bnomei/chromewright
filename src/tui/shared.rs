@@ -29,19 +29,33 @@ pub const MAX_ATTENTION_MESSAGE_CHARS: usize = 512;
 /// report stale `semantic_ref` targets without falling through to the active page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CoordinationError {
+    /// No SemanticDocument has been published yet.
     NoDocument,
+    /// Document id empty or contains path-breaking characters.
     MalformedDocumentId,
+    /// Revision token empty or contains path-breaking characters.
     MalformedRevision,
+    /// Requested revision is not active and not in retention.
     RevisionUnavailable,
+    /// `semantic_ref` or lookup targets a different document_id than expected.
     WrongDocument,
+    /// Revision left the retention window and must not fall through to active.
     EvictedRevision,
+    /// Reference revision no longer matches the retained/active capture.
     StaleReference,
+    /// Opaque `semantic_ref` failed structural decode.
     MalformedReference,
+    /// Reference is well-formed but unknown in the addressed document.
     UnknownReference,
+    /// Attention message exceeds [`MAX_ATTENTION_MESSAGE_CHARS`].
     MessageTooLong,
+    /// Companion mutation requires an active TUI runtime / bound session.
     RuntimeRequired,
+    /// Another page action already holds the Loading lifecycle lock.
     ActionInProgress,
+    /// A companion refresh is already in flight.
     RefreshInProgress,
+    /// Browser refresh or semantic recapture failed after Loading was claimed.
     RefreshFailed,
 }
 
@@ -271,9 +285,12 @@ impl SharedTuiState {
         self.runtime_active.store(false, Ordering::Release);
     }
 
+    /// Whether companion tools may mutate coordination state (set by the interactive TUI host).
     pub fn runtime_active(&self) -> bool {
         self.runtime_active.load(Ordering::Acquire)
     }
+
+    /// Shared Loading → Ready | Error lifecycle visible to both terminal and companion.
     pub fn lifecycle(&self) -> Lifecycle {
         self.inner.lock().unwrap().lifecycle.clone()
     }
@@ -300,6 +317,19 @@ impl SharedTuiState {
             action: action.into(),
             message: message.into(),
         };
+    }
+
+    /// Dismiss a shared Error lifecycle back to Ready without changing the
+    /// retained document. No-op while Loading or already Ready so a dismiss
+    /// cannot interrupt an in-flight page action.
+    pub fn clear_error(&self) -> bool {
+        let mut state = self.inner.lock().unwrap();
+        if matches!(state.lifecycle, Lifecycle::Error { .. }) {
+            state.lifecycle = Lifecycle::Ready;
+            true
+        } else {
+            false
+        }
     }
 
     /// Atomically publish a complete SemanticDocument as active and transition
@@ -365,6 +395,11 @@ impl SharedTuiState {
         }
         evicted
     }
+    /// Last complete published SemanticDocument, retained through Loading and Error.
+    ///
+    /// Does not encode lifecycle: callers that need Loading vs Ready must consult
+    /// [`Self::lifecycle`] or [`Self::read_snapshot`]. Fails with [`CoordinationError::NoDocument`]
+    /// when nothing has been published yet.
     pub fn active(&self) -> Result<SemanticDocument, CoordinationError> {
         // Last complete capture is retained through Loading/Error so readers
         // never observe a mixed partial revision. Callers that need the
@@ -465,6 +500,7 @@ impl SharedTuiState {
         })
     }
 
+    /// Recorded historical evictions (oldest first), bounded separately from retention.
     pub fn evictions(&self) -> Vec<Eviction> {
         self.inner
             .lock()
@@ -474,11 +510,15 @@ impl SharedTuiState {
             .cloned()
             .collect()
     }
+
+    /// Bounded markdown projection of the active SemanticDocument for companion tools.
     pub fn render(&self, limit: usize) -> Result<String, CoordinationError> {
         let output =
             render_semantic_markdown(&self.active()?).map_err(|_| CoordinationError::NoDocument)?;
         Ok(output.content.chars().take(limit).collect())
     }
+
+    /// Bounded outline projection of the active SemanticDocument for companion tools.
     pub fn outline(&self, limit: usize) -> Result<String, CoordinationError> {
         let output = render_outline(&self.active()?).map_err(|_| CoordinationError::NoDocument)?;
         Ok(output.content.chars().take(limit).collect())
@@ -614,6 +654,7 @@ impl SharedTuiState {
         Ok(())
     }
 
+    /// Clear agent attention without touching human selection or the browser.
     pub fn clear_attention(&self) {
         self.inner.lock().unwrap().attention = Attention::default();
     }
@@ -753,6 +794,21 @@ mod tests {
         assert_eq!(active.document.url, refreshed.url);
         assert_eq!(active.document.title, refreshed.title);
         assert_eq!(active.document.revision, "fake:3");
+    }
+
+    #[test]
+    fn clear_error_restores_ready_without_dropping_document() {
+        let shared = shared_with_limit(4);
+        shared.publish(doc("tab", "ready-1"));
+        shared.fail_page_action("history_back", "settle timeout");
+        assert!(matches!(shared.lifecycle(), Lifecycle::Error { .. }));
+        assert!(shared.clear_error());
+        assert!(shared.lifecycle().is_ready());
+        assert_eq!(shared.active().unwrap().document.revision, "ready-1");
+        assert!(!shared.clear_error());
+        shared.begin_page_action("navigate").expect("loading");
+        assert!(!shared.clear_error());
+        assert!(shared.lifecycle().is_loading());
     }
 
     #[test]

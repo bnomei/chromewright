@@ -1,4 +1,8 @@
 //! Actionability probe bridge from tools to compiled in-page predicate scripts.
+//!
+//! Tools declare readiness predicates (present, visible, enabled, stable, receives-events,
+//! unobscured-center, text/value matches). The probe runs through the browser command layer
+//! and fails closed if a present target omits any requested predicate field.
 
 use crate::browser::BrowserSession;
 pub(crate) use crate::browser::commands::{
@@ -11,10 +15,15 @@ use crate::error::{BrowserError, Result};
 /// Borrowed actionability probe parameters forwarded to the browser command layer.
 #[derive(Debug, Clone)]
 pub(crate) struct ActionabilityRequest<'a> {
+    /// CSS selector used for same-origin target resolution in-page.
     pub selector: &'a str,
+    /// Optional actionable index for handle-like targets (reconciled against the selector match).
     pub target_index: Option<usize>,
+    /// Predicates the probe must evaluate (and return when the target is present).
     pub predicates: &'a [ActionabilityPredicate],
+    /// Expected substring for `TextContains` waits.
     pub expected_text: Option<&'a str>,
+    /// Expected exact value for `ValueEquals` waits.
     pub expected_value: Option<&'a str>,
 }
 
@@ -25,6 +34,11 @@ pub(crate) fn build_actionability_probe_js(request: &ActionabilityRequest<'_>) -
 }
 
 /// Execute an actionability probe in the page and validate the returned predicate payload.
+///
+/// # Errors
+///
+/// Maps evaluation failures to tool-execution errors, rejects unexpected command results,
+/// and fails closed when a present target omits any requested predicate field.
 pub(crate) fn probe_actionability(
     session: &BrowserSession,
     request: &ActionabilityRequest<'_>,

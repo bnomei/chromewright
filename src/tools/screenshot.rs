@@ -34,10 +34,14 @@ static REVEAL_TARGET_SHELL: OnceLock<BrowserKernelTemplateShell> = OnceLock::new
 )]
 #[serde(rename_all = "snake_case")]
 pub enum ScreenshotMode {
+    /// Capture the visible layout viewport (default).
     #[default]
     Viewport,
+    /// Capture the full scrollable page.
     FullPage,
+    /// Capture a resolved element target (may reveal offscreen nodes first).
     Element,
+    /// Capture an explicit CSS-space rectangle from `region`.
     Region,
 }
 
@@ -47,8 +51,10 @@ pub enum ScreenshotMode {
 )]
 #[serde(rename_all = "snake_case")]
 pub enum ScreenshotScale {
+    /// Device pixels including `devicePixelRatio` (default).
     #[default]
     Device,
+    /// CSS pixel scale (1 CSS px ≈ 1 image px before DPR).
     Css,
 }
 
@@ -72,21 +78,29 @@ pub struct ScreenshotClip {
 }
 
 /// Mode, scale, optional tab, and element/region target for a managed screenshot.
+///
+/// Callers cannot choose an arbitrary output path; artifacts land in the
+/// session-managed screenshot store and are returned as URI/path handles.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ScreenshotParams {
+    /// Capture surface (default: viewport).
     #[serde(default)]
     pub mode: ScreenshotMode,
 
+    /// Device vs CSS pixel scale (default: device).
     #[serde(default)]
     pub scale: ScreenshotScale,
 
+    /// Optional tab id; omit to capture the active page.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tab_id: Option<String>,
 
+    /// Element target required when mode is `element`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target: Option<PublicTarget>,
 
+    /// CSS-space clip required when mode is `region`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub region: Option<ScreenshotRegion>,
 }
@@ -102,18 +116,27 @@ pub struct ScreenshotOutput {
     pub scale: ScreenshotScale,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tab_id: Option<String>,
+    /// Session-scoped URI handle for the managed artifact.
     pub artifact_uri: String,
+    /// Absolute path inside the session-managed store (not caller-chosen).
     pub artifact_path: String,
     pub format: String,
     pub mime_type: String,
     pub byte_count: usize,
+    /// Image width in pixels.
     pub width: u32,
+    /// Image height in pixels.
     pub height: u32,
+    /// Capture width in CSS pixels.
     pub css_width: f64,
+    /// Capture height in CSS pixels.
     pub css_height: f64,
     pub device_pixel_ratio: f64,
+    /// Effective pixel scale applied to the capture.
     pub pixel_scale: f64,
+    /// True when element mode scrolled/revealed an offscreen target before capture.
     pub revealed_from_offscreen: bool,
+    /// Clip rectangle actually applied, when the capture was region- or element-clipped.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub clip: Option<ScreenshotClip>,
 }

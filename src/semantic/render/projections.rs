@@ -28,20 +28,27 @@ fn kind_name(kind: SemanticKind) -> &'static str {
 /// Full-document semantic JSON: metadata, revision, and component tree with refs.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct SemanticJsonProjection {
+    /// Capture document id.
     pub document_id: String,
+    /// Capture revision token.
     pub revision: String,
     pub url: String,
     pub title: String,
     pub ready_state: String,
+    /// Total components in the tree.
     pub component_count: usize,
+    /// Top-level components with nested children and opaque refs.
     pub roots: Vec<SemanticComponent>,
 }
 
 /// Compact outline entry for landmarks, headings, and lists.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct OutlineEntry {
+    /// Nesting depth in the outline walk.
     pub depth: usize,
+    /// Component kind name (`landmark`, `heading`, …).
     pub kind: String,
+    /// Opaque fail-closed ref for this entry.
     pub semantic_ref: SemanticRef,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub landmark: Option<String>,
@@ -53,6 +60,7 @@ pub struct OutlineEntry {
     pub text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub href: Option<String>,
+    /// Whether the entry is keyboard-focusable in later TUI phases.
     pub focusable: bool,
 }
 
@@ -63,6 +71,7 @@ pub struct OutlineProjection {
     pub revision: String,
     pub url: String,
     pub title: String,
+    /// Ordered outline rows (landmarks, headings, lists, focusables).
     pub entries: Vec<OutlineEntry>,
 }
 
@@ -71,7 +80,9 @@ pub struct OutlineProjection {
 pub struct ComponentProjection {
     pub document_id: String,
     pub revision: String,
+    /// Exact `semantic_ref` that was resolved (fail-closed).
     pub semantic_ref: SemanticRef,
+    /// Resolved component subtree.
     pub component: SemanticComponent,
 }
 
@@ -102,6 +113,7 @@ pub struct DebugProjection {
     pub title: String,
     pub ready_state: String,
     pub component_count: usize,
+    /// Flat depth-first debug rows (no nested children arrays).
     pub nodes: Vec<DebugNode>,
 }
 

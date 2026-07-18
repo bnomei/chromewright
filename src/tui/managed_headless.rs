@@ -1,8 +1,10 @@
 //! Safe, local ownership for the `chromewright --headless tui` browser.
 //!
-//! The lease is deliberately narrow: before reusing, stopping, or accepting a
-//! DevTools endpoint we prove the exact PID, nonce, private profile, and port
-//! belong together.  A record is never authority to signal an unrelated Chrome.
+//! [`ManagedHeadlessSession`] launches or reuses a private headless Chrome under
+//! a narrow ownership lease (PID, nonce, private profile, DevTools port). Before
+//! reconnecting, stopping, or accepting a DevTools endpoint we prove those
+//! fields still belong together. A lease is never authority to signal an
+//! unrelated Chrome process. [`BrowserSessionPolicy`] chooses reuse vs restart.
 
 use crate::{BrowserSession, ConnectionOptions, LaunchOptions};
 use fs2::FileExt;
@@ -24,6 +26,9 @@ const STARTUP_ATTEMPTS: usize = 3;
 const INITIAL_PAGE_URL: &str = "about:blank";
 
 /// How `--headless tui` handles a previous Chromewright-owned browser.
+///
+/// Applies only to managed headless leases; external `--ws-endpoint` attach
+/// sessions never use this policy and are never terminated by the TUI.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]
 pub enum BrowserSessionPolicy {
     /// Reconnect to a healthy owned browser, otherwise launch a new one.

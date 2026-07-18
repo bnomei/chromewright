@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 /// History-forward options; set allow_unsafe when the next entry may use a non-web scheme.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct GoForwardParams {
+    /// Allow landing on non-web schemes (`data:`, `file:`, …); rejected landings are reverted.
     #[serde(default)]
     pub allow_unsafe: bool,
 }

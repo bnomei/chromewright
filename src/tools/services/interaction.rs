@@ -1,4 +1,9 @@
 //! Interaction target resolution, actionability polling, and post-action handoff envelopes.
+//!
+//! Interaction tools fail closed on stale cursors ([`StaleCursorPolicy::DenyRebind`]) so
+//! agents re-snapshot rather than act on an ambiguous selector rebound. After mutations,
+//! handoffs refresh the DOM and classify target continuity (`same` / `rebound` / `detached` /
+//! `unknown`).
 
 use crate::browser::BrowserSession;
 use crate::browser::commands::{
@@ -24,6 +29,7 @@ const SCROLL_TARGET_INTO_VIEW_TEMPLATE_JS: &str = include_str!("../scroll_target
 static SCROLL_TARGET_INTO_VIEW_SHELL: OnceLock<
     crate::tools::browser_kernel::BrowserKernelTemplateShell,
 > = OnceLock::new();
+
 /// Default actionability poll budget used by click/input and similar interactions.
 pub(crate) const DEFAULT_ACTIONABILITY_TIMEOUT_MS: u64 = 5_000;
 const ACTIONABILITY_POLL_INTERVAL_MS: u64 = 50;
@@ -37,10 +43,17 @@ pub(crate) enum ActionabilityWaitState {
 }
 
 /// Post-action document envelope pieces: refreshed revision plus target continuity status.
+///
+/// Built after a mutating interaction so agents can decide whether to reuse handles or
+/// re-snapshot. `target_after` may be omitted when the element is detached or ambiguous.
 pub(crate) struct InteractionHandoff {
+    /// Document metadata after DOM refresh (new revision when the page mutated).
     pub document: DocumentMetadata,
+    /// Target envelope captured before the action.
     pub target_before: TargetEnvelope,
+    /// Best-effort post-action target when still uniquely resolvable.
     pub target_after: Option<TargetEnvelope>,
+    /// Continuity classification for the handle across the mutation.
     pub target_status: TargetStatus,
 }
 
@@ -72,6 +85,8 @@ pub(crate) fn resolve_interaction_target(
 ///
 /// When receives-events / unobscured-center predicates need viewport locality and the
 /// probe reports present-but-out-of-viewport, scrolls into view between poll ticks.
+/// Records poll iterations and browser evaluations on [`ToolContext`]. Does not return a
+/// soft failure on timeout—callers map [`ActionabilityWaitState::TimedOut`] themselves.
 pub(crate) fn wait_for_actionability(
     context: &mut ToolContext,
     target: &ResolvedTarget,

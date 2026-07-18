@@ -1,7 +1,11 @@
-//! MCP browser automation tools and the registry that dispatches them.
+//! MCP browser automation tools, shared services, and the [`ToolRegistry`] that
+//! dispatches them.
 //!
-//! Each tool implements the shared `Tool` trait; operator tools such as `evaluate`
-//! are registered only on full server sessions, not the default registry.
+//! Each tool implements the shared [`Tool`] trait and runs against a per-call
+//! [`ToolContext`] (session access, DOM cache, operation metrics). Operator tools
+//! such as `evaluate` (gated by `confirm_unsafe`) register only on full server
+//! sessions; companion tools under `tui` attach only when co-hosted with
+//! [`crate::tui::SharedTuiState`].
 
 pub(crate) mod actionability;
 pub(crate) mod browser_kernel;

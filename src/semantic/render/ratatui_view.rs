@@ -24,6 +24,7 @@ pub struct SemanticRatatuiView<'a> {
 }
 
 impl<'a> SemanticRatatuiView<'a> {
+    /// Borrow a document for widget or line-oriented Ratatui projection.
     pub fn new(document: &'a SemanticDocument) -> Self {
         Self { document }
     }

@@ -87,6 +87,7 @@ pub fn start(
         path,
     })
 }
+
 impl Companion {
     /// Bound loopback socket (resolved after ephemeral-port allocation).
     #[cfg_attr(not(test), allow(dead_code))]

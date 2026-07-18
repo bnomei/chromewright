@@ -1,4 +1,9 @@
 //! Terminal event loop for `chromewright tui`.
+//!
+//! Owns terminal setup/teardown, registers `tui_*` tools on the unique
+//! BrowserSession Arc, starts the loopback Companion, and drives the
+//! draw → acknowledge Loading → perform page action cycle. Does not hard-code
+//! key bindings; those come from Keymap → Action via the dispatcher.
 
 use crate::browser::BrowserSession;
 use crate::tui::config::TuiConfig;
@@ -20,12 +25,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-/// Entry options for `chromewright tui`: optional keymap overlay path.
+/// Entry options for `chromewright tui`: keymap overlay and companion bind settings.
 #[derive(Debug, Clone, Default)]
 pub struct TuiOptions {
     /// Explicit keymap config path (`--config`); XDG default when None.
     pub config: Option<PathBuf>,
+    /// Loopback companion port (`0` = ephemeral).
     pub companion_port: u16,
+    /// Absolute HTTP path the companion nests under (e.g. `/mcp`).
     pub companion_path: String,
 }
 

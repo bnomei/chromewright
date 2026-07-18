@@ -1,4 +1,8 @@
-//! Template shell that inlines the shared browser-kernel script into tool-specific probes.
+//! Browser kernel: shared in-page JS templates compiled once and rendered per probe.
+//!
+//! Tool scripts include `__BROWSER_KERNEL__` for same-origin target resolution helpers and a
+//! single config placeholder. [`BrowserKernelTemplateShell`] expands the kernel once, then
+//! each render only splices JSON config between fixed prefix/suffix strings.
 
 use serde_json::Value;
 use std::sync::OnceLock;
@@ -49,6 +53,9 @@ impl BrowserKernelTemplateShell {
 }
 
 /// Lazily compile a tool probe template and render it with the given JSON config.
+///
+/// `shell_cache` should be a process-static [`OnceLock`] so kernel expansion runs once per
+/// template. Panics if `template` does not contain exactly one `config_placeholder`.
 pub(crate) fn render_browser_kernel_script(
     shell_cache: &OnceLock<BrowserKernelTemplateShell>,
     template: &'static str,
