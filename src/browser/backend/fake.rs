@@ -52,6 +52,7 @@ fn session_close_result(total_tabs: usize, failures: Vec<String>) -> Result<()> 
 pub(crate) struct FakeSessionBackend {
     state: Mutex<FakeState>,
     close_failure_urls: Vec<String>,
+    bump_revision_before_semantic_capture: bool,
 }
 
 #[derive(Debug)]
@@ -66,6 +67,16 @@ struct FakeState {
 impl FakeSessionBackend {
     pub(crate) fn new() -> Self {
         Self::with_close_failures(std::iter::empty::<String>())
+    }
+
+    /// Simulate hydration changing a settled page immediately before the
+    /// semantic capture script samples it. Used to verify capture-first
+    /// freshness barriers without a live browser race.
+    #[cfg(feature = "tui")]
+    pub(crate) fn with_semantic_capture_revision_bump() -> Self {
+        let mut backend = Self::new();
+        backend.bump_revision_before_semantic_capture = true;
+        backend
     }
 
     pub(crate) fn with_no_active_tab() -> Self {
@@ -98,6 +109,7 @@ impl FakeSessionBackend {
                 viewport_emulation_by_tab_id: HashMap::new(),
             }),
             close_failure_urls: close_failure_urls.into_iter().map(Into::into).collect(),
+            bump_revision_before_semantic_capture: false,
         }
     }
 
@@ -654,7 +666,10 @@ impl SessionBackend for FakeSessionBackend {
     fn evaluate(&self, script: &str, _await_promise: bool) -> Result<ScriptEvaluation> {
         if script.contains("Hydrated DOM semantic capture for the tui-gated SemanticDocument path")
         {
-            let state = self.lock_state()?;
+            let mut state = self.lock_state()?;
+            if self.bump_revision_before_semantic_capture {
+                Self::bump_revision(&mut state);
+            }
             let document = Self::current_document(&state)?;
             return Ok(ScriptEvaluation {
                 value: Some(serde_json::json!({

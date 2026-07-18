@@ -15,6 +15,7 @@ mod dispatch;
 mod driver;
 mod hints;
 mod keymap;
+mod managed_headless;
 mod render;
 mod shared;
 mod state;
@@ -25,6 +26,7 @@ pub use config::{TuiConfig, default_config_path, example_config_toml, load_tui_c
 pub use controller::Controller;
 pub use driver::{FakePageDriver, PageDriver, SessionPageDriver};
 pub use keymap::{KeyChord, KeyCode, KeyModifiers, KeySequence, TuiKeymap};
+pub use managed_headless::{BrowserSessionPolicy, ManagedHeadlessSession};
 pub use shared::{
     Attention, CoordinationError, CoordinationSnapshot, DEFAULT_REVISION_RETENTION,
     MAX_ATTENTION_MESSAGE_CHARS, SharedTuiState,

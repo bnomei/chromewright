@@ -30,11 +30,22 @@ required-features = ["mcp-server"]
 
 [features]
 default = ["mcp-server"]
+tokio = ["dep:tokio"]
 tui = [
     "dep:ratatui",
     "dep:crossterm",
     "dep:toml",
     "dep:base64",
+    # The managed TUI browser session policy is a clap value enum. Keeping this
+    # here makes `--no-default-features --features tui` a coherent library build.
+    "dep:clap",
+    # The TUI companion is part of this feature's public runtime, including
+    # its bounded MCP resources and loopback HTTP transport.
+    "mcp-handler",
+    "rmcp/transport-streamable-http-server",
+    "tokio",
+    "dep:axum",
+    "dep:fs2",
 ]
 mcp-handler = ["rmcp/macros", "rmcp/server"]
 mcp-server = [
@@ -42,9 +53,9 @@ mcp-server = [
     "rmcp/transport-io",
     "rmcp/transport-streamable-http-server",
     "tokio",
-    "clap",
-    "axum",
-    "env_logger",
+    "dep:clap",
+    "dep:axum",
+    "dep:env_logger",
 ]
 
 [dependencies]
@@ -80,6 +91,7 @@ ratatui = { version = "0.30", optional = true, default-features = false, feature
 crossterm = { version = "0.28", optional = true }
 toml = { version = "0.8", optional = true }
 base64 = { version = "0.22", optional = true }
+fs2 = { version = "0.4", optional = true }
 
 [dev-dependencies]
 urlencoding = "2.1"

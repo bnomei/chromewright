@@ -53,7 +53,7 @@ pub use semantic::{
 
 #[cfg(feature = "tui")]
 #[doc(hidden)]
-pub use tui::{TuiConfig, TuiOptions, run_tui};
+pub use tui::{BrowserSessionPolicy, ManagedHeadlessSession, TuiConfig, TuiOptions, run_tui};
 
 #[cfg(feature = "mcp-handler")]
 #[doc(hidden)]

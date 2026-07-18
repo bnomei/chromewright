@@ -463,6 +463,13 @@ impl SharedTuiState {
             session
                 .wait_for_document_ready_with_timeout(Duration::from_secs(15))
                 .map_err(|_| CoordinationError::RefreshFailed)?;
+            // Capture before sampling the freshness barrier. Hydration may
+            // legitimately change the document after settling but before the
+            // semantic snapshot begins; only a change *after* that capture
+            // makes the snapshot unsafe to publish.
+            let document = session
+                .extract_semantic_document()
+                .map_err(|_| CoordinationError::RefreshFailed)?;
             let metadata = session
                 .document_metadata()
                 .map_err(|_| CoordinationError::RefreshFailed)?;
@@ -472,9 +479,6 @@ impl SharedTuiState {
             {
                 return Err(CoordinationError::RefreshFailed);
             }
-            let document = session
-                .extract_semantic_document()
-                .map_err(|_| CoordinationError::RefreshFailed)?;
             if document.document.document_id != metadata.document_id
                 || document.document.revision != metadata.revision
                 || document.document.url != metadata.url
@@ -579,10 +583,11 @@ mod tests {
     }
 
     fn shared_with_limit(limit: usize) -> SharedTuiState {
-        SharedTuiState::with_retention(
-            Arc::new(BrowserSession::with_test_backend(FakeSessionBackend::new())),
-            limit,
-        )
+        shared_with_backend(FakeSessionBackend::new(), limit)
+    }
+
+    fn shared_with_backend(backend: FakeSessionBackend, limit: usize) -> SharedTuiState {
+        SharedTuiState::with_retention(Arc::new(BrowserSession::with_test_backend(backend)), limit)
     }
 
     #[test]
@@ -657,6 +662,24 @@ mod tests {
         );
         shared.activate_runtime();
         assert_eq!(shared.refresh(), Err(CoordinationError::RefreshInProgress));
+    }
+
+    #[test]
+    fn companion_refresh_publishes_the_post_capture_document_atomically() {
+        let shared =
+            shared_with_backend(FakeSessionBackend::with_semantic_capture_revision_bump(), 4);
+        shared.activate_runtime();
+        shared.publish(doc("fake-tab-1", "fake:1"));
+
+        let refreshed = shared.refresh().expect("companion refresh");
+
+        assert!(shared.lifecycle().is_ready());
+        let active = shared.active().expect("published capture");
+        assert_eq!(active.document.document_id, refreshed.document_id);
+        assert_eq!(active.document.revision, refreshed.revision);
+        assert_eq!(active.document.url, refreshed.url);
+        assert_eq!(active.document.title, refreshed.title);
+        assert_eq!(active.document.revision, "fake:3");
     }
 
     #[test]

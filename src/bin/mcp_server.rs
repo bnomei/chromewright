@@ -16,7 +16,9 @@ use rmcp::transport::streamable_http_server::{
 };
 
 #[cfg(feature = "tui")]
-use chromewright::{BrowserSession, TuiOptions, run_tui};
+use chromewright::{
+    BrowserSession, BrowserSessionPolicy, ManagedHeadlessSession, TuiOptions, run_tui,
+};
 
 /// How the process obtains a browser: local launch or DevTools attach.
 #[derive(Debug, Clone)]
@@ -86,6 +88,17 @@ struct Cli {
     #[arg(long, value_name = "PORT", conflicts_with = "ws_endpoint")]
     debug_port: Option<u16>,
 
+    /// Reuse or replace Chromewright's owned `--headless tui` browser.
+    /// External `--ws-endpoint` browsers are always attach-only.
+    #[cfg(feature = "tui")]
+    #[arg(
+        long,
+        value_enum,
+        requires = "headless",
+        conflicts_with = "ws_endpoint"
+    )]
+    browser_session: Option<BrowserSessionPolicy>,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -136,9 +149,38 @@ fn create_browser_session(mode: &BrowserMode) -> Result<BrowserSession, String> 
     }
 }
 
+#[cfg(feature = "tui")]
+fn managed_headless_tui_session(cli: &Cli) -> Result<ManagedHeadlessSession, String> {
+    if cli.user_data_dir.is_some() {
+        return Err(
+            "--headless tui manages a private runtime profile; --user-data-dir is not supported in this mode"
+                .into(),
+        );
+    }
+    ManagedHeadlessSession::open(
+        &LaunchOptions {
+            headless: true,
+            chrome_path: cli.executable_path.clone(),
+            debug_port: cli.debug_port,
+            ..Default::default()
+        },
+        cli.browser_session.unwrap_or_default(),
+    )
+}
+
+#[cfg(feature = "tui")]
+fn validate_tui_session_policy(cli: &Cli) -> Result<(), String> {
+    if cli.browser_session.is_some() && !matches!(&cli.command, Some(Command::Tui { .. })) {
+        return Err("--browser-session is only valid with --headless tui".into());
+    }
+    Ok(())
+}
+
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
+    #[cfg(feature = "tui")]
+    validate_tui_session_policy(&cli)?;
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let browser_mode = browser_mode_from_cli(&cli);
 
@@ -174,7 +216,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    match cli.command {
+    match cli.command.clone() {
         None => {
             info!("Transport: stdio");
             info!("Ready to accept MCP connections via stdio");
@@ -239,17 +281,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 info!("TUI config: XDG default (if present)");
             }
-            let session = create_browser_session(&browser_mode)
-                .map_err(|e| format!("Failed to create browser session: {e}"))?;
-            run_tui(
-                std::sync::Arc::new(session),
-                TuiOptions {
-                    config: config.clone(),
-                    companion_port,
-                    companion_path,
-                },
-            )
-            .map_err(|e| format!("TUI exited with error: {e}"))?;
+            let options = TuiOptions {
+                config: config.clone(),
+                companion_port,
+                companion_path,
+            };
+            if cli.headless {
+                info!(
+                    "Headless TUI browser session: {:?}",
+                    cli.browser_session.unwrap_or_default()
+                );
+                let managed = managed_headless_tui_session(&cli).map_err(|e| {
+                    format!("Failed to create managed headless browser session: {e}")
+                })?;
+                let tui_result = run_tui(managed.session(), options)
+                    .map_err(|e| format!("TUI exited with error: {e}"));
+                let shutdown_result = managed
+                    .shutdown()
+                    .map_err(|e| format!("managed headless browser shutdown failed: {e}"));
+                match (tui_result, shutdown_result) {
+                    (Ok(()), Ok(())) => {}
+                    // Preserve the TUI failure as the primary cause while
+                    // still surfacing a cleanup failure to the CLI.
+                    (Err(tui_error), Ok(())) => return Err(tui_error.into()),
+                    (Ok(()), Err(shutdown_error)) => return Err(shutdown_error.into()),
+                    (Err(tui_error), Err(shutdown_error)) => {
+                        return Err(format!("{tui_error}; {shutdown_error}").into());
+                    }
+                }
+            } else {
+                let session = create_browser_session(&browser_mode)
+                    .map_err(|e| format!("Failed to create browser session: {e}"))?;
+                run_tui(std::sync::Arc::new(session), options)
+                    .map_err(|e| format!("TUI exited with error: {e}"))?;
+            }
             return Ok(());
         }
         Some(Command::Serve { port, http_path }) => {
@@ -432,6 +497,47 @@ mod tests {
             }
             other => panic!("expected tui subcommand, got {other:?}"),
         }
+    }
+
+    #[cfg(feature = "tui")]
+    #[test]
+    fn test_headless_tui_defaults_to_managed_reuse_policy() {
+        let cli = Cli::try_parse_from(["chromewright", "--headless", "tui"])
+            .expect("CLI should parse managed headless TUI");
+        assert_eq!(
+            cli.browser_session.unwrap_or_default(),
+            BrowserSessionPolicy::Reuse
+        );
+        assert!(matches!(cli.command, Some(Command::Tui { .. })));
+    }
+
+    #[cfg(feature = "tui")]
+    #[test]
+    fn test_browser_session_requires_headless_and_rejects_external_endpoint() {
+        let no_headless =
+            Cli::try_parse_from(["chromewright", "--browser-session", "restart", "tui"])
+                .expect_err("browser session policy is managed-headless-only");
+        assert_eq!(no_headless.kind(), ErrorKind::MissingRequiredArgument);
+
+        let external = Cli::try_parse_from([
+            "chromewright",
+            "--ws-endpoint",
+            "http://127.0.0.1:9222",
+            "--browser-session",
+            "restart",
+            "tui",
+        ])
+        .expect_err("external browsers must remain attach-only");
+        assert_eq!(external.kind(), ErrorKind::ArgumentConflict);
+    }
+
+    #[cfg(feature = "tui")]
+    #[test]
+    fn test_browser_session_is_rejected_without_tui_subcommand() {
+        let cli = Cli::try_parse_from(["chromewright", "--headless", "--browser-session", "reuse"])
+            .expect("clap should preserve the explicit option for runtime validation");
+        assert!(cli.browser_session.is_some());
+        assert!(validate_tui_session_policy(&cli).is_err());
     }
 
     #[cfg(feature = "tui")]

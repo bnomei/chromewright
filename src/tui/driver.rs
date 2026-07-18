@@ -403,6 +403,13 @@ pub struct FakePageDriver {
     pub forward_calls: usize,
     pub reload_calls: usize,
     pub capture_calls: usize,
+    /// Metadata returned after captures when a test needs to model a browser
+    /// handoff that differs from the captured semantic document.
+    pub metadata_responses: Vec<DocumentMetadata>,
+    /// Advance to the next scripted page immediately before capture. This
+    /// models hydration changing the document after settling but before the
+    /// semantic snapshot is extracted.
+    pub advance_page_on_capture: bool,
     pub fail_next: Option<String>,
     pub fail_capture: Option<String>,
     pub activated: Vec<(String, bool)>,
@@ -488,11 +495,18 @@ impl PageDriver for FakePageDriver {
         if let Some(msg) = self.fail_capture.take() {
             return Err(BrowserError::DomParseFailed(msg));
         }
+        if self.advance_page_on_capture && self.page_index + 1 < self.pages.len() {
+            self.page_index += 1;
+        }
         self.current()
     }
 
     fn document_metadata(&mut self) -> Result<DocumentMetadata> {
-        Ok(self.current()?.document)
+        if self.metadata_responses.is_empty() {
+            Ok(self.current()?.document)
+        } else {
+            Ok(self.metadata_responses.remove(0))
+        }
     }
 
     fn open_tab(&mut self, url: &str) -> Result<()> {

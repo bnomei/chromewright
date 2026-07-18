@@ -393,10 +393,12 @@ impl Controller {
                 }
             }
             driver.wait_settle().map_err(|e| e.to_string())?;
-            // Read metadata after settle as an explicit freshness barrier. The
-            // semantic capture carries the atomically published values, but
-            // this call ensures a cached/stale browser handoff is not treated
-            // as a settled page.
+            // Capture first, then read metadata as the freshness barrier. A
+            // hydrated page can mutate between settling and capture, so a
+            // pre-capture metadata read would reject a valid later snapshot.
+            // The post-capture metadata must instead describe exactly what we
+            // captured before it can be published.
+            let doc = driver.capture_semantic().map_err(|e| e.to_string())?;
             let metadata = driver.document_metadata().map_err(|e| e.to_string())?;
             if metadata.document_id.is_empty()
                 || metadata.revision.is_empty()
@@ -404,7 +406,6 @@ impl Controller {
             {
                 return Err("browser did not provide stable complete document metadata".into());
             }
-            let doc = driver.capture_semantic().map_err(|e| e.to_string())?;
             if doc.document.document_id != metadata.document_id
                 || doc.document.revision != metadata.revision
                 || doc.document.url != metadata.url
@@ -1007,6 +1008,47 @@ mod tests {
         let _ = render_loading_and_run(&mut ctl, &mut driver);
         assert!(matches!(ctl.state.lifecycle, Lifecycle::Error { .. }));
         assert_eq!(ctl.state.revision(), "1");
+    }
+
+    #[test]
+    fn capture_accepts_hydration_change_when_post_capture_metadata_matches() {
+        let before_capture = text_doc("1", "old", "before hydration");
+        let captured = text_doc("2", "new", "after hydration");
+        let mut driver = FakePageDriver::new(vec![before_capture, captured.clone()]);
+        // This mutation would make the old pre-capture barrier observe rev 1
+        // and reject the valid rev 2 capture. The post-capture barrier sees
+        // the captured document's complete metadata instead.
+        driver.advance_page_on_capture = true;
+        let mut ctl = Controller::new();
+
+        ctl.bootstrap();
+        render_loading_and_run(&mut ctl, &mut driver).expect("post-hydration capture");
+
+        assert!(ctl.state.lifecycle.is_ready());
+        assert_eq!(ctl.state.revision(), "2");
+        assert_eq!(ctl.state.document(), Some(&captured));
+    }
+
+    #[test]
+    fn capture_rejects_mismatched_post_capture_metadata() {
+        let captured = text_doc("2", "new", "captured document");
+        let stale_metadata = meta("1", "https://example.com/");
+        let mut driver = FakePageDriver::new(vec![captured.clone()]);
+        driver.metadata_responses.push(stale_metadata);
+        let mut ctl = Controller::new();
+        ctl.state
+            .publish_page(text_doc("0", "old", "last valid render"));
+
+        ctl.reload();
+        let error = render_loading_and_run(&mut ctl, &mut driver)
+            .expect_err("post-capture mismatch must fail closed");
+
+        assert_eq!(
+            error,
+            "semantic capture metadata changed during publication"
+        );
+        assert!(matches!(ctl.state.lifecycle, Lifecycle::Error { .. }));
+        assert_eq!(ctl.state.revision(), "0");
     }
 
     #[test]

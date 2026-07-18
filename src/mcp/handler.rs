@@ -2,7 +2,7 @@
 
 use crate::browser::{BrowserSession, ConnectionOptions};
 use crate::mcp::{convert_result, mcp_internal_error};
-use crate::tools::{ToolDescriptor, ToolResult as InternalToolResult};
+use crate::tools::ToolDescriptor;
 use log::debug;
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
@@ -15,6 +15,8 @@ use rmcp::{
 use std::future;
 use std::sync::Arc;
 
+#[cfg(feature = "tui")]
+use crate::tools::ToolResult as InternalToolResult;
 #[cfg(feature = "tui")]
 use crate::tui::SharedTuiState;
 #[cfg(feature = "tui")]
