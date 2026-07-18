@@ -41,7 +41,7 @@ enum Command {
         http_path: String,
     },
 
-    /// Interactive terminal browser over a shared Chrome session (requires `--features tui`).
+    /// Interactive terminal browser over a shared Chrome session (enabled by default).
     #[cfg(feature = "tui")]
     Tui {
         /// TOML keymap overlay path (default: `$XDG_CONFIG_HOME/chromewright/tui.toml`)
