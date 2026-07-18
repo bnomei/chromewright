@@ -44,7 +44,19 @@ pub trait PageDriver {
         semantic_ref: &SemanticRef,
         new_tab: bool,
     ) -> Result<bool>;
-    /// Submit text into an input/textarea/select by exact `semantic_ref`.
+    /// Write text into an input/textarea/select without submitting the form.
+    ///
+    /// Used when tabbing between fields so multi-field values reach the live
+    /// DOM before Enter triggers submit + recapture.
+    fn set_control_value(
+        &mut self,
+        document: &SemanticDocument,
+        semantic_ref: &SemanticRef,
+        text: &str,
+    ) -> Result<()>;
+    /// Write text and submit the owning form (or activate a button).
+    ///
+    /// Returns whether the action is expected to change the page.
     fn fill_control(
         &mut self,
         document: &SemanticDocument,
@@ -184,6 +196,26 @@ impl PageDriver for SessionPageDriver<'_> {
             }
             _ => Err(BrowserError::InvalidArgument(
                 "component is not activatable".into(),
+            )),
+        }
+    }
+
+    fn set_control_value(
+        &mut self,
+        document: &SemanticDocument,
+        semantic_ref: &SemanticRef,
+        text: &str,
+    ) -> Result<()> {
+        let component = document
+            .resolve(semantic_ref)
+            .map_err(|e| BrowserError::InvalidArgument(e.to_string()))?;
+        match component.kind {
+            SemanticKind::Input | SemanticKind::Textarea => {
+                set_value_only(self.session, document, component, text)
+            }
+            SemanticKind::Select => select_value(self.session, document, component, text),
+            _ => Err(BrowserError::InvalidArgument(
+                "component is not a settable control".into(),
             )),
         }
     }
@@ -372,7 +404,8 @@ fn focus_component(
     ensure_target_result(session.evaluate(&script, false)?)
 }
 
-fn set_value_and_submit(
+/// Set a control value and fire input/change without submitting the form.
+fn set_value_only(
     session: &BrowserSession,
     document: &SemanticDocument,
     component: &crate::semantic::SemanticComponent,
@@ -385,20 +418,43 @@ fn set_value_and_submit(
             if (el.readOnly || el.disabled) return 'readonly';
             el.focus();
             if (el.type === 'checkbox' || el.type === 'radio') {{
-                el.click();
+                const want = {text} === 'true' || {text} === '1' || {text} === 'on';
+                if (el.checked !== want) el.click();
                 return 'ok';
             }}
             el.value = {text};
             el.dispatchEvent(new Event('input', {{ bubbles: true }}));
             el.dispatchEvent(new Event('change', {{ bubbles: true }}));
-            if (el.form) {{
-                if (typeof el.form.requestSubmit === 'function') el.form.requestSubmit();
-                else el.form.submit();
-            }}
             return 'ok';
         }})()"#,
         prelude = prelude,
         text = js_string(text)
+    );
+    ensure_target_result(session.evaluate(&script, false)?)
+}
+
+fn set_value_and_submit(
+    session: &BrowserSession,
+    document: &SemanticDocument,
+    component: &crate::semantic::SemanticComponent,
+    text: &str,
+) -> Result<()> {
+    // Write first (same path as tab-away), then submit the owning form so multi-
+    // field pending values already in the DOM are included.
+    set_value_only(session, document, component, text)?;
+    let prelude = exact_target_prelude(document, component)?;
+    let script = format!(
+        r#"(function(){{
+            {prelude}
+            if (el.form) {{
+                if (typeof el.form.requestSubmit === 'function') el.form.requestSubmit();
+                else el.form.submit();
+            }} else if (el.type === 'submit' || el.tagName === 'BUTTON') {{
+                el.click();
+            }}
+            return 'ok';
+        }})()"#,
+        prelude = prelude,
     );
     ensure_target_result(session.evaluate(&script, false)?)
 }
@@ -686,17 +742,27 @@ impl PageDriver for FakePageDriver {
         }
     }
 
+    fn set_control_value(
+        &mut self,
+        document: &SemanticDocument,
+        semantic_ref: &SemanticRef,
+        text: &str,
+    ) -> Result<()> {
+        document
+            .resolve(semantic_ref)
+            .map_err(|e| BrowserError::InvalidArgument(e.to_string()))?;
+        self.filled
+            .push((semantic_ref.as_str().to_string(), text.to_string()));
+        Ok(())
+    }
+
     fn fill_control(
         &mut self,
         document: &SemanticDocument,
         semantic_ref: &SemanticRef,
         text: &str,
     ) -> Result<bool> {
-        document
-            .resolve(semantic_ref)
-            .map_err(|e| BrowserError::InvalidArgument(e.to_string()))?;
-        self.filled
-            .push((semantic_ref.as_str().to_string(), text.to_string()));
+        self.set_control_value(document, semantic_ref, text)?;
         Ok(true)
     }
 

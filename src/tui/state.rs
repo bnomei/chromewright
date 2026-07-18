@@ -7,7 +7,7 @@
 
 use crate::semantic::{SemanticDocument, SemanticRef};
 use crate::tui::content::ContentProjection;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Page lifecycle: Ready → Loading → Ready | Error (atomic publish on success).
 ///
@@ -152,6 +152,11 @@ pub struct ViewState {
     pub status_message: Option<String>,
     /// Pending two-key hint buffer.
     pub hint_buffer: String,
+    /// Values typed into form controls this capture, not yet written/submitted.
+    ///
+    /// Tabbing away from a field stashes here so multi-field forms can be filled
+    /// like Chrome before Enter submits (writes all + requestSubmit + recapture).
+    pub pending_form_values: HashMap<SemanticRef, String>,
 }
 
 impl ViewState {
@@ -161,6 +166,11 @@ impl ViewState {
 
     pub fn clear_status(&mut self) {
         self.status_message = None;
+    }
+
+    /// Drop staged form edits (escape, navigation, new capture).
+    pub fn clear_pending_form_values(&mut self) {
+        self.pending_form_values.clear();
     }
 }
 

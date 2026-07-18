@@ -38,14 +38,16 @@ private to the managed session.
 
 Keyboard bindings are deliberately not shown in the terminal. Navigation defaults follow
 Vimari: `f`/`F` link hints (footer cmdline while active), `j`/`k`/`h`/`l` scrolling, `u`/`d` half pages,
-`gg`/`G` document ends, `gi` first form field, `H`/`L` history, `r` reload,
+`gg`/`G` document ends, `gi` first form field (edit mode), `H`/`L` history, `r` reload,
 `w`/`q`/`x`/`t` tab actions, `o` URL entry, `/` forward search, `n` next
 match, `N` previous match, Space collapse (structure mode only), `zw` toggle soft
 word-wrap (off by default), `zs` toggle prose vs structure projection (prose by
 default; Vim-style `z`-prefix view commands), `i`
-inspection, `y` copy (link/image URL or block text), `Y` semantic-ref copy, Tab/Shift-Tab focus,
-Enter confirm, Escape cancel (and dismiss a failed page-action Error back to
-Ready while retaining the last good page), and Ctrl-C quit.
+inspection, `y` copy (link/image URL or block text), `Y` semantic-ref copy, Tab/Shift-Tab
+focus (form fields stash typed values until Enter), Enter confirm/submit (writes
+all staged fields then `requestSubmit` / button click, settles, and recaptures
+the resulting page like Chrome), Escape cancel (and dismiss a failed page-action
+Error back to Ready while retaining the last good page), and Ctrl-C quit.
 
 Failed page actions (history, navigate, reload, tab changes, …) enter the
 Error lifecycle, keep the last published page on screen, and block normal

@@ -209,7 +209,7 @@ Keyboard bindings are not shown in the terminal chrome. Defaults are Vimari-comp
 | `Ctrl-d` | `page_select_down` | Move selection down by about half a page. |
 | `gg` | `go_top` | Jump to the document top. |
 | `G` | `go_bottom` | Jump to the document bottom. |
-| `gi` | `focus_first_input` | Focus the first focusable form control. |
+| `gi` | `focus_first_input` | Focus the first form control and start editing. |
 | `H` | `history_back` | Browser history back. |
 | `L` | `history_forward` | Browser history forward. |
 | `r` | `reload` | Reload the active page. |
@@ -228,9 +228,9 @@ Keyboard bindings are not shown in the terminal chrome. Defaults are Vimari-comp
 | `i` | `inspect` | Open a compact inspect panel under the selected block; title is the full DOM path (`main > … > tag#id`), body has action fields and ref/rev; follows selection until Esc. |
 | `y` | `copy_block` | Copy selection: link/image URL (resolved), otherwise rendered block text (OSC 52). |
 | `Y` | `copy_ref` | Copy the opaque `semantic_ref` (OSC 52). |
-| `Tab` | `tab_next` | Move to the next focusable control. |
-| `Shift-Tab` | `tab_prev` | Move to the previous focusable control. |
-| `Enter` | `confirm` | Confirm URL, search, or form input submission. |
+| `Tab` | `tab_next` | Next focusable control; stashes the current form field value (multi-field). |
+| `Shift-Tab` | `tab_prev` | Previous focusable control; stashes the current form field value. |
+| `Enter` | `confirm` | Confirm URL/search, or submit the form (writes all staged fields, then `requestSubmit` / click, then recapture like Chrome). |
 | `Esc` | `escape` | Leave prompt, hint, or inspect mode. After a failed page action, dismiss Error back to Ready (retained page stays) so keys work again. |
 | `Ctrl-c` | `quit` | Quit the TUI. |
 

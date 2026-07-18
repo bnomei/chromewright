@@ -60,10 +60,13 @@ enum PageOperation {
         semantic_ref: SemanticRef,
         new_tab: bool,
     },
+    /// Write every staged field value into the live DOM, then submit from `semantic_ref`.
     SubmitForm {
         document: SemanticDocument,
+        /// Control that receives Enter (value is also in `values` under this ref).
         semantic_ref: SemanticRef,
-        text: String,
+        /// All field values to apply before submit (includes the active field).
+        values: Vec<(SemanticRef, String)>,
     },
     Activate {
         document: SemanticDocument,
@@ -198,7 +201,20 @@ impl Controller {
         Ok(())
     }
 
-    /// Queue form submission bound to an exact ref; recapture afterward.
+    /// Stash the current form field buffer without writing to the browser.
+    ///
+    /// Called when Tab leaves a field so multi-field values survive until Enter.
+    pub fn stash_form_field(&mut self, semantic_ref: &SemanticRef, text: &str) {
+        self.state
+            .view
+            .pending_form_values
+            .insert(semantic_ref.clone(), text.to_string());
+    }
+
+    /// Queue form submission: write all staged field values, submit, recapture.
+    ///
+    /// `text` is the active field buffer (overrides any older staged value for
+    /// that ref). After a successful capture, staged values are cleared.
     pub fn submit_form_input(
         &mut self,
         semantic_ref: &SemanticRef,
@@ -210,12 +226,24 @@ impl Controller {
             .cloned()
             .ok_or_else(|| "no document".to_string())?;
         document.resolve(semantic_ref).map_err(|e| e.to_string())?;
+        // Active field wins over any earlier stash for the same ref.
+        self.state
+            .view
+            .pending_form_values
+            .insert(semantic_ref.clone(), text.to_string());
+        let values: Vec<(SemanticRef, String)> = self
+            .state
+            .view
+            .pending_form_values
+            .iter()
+            .map(|(r, v)| (r.clone(), v.clone()))
+            .collect();
         self.queue_page_action(
             "form_submit",
             PageOperation::SubmitForm {
                 document,
                 semantic_ref: semantic_ref.clone(),
-                text: text.to_string(),
+                values,
             },
             None,
         );
@@ -223,6 +251,9 @@ impl Controller {
     }
 
     /// Queue activation of the currently selected exact focusable ref.
+    ///
+    /// When staged form values exist (fields filled via Tab), they are written
+    /// into the live DOM before the click so submit buttons behave like Chrome.
     pub fn activate_selection(&mut self) -> Result<(), String> {
         let document = self
             .state
@@ -460,16 +491,44 @@ impl Controller {
                 PageOperation::SubmitForm {
                     document,
                     semantic_ref,
-                    text,
+                    values,
                 } => {
+                    // Write every staged field first (Chrome keeps multi-field
+                    // state in the live DOM before submit).
+                    for (field_ref, field_text) in &values {
+                        if field_ref == &semantic_ref {
+                            continue;
+                        }
+                        driver
+                            .set_control_value(&document, field_ref, field_text)
+                            .map_err(|e| e.to_string())?;
+                    }
+                    let active_text = values
+                        .iter()
+                        .find(|(r, _)| r == &semantic_ref)
+                        .map(|(_, t)| t.as_str())
+                        .unwrap_or("");
                     let _ = driver
-                        .fill_control(&document, &semantic_ref, &text)
+                        .fill_control(&document, &semantic_ref, active_text)
                         .map_err(|e| e.to_string())?;
                 }
                 PageOperation::Activate {
                     document,
                     semantic_ref,
                 } => {
+                    // Flush staged multi-field values before clicking a control
+                    // (e.g. submit button) so the live form matches what the
+                    // operator typed while tabbing.
+                    let pending: Vec<(SemanticRef, String)> = self
+                        .state
+                        .view
+                        .pending_form_values
+                        .iter()
+                        .map(|(r, v)| (r.clone(), v.clone()))
+                        .collect();
+                    for (field_ref, field_text) in &pending {
+                        let _ = driver.set_control_value(&document, field_ref, field_text);
+                    }
                     let _ = driver
                         .activate_ref(&document, &semantic_ref, false)
                         .map_err(|e| e.to_string())?;
@@ -593,6 +652,8 @@ impl Controller {
         // Drop stale inspect text; sticky follow rebuilds for the new selection.
         self.state.view.inspect_text = None;
         self.state.view.inspect_title = None;
+        // Staged form values belonged to the previous capture's refs.
+        self.state.view.clear_pending_form_values();
         self.hints.clear();
         let document = self.state.document().expect("capture published").clone();
         let selection = self.state.view.selection.clone();
@@ -1183,61 +1244,86 @@ impl Controller {
 
     /// Cycle focusable controls (Tab / Shift-Tab); form fields enter edit mode.
     ///
-    /// Leaving a form field clears Input mode so Enter cannot submit a control
-    /// that is no longer the visible selection.
+    /// Leaving a form field stashes its buffer so multi-field values survive
+    /// until Enter submits (write-all + requestSubmit + recapture). Leaving a
+    /// field for a non-form control clears Input mode so Enter cannot submit
+    /// the previously focused input while a link or button is selected.
     pub fn tab_focus(&mut self, forward: bool) {
-        let Some(doc) = self.state.document() else {
-            return;
-        };
-        let controls = focusable_refs(doc);
-        if controls.is_empty() {
-            return;
-        }
-        let current = self.state.view.selection.as_ref();
-        let idx = current
-            .and_then(|c| controls.iter().position(|r| r == c))
-            .unwrap_or(if forward { usize::MAX } else { 0 });
-        let next = if forward {
-            if idx == usize::MAX {
-                0
-            } else {
-                (idx + 1) % controls.len()
-            }
-        } else if idx == 0 || idx == usize::MAX {
-            controls.len() - 1
+        // Leaving a form field: stash before any other mutation.
+        let leaving_form = if let InteractionMode::Input(InputKind::Form {
+            semantic_ref,
+            buffer,
+        }) = &self.state.mode
+        {
+            Some((semantic_ref.clone(), buffer.clone()))
         } else {
-            idx - 1
+            None
         };
-        let r = controls[next].clone();
-        // For form controls enter input mode; for links just select.
-        if let Ok(c) = doc.resolve(&r) {
-            use crate::semantic::SemanticKind;
-            if matches!(
-                c.kind,
-                SemanticKind::Input | SemanticKind::Textarea | SemanticKind::Select
-            ) {
-                self.begin_form_edit(r);
+        if let Some((ref_left, text_left)) = leaving_form {
+            self.stash_form_field(&ref_left, &text_left);
+        }
+
+        let (next_ref, next_is_form) = {
+            let Some(doc) = self.state.document() else {
+                return;
+            };
+            let controls = focusable_refs(doc);
+            if controls.is_empty() {
                 return;
             }
+            let current = self.state.view.selection.as_ref();
+            let idx = current
+                .and_then(|c| controls.iter().position(|r| r == c))
+                .unwrap_or(if forward { usize::MAX } else { 0 });
+            let next = if forward {
+                if idx == usize::MAX {
+                    0
+                } else {
+                    (idx + 1) % controls.len()
+                }
+            } else if idx == 0 || idx == usize::MAX {
+                controls.len() - 1
+            } else {
+                idx - 1
+            };
+            let r = controls[next].clone();
+            let is_form = doc.resolve(&r).ok().is_some_and(|c| {
+                use crate::semantic::SemanticKind;
+                matches!(
+                    c.kind,
+                    SemanticKind::Input | SemanticKind::Textarea | SemanticKind::Select
+                )
+            });
+            (r, is_form)
+        };
+
+        if next_is_form {
+            self.begin_form_edit(next_ref);
+            return;
         }
-        self.state.view.selection = Some(r.clone());
-        // Leaving a form field must also relinquish its editable ownership.
-        // Otherwise Enter could submit the previously focused input while a
-        // link or button is visibly selected.
+        self.state.view.selection = Some(next_ref.clone());
         self.state.mode = InteractionMode::Normal;
         let lines = self.content_lines();
-        if let Some(idx) = line_index_of(&lines, &r) {
+        if let Some(idx) = line_index_of(&lines, &next_ref) {
             self.ensure_visible(idx, lines.len());
         }
         self.refresh_inspect_panel();
     }
 
     fn begin_form_edit(&mut self, semantic_ref: SemanticRef) {
+        // Prefer a value already staged this capture; else the captured attr.
         let buffer = self
             .state
-            .document()
-            .and_then(|d| d.resolve(&semantic_ref).ok())
-            .and_then(|c| c.attrs.value.clone())
+            .view
+            .pending_form_values
+            .get(&semantic_ref)
+            .cloned()
+            .or_else(|| {
+                self.state
+                    .document()
+                    .and_then(|d| d.resolve(&semantic_ref).ok())
+                    .and_then(|c| c.attrs.value.clone())
+            })
             .unwrap_or_default();
         self.state.view.selection = Some(semantic_ref.clone());
         self.state.mode = InteractionMode::Input(InputKind::Form {
@@ -1319,6 +1405,8 @@ impl Controller {
             self.state.view.inspect_text = None;
             self.state.view.inspect_title = None;
             self.state.view.inspect_follow = false;
+            // Discard unstaged form typing without writing to the page.
+            self.state.view.clear_pending_form_values();
         }
         self.hints.clear();
     }
@@ -2474,6 +2562,112 @@ mod tests {
             "scroll {} should not pass heading {}",
             ctl.state.view.scroll_y,
             heading_line
+        );
+    }
+
+    fn form_input(id: &str, name: &str, value: &str) -> RawSemanticNode {
+        RawSemanticNode {
+            kind: "input".into(),
+            tag: Some("input".into()),
+            id: Some(id.into()),
+            unique_id: true,
+            selector: None,
+            text: None,
+            href: None,
+            landmark: None,
+            heading_level: None,
+            ordered: None,
+            label: Some(name.into()),
+            src: None,
+            alt: None,
+            name: Some(name.into()),
+            value: Some(value.into()),
+            input_type: Some("text".into()),
+            placeholder: None,
+            checked: None,
+            disabled: None,
+            required: None,
+            readonly: None,
+            multiple: None,
+            button_type: None,
+            options: vec![],
+            children: vec![],
+        }
+    }
+
+    #[test]
+    fn multi_field_form_stashes_on_tab_and_submits_all_on_enter() {
+        let document = normalize_fixture(
+            meta("1", "https://example.com/form"),
+            vec![
+                form_input("email", "email", ""),
+                form_input("name", "name", ""),
+            ],
+        )
+        .expect("doc");
+        let email = document
+            .components()
+            .find(|c| c.attrs.element_id.as_deref() == Some("email"))
+            .unwrap()
+            .semantic_ref
+            .clone();
+        let name = document
+            .components()
+            .find(|c| c.attrs.element_id.as_deref() == Some("name"))
+            .unwrap()
+            .semantic_ref
+            .clone();
+
+        let mut driver = FakePageDriver::new(vec![document.clone()]);
+        let mut ctl = Controller::new();
+        ctl.shared.activate_runtime();
+        ctl.state.publish_page(document.clone());
+        ctl.shared.publish(document);
+
+        // Start editing first field.
+        ctl.state.view.selection = Some(email.clone());
+        ctl.begin_form_edit(email.clone());
+        match &mut ctl.state.mode {
+            InteractionMode::Input(InputKind::Form { buffer, .. }) => {
+                *buffer = "a@b.co".into();
+            }
+            other => panic!("expected form input, got {other:?}"),
+        }
+
+        // Tab to next field — stash without browser write yet.
+        ctl.tab_focus(true);
+        assert_eq!(
+            ctl.state.view.pending_form_values.get(&email).map(String::as_str),
+            Some("a@b.co")
+        );
+        assert_eq!(ctl.state.view.selection.as_ref(), Some(&name));
+        match &mut ctl.state.mode {
+            InteractionMode::Input(InputKind::Form { buffer, semantic_ref }) => {
+                assert_eq!(semantic_ref, &name);
+                *buffer = "Ada".into();
+            }
+            other => panic!("expected second form field, got {other:?}"),
+        }
+
+        // Enter submits: both values written, then form submit.
+        ctl.submit_form_input(&name, "Ada").expect("submit");
+        assert!(ctl.state.lifecycle.is_loading());
+        ctl.acknowledge_loading_frame();
+        ctl.perform_pending_page_action(&mut driver).expect("run");
+
+        assert!(
+            driver.filled.iter().any(|(r, v)| r == email.as_str() && v == "a@b.co"),
+            "email should be written before submit: {:?}",
+            driver.filled
+        );
+        assert!(
+            driver.filled.iter().any(|(r, v)| r == name.as_str() && v == "Ada"),
+            "name should be written on submit: {:?}",
+            driver.filled
+        );
+        assert!(
+            ctl.state.view.pending_form_values.is_empty(),
+            "pending cleared after capture"
         );
     }
 }

@@ -25,6 +25,7 @@
 - Show TUI search in the footer like Vim: `/{buffer}` while typing and `/{pattern}  n/m` while a search remains active (not in the header URL bar).
 - Show link-hint mode (`f` / `F` + typed keys) in the footer cmdline instead of the header.
 - Replace header lifecycle words (`ready`/`load`/`err`) with single glyphs (`●`/`◐`/`✕`); detail stays in the footer.
+- Multi-field TUI forms: Tab stashes field values; Enter writes all staged fields then submits (`requestSubmit`) and recaptures the resulting page like Chrome.
 
 ### Fixed
 
