@@ -67,7 +67,7 @@ fn draw_chrome(frame: &mut Frame, area: Rect, controller: &Controller, theme: &T
             theme.chrome_hist_disabled()
         },
     ));
-    spans.push(Span::raw(" "));
+    spans.push(Span::styled(" ", theme.chrome_bar()));
     spans.push(Span::styled(
         if state.can_go_forward { "▶" } else { "▷" },
         if state.can_go_forward {
@@ -76,7 +76,7 @@ fn draw_chrome(frame: &mut Frame, area: Rect, controller: &Controller, theme: &T
             theme.chrome_hist_disabled()
         },
     ));
-    spans.push(Span::raw(" "));
+    spans.push(Span::styled(" ", theme.chrome_bar()));
 
     // Search + link-hint live in the footer cmdline, not the location bar.
     let (location, location_style) = match &state.mode {
@@ -91,9 +91,9 @@ fn draw_chrome(frame: &mut Frame, area: Rect, controller: &Controller, theme: &T
         | InteractionMode::Normal => {
             let url = state.url();
             if url.is_empty() {
-                (String::new(), theme.muted())
+                (String::new(), theme.bar_muted())
             } else {
-                (url.to_string(), theme.muted())
+                (url.to_string(), theme.bar_muted())
             }
         }
     };
@@ -136,14 +136,15 @@ fn draw_chrome(frame: &mut Frame, area: Rect, controller: &Controller, theme: &T
     // Pad then right cluster so flags sit at the trailing edge.
     let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
     let pad = width.saturating_sub(used + right_plain.chars().count());
-    if pad > 0 && !right_parts.is_empty() {
-        spans.push(Span::raw(" ".repeat(pad)));
+    if pad > 0 {
+        // Spaces inherit the inverted bar fill so the header reads as a solid strip.
+        spans.push(Span::styled(" ".repeat(pad), theme.chrome_bar()));
     } else if !right_parts.is_empty() {
-        spans.push(Span::raw(" "));
+        spans.push(Span::styled(" ", theme.chrome_bar()));
     }
     for (i, (text, style)) in right_parts.into_iter().enumerate() {
         if i > 0 {
-            spans.push(Span::raw(" "));
+            spans.push(Span::styled(" ", theme.chrome_bar()));
         }
         spans.push(Span::styled(text.to_string(), style));
     }
@@ -151,11 +152,11 @@ fn draw_chrome(frame: &mut Frame, area: Rect, controller: &Controller, theme: &T
     // Hard clip if we still overflow (narrow terminals).
     let plain: String = spans.iter().map(|s| s.content.as_ref()).collect();
     let line = if plain.chars().count() > width {
-        Line::from(Span::styled(truncate(&plain, width), theme.base()))
+        Line::from(Span::styled(truncate(&plain, width), theme.chrome_bar()))
     } else {
         Line::from(spans)
     };
-    frame.render_widget(Paragraph::new(line), area);
+    frame.render_widget(Paragraph::new(line).style(theme.chrome_bar()), area);
 }
 
 fn draw_content(frame: &mut Frame, area: Rect, controller: &Controller, theme: &TuiTheme) {
@@ -285,7 +286,7 @@ fn draw_content_scrollbar(
         .track_symbol(Some("│"))
         .thumb_symbol("▐")
         .track_style(theme.muted())
-        .thumb_style(theme.chrome_mode());
+        .thumb_style(theme.base().fg(ratatui::style::Color::Green));
 
     frame.render_stateful_widget(scrollbar, area, &mut sb_state);
 }
@@ -305,19 +306,19 @@ fn draw_status(frame: &mut Frame, area: Rect, controller: &Controller, theme: &T
             Lifecycle::Loading { action } => {
                 spans.push(Span::styled(
                     format!("loading:{action}"),
-                    theme.status_loading(),
+                    theme.bar_status_loading(),
                 ));
             }
             Lifecycle::Error { action, message } => {
                 spans.push(Span::styled(
                     format!("error:{action}: {message}"),
-                    theme.status_error(),
+                    theme.bar_status_error(),
                 ));
             }
             Lifecycle::Ready => {
                 spans.push(Span::styled(
                     format!("rev {}", state.revision()),
-                    theme.muted(),
+                    theme.bar_muted(),
                 ));
             }
         }
@@ -328,20 +329,20 @@ fn draw_status(frame: &mut Frame, area: Rect, controller: &Controller, theme: &T
         match &state.lifecycle {
             Lifecycle::Loading { action } => {
                 if !spans.is_empty() {
-                    spans.push(Span::raw(" │ "));
+                    spans.push(Span::styled(" │ ", theme.chrome_bar()));
                 }
                 spans.push(Span::styled(
                     format!("loading:{action}"),
-                    theme.status_loading(),
+                    theme.bar_status_loading(),
                 ));
             }
             Lifecycle::Error { action, message } => {
                 if !spans.is_empty() {
-                    spans.push(Span::raw(" │ "));
+                    spans.push(Span::styled(" │ ", theme.chrome_bar()));
                 }
                 spans.push(Span::styled(
                     format!("error:{action}: {message}"),
-                    theme.status_error(),
+                    theme.bar_status_error(),
                 ));
             }
             Lifecycle::Ready => {}
@@ -354,38 +355,43 @@ fn draw_status(frame: &mut Frame, area: Rect, controller: &Controller, theme: &T
             || (msg == "pattern not found" && !state.view.search_query.is_empty());
         if !redundant {
             if !spans.is_empty() {
-                spans.push(Span::raw(" │ "));
+                spans.push(Span::styled(" │ ", theme.chrome_bar()));
             }
             let style = if msg.starts_with("dismissed:") || msg.contains("not found") {
-                theme.muted()
+                theme.bar_muted()
             } else if msg.starts_with("wrap:") {
                 theme.chrome_wrap()
             } else {
-                theme.status_ok()
+                theme.bar_status_ok()
             };
             spans.push(Span::styled(msg.clone(), style));
         }
     }
     if let Some(fb) = &state.clipboard_fallback {
         if !spans.is_empty() {
-            spans.push(Span::raw(" │ "));
+            spans.push(Span::styled(" │ ", theme.chrome_bar()));
         }
         let preview: String = fb.chars().take(32).collect();
         spans.push(Span::styled(
             format!("clip-fallback:{preview}"),
-            theme.muted(),
+            theme.bar_muted(),
         ));
     }
+
+    // Pad to full width so reverse video fills the footer as a solid bar.
+    let width = area.width as usize;
+    let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+    if used < width {
+        spans.push(Span::styled(" ".repeat(width - used), theme.chrome_bar()));
+    }
+
     let plain: String = spans.iter().map(|s| s.content.as_ref()).collect();
-    let line = if plain.chars().count() > area.width as usize {
-        Line::from(Span::styled(
-            truncate(&plain, area.width as usize),
-            theme.base(),
-        ))
+    let line = if plain.chars().count() > width {
+        Line::from(Span::styled(truncate(&plain, width), theme.chrome_bar()))
     } else {
         Line::from(spans)
     };
-    frame.render_widget(Paragraph::new(line), area);
+    frame.render_widget(Paragraph::new(line).style(theme.chrome_bar()), area);
 }
 
 /// Footer cmdline owner: link-hint or search (hint wins while active).
@@ -446,7 +452,7 @@ fn search_status_line(
         format!("/{query}  {n}/{total}")
     };
     let style = if total == 0 {
-        theme.status_error()
+        theme.bar_status_error()
     } else {
         theme.chrome_mode()
     };
