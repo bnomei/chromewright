@@ -54,8 +54,10 @@ pub enum Action {
     CloseTab,
     /// `t` — open a new tab.
     NewTab,
-    /// `o` — open URL entry prompt.
+    /// `o` — open URL entry prompt with an empty buffer (new location).
     OpenUrl,
+    /// `O` — open URL entry prompt prefilled with the current URL for editing.
+    EditUrl,
     /// `/` — forward search by exact semantic content.
     Search,
     /// `n` — repeat the last forward search.
@@ -111,6 +113,7 @@ impl Action {
             Self::CloseTab => "close_tab",
             Self::NewTab => "new_tab",
             Self::OpenUrl => "open_url",
+            Self::EditUrl => "edit_url",
             Self::Search => "search",
             Self::SearchNext => "search_next",
             Self::SearchPrevious => "search_previous",
@@ -152,6 +155,7 @@ impl Action {
             "close_tab" => Some(Self::CloseTab),
             "new_tab" => Some(Self::NewTab),
             "open_url" => Some(Self::OpenUrl),
+            "edit_url" => Some(Self::EditUrl),
             "search" => Some(Self::Search),
             "search_next" => Some(Self::SearchNext),
             "search_previous" => Some(Self::SearchPrevious),
@@ -182,7 +186,6 @@ impl Action {
             Self::HistoryBack
                 | Self::HistoryForward
                 | Self::Reload
-                | Self::OpenUrl
                 | Self::Confirm
                 | Self::LinkHintsFollow
                 | Self::LinkHintsNewTab
@@ -194,7 +197,7 @@ impl Action {
     }
 }
 
-const ALL_ACTIONS: [Action; 35] = [
+const ALL_ACTIONS: [Action; 36] = [
     Action::LinkHintsFollow,
     Action::LinkHintsNewTab,
     Action::ScrollDown,
@@ -216,6 +219,7 @@ const ALL_ACTIONS: [Action; 35] = [
     Action::CloseTab,
     Action::NewTab,
     Action::OpenUrl,
+    Action::EditUrl,
     Action::Search,
     Action::SearchNext,
     Action::SearchPrevious,

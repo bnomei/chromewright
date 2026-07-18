@@ -268,6 +268,10 @@ impl Dispatcher {
                 controller.enter_url_input();
                 DispatchOutcome::Redraw
             }
+            Action::EditUrl => {
+                controller.enter_url_edit();
+                DispatchOutcome::Redraw
+            }
             Action::Search => {
                 controller.enter_search();
                 DispatchOutcome::Redraw

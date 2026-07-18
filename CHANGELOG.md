@@ -31,6 +31,7 @@
 - Add prose-only heading spacing (2 lines above h1/h2, 1 above h3+, 2 after h1 unless h2 follows); spacer rows are non-selectable and omitted in structure mode.
 - Collapse TUI chrome to a single browser-like header bar (history, location, title, status flags) using color only.
 - Add `Ctrl-d` / `Ctrl-u` to move selection by half a page (`d`/`u` remain view-only pan).
+- Add `O` (`edit_url`) to open the location bar prefilled with the current URL for editing; `o` still starts empty.
 
 ## 0.7.1 - 2026-06-28
 

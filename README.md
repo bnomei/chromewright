@@ -217,7 +217,8 @@ Keyboard bindings are not shown in the terminal chrome. Defaults are Vimari-comp
 | `q` | `prev_tab` | Switch to the previous tab. |
 | `x` | `close_tab` | Close the current tab. |
 | `t` | `new_tab` | Open a new tab. |
-| `o` | `open_url` | Open the URL entry prompt. |
+| `o` | `open_url` | Open the URL entry prompt with an empty buffer. |
+| `O` | `edit_url` | Open the URL entry prompt prefilled with the current address (edit from the end). |
 | `/` | `search` | Start forward search by exact semantic content. |
 | `n` | `search_next` | Repeat the last search forward. |
 | `N` | `search_previous` | Repeat the last search backward. |

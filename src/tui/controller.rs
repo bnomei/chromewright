@@ -1017,17 +1017,28 @@ impl Controller {
         Some(sel.as_str().to_string())
     }
 
-    /// Enter URL-bar input with an empty buffer (never prefill the current URL).
+    /// Enter URL-bar input with an empty buffer (`o` — type a fresh location).
     pub fn enter_url_input(&mut self) {
         if self.state.lifecycle.is_loading() {
             return;
         }
-        // Opening a location prompt starts a new navigation. Reusing the
-        // current URL both hides the mode change and causes typed URLs to be
-        // appended to it rather than replacing it.
+        // Empty buffer so typed characters replace rather than append to the
+        // current address (see also `enter_url_edit` for prefilled editing).
         self.state.mode = InteractionMode::Input(InputKind::Url {
             buffer: String::new(),
         });
+    }
+
+    /// Enter URL-bar input prefilled with the current page URL (`O`).
+    ///
+    /// The buffer ends at the last character so further typing extends the
+    /// address (backspace edits from the end). Empty when there is no page yet.
+    pub fn enter_url_edit(&mut self) {
+        if self.state.lifecycle.is_loading() {
+            return;
+        }
+        let buffer = self.state.url().to_string();
+        self.state.mode = InteractionMode::Input(InputKind::Url { buffer });
     }
 
     /// Enter forward-search input mode (`/`).
@@ -1421,6 +1432,21 @@ mod tests {
             ctl.state.mode,
             InteractionMode::Input(InputKind::Url { ref buffer }) if buffer.is_empty()
         ));
+    }
+
+    #[test]
+    fn edit_url_prefills_current_address() {
+        let mut ctl = Controller::new();
+        ctl.state
+            .publish_page(text_doc("1", "t", "one"));
+        assert_eq!(ctl.state.url(), "https://example.com/");
+        ctl.enter_url_edit();
+        match &ctl.state.mode {
+            InteractionMode::Input(InputKind::Url { buffer }) => {
+                assert_eq!(buffer, "https://example.com/");
+            }
+            other => panic!("expected URL input, got {other:?}"),
+        }
     }
 
     #[test]
