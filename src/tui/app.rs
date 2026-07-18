@@ -274,8 +274,8 @@ fn run_loop(
     loop {
         controller.synchronize_companion_state();
         let size = terminal.size().map_err(|e| e.to_string())?;
-        // Content area is total height minus chrome (2) and status (1).
-        let content_h = size.height.saturating_sub(3) as usize;
+        // Content area is total height minus chrome (1) and status (1).
+        let content_h = size.height.saturating_sub(2) as usize;
         controller.set_viewport(size.width as usize, content_h.max(1));
 
         terminal

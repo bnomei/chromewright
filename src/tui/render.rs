@@ -9,6 +9,7 @@ use crate::tui::state::{InputKind, InteractionMode, Lifecycle};
 use crate::tui::theme::TuiTheme;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
@@ -19,7 +20,7 @@ pub fn draw(frame: &mut Frame, controller: &Controller) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(2), // chrome
+            Constraint::Length(1), // chrome (single browser-like bar)
             Constraint::Min(1),    // content
             Constraint::Length(1), // status
         ])
@@ -34,79 +35,134 @@ pub fn draw(frame: &mut Frame, controller: &Controller) {
     }
 }
 
+/// Single-line browser chrome: history · location · title · flags (color only).
 fn draw_chrome(frame: &mut Frame, area: Rect, controller: &Controller, theme: &TuiTheme) {
     let state = &controller.state;
-    let mode = state.mode_label();
-    let lifecycle = state.lifecycle.status_label();
+    let width = area.width as usize;
+    if width == 0 {
+        return;
+    }
+
     let lifecycle_style = match &state.lifecycle {
         Lifecycle::Ready => theme.chrome_ready(),
         Lifecycle::Loading { .. } => theme.chrome_loading(),
         Lifecycle::Error { .. } => theme.chrome_error(),
     };
 
-    let mut line1_spans = vec![
-        Span::styled(format!("[{mode}]"), theme.chrome_mode()),
-        Span::raw(" "),
-        Span::styled(format!("[{lifecycle}]"), lifecycle_style),
-    ];
-    if state.view.wrap {
-        line1_spans.push(Span::styled(" wrap", theme.chrome_wrap()));
-    }
-    if state.view.projection.is_structure() {
-        line1_spans.push(Span::styled(" struct", theme.chrome_wrap()));
-    }
-    line1_spans.push(Span::raw(" "));
-    line1_spans.push(Span::styled(
-        if state.can_go_back { "←●" } else { "←○" },
+    // Left: back/forward + location (or active prompt).
+    let mut spans: Vec<Span> = Vec::new();
+    spans.push(Span::styled(
+        if state.can_go_back { "◀" } else { "◁" },
         if state.can_go_back {
             theme.chrome_hist_enabled()
         } else {
             theme.chrome_hist_disabled()
         },
     ));
-    line1_spans.push(Span::raw(" "));
-    line1_spans.push(Span::styled(
-        if state.can_go_forward { "→●" } else { "→○" },
+    spans.push(Span::raw(" "));
+    spans.push(Span::styled(
+        if state.can_go_forward { "▶" } else { "▷" },
         if state.can_go_forward {
             theme.chrome_hist_enabled()
         } else {
             theme.chrome_hist_disabled()
         },
     ));
-    line1_spans.push(Span::raw("  "));
-    line1_spans.push(Span::styled(state.title().to_string(), theme.chrome_title()));
+    spans.push(Span::raw(" "));
 
-    let url_line = match &state.mode {
-        InteractionMode::Input(InputKind::Url { buffer }) => format!("URL> {buffer}"),
-        InteractionMode::Input(InputKind::Search { buffer }) => format!("/{buffer}"),
-        InteractionMode::Input(InputKind::Form { buffer, .. }) => format!("IN> {buffer}"),
-        InteractionMode::Hint(_) => format!("hint: {}", state.view.hint_buffer),
-        InteractionMode::Normal => state.url().to_string(),
-    };
-    let url_style = match &state.mode {
-        InteractionMode::Input(_) | InteractionMode::Hint(_) => theme.chrome_mode(),
-        InteractionMode::Normal => theme.muted(),
+    let (location, location_style) = match &state.mode {
+        InteractionMode::Input(InputKind::Url { buffer }) => {
+            (format!("URL {buffer}"), theme.chrome_mode())
+        }
+        InteractionMode::Input(InputKind::Search { buffer }) => {
+            (format!("/{buffer}"), theme.chrome_mode())
+        }
+        InteractionMode::Input(InputKind::Form { buffer, .. }) => {
+            (format!("IN {buffer}"), theme.chrome_mode())
+        }
+        InteractionMode::Hint(_) => (
+            format!("hint {}", state.view.hint_buffer),
+            theme.chrome_mode(),
+        ),
+        InteractionMode::Normal => {
+            let url = state.url();
+            if url.is_empty() {
+                (String::new(), theme.muted())
+            } else {
+                (url.to_string(), theme.muted())
+            }
+        }
     };
 
-    let line1_text: String = line1_spans.iter().map(|s| s.content.as_ref()).collect();
-    let line1 = if line1_text.chars().count() > area.width as usize {
-        // Fall back to truncated plain line when the chrome overflows.
-        Line::from(Span::styled(
-            truncate(&line1_text, area.width as usize),
-            theme.chrome_title(),
-        ))
+    // Right cluster: optional flags + lifecycle + mode (compact, colored).
+    let mut right_parts: Vec<(&str, Style)> = Vec::new();
+    if state.view.wrap {
+        right_parts.push(("wrap", theme.chrome_wrap()));
+    }
+    if state.view.projection.is_structure() {
+        right_parts.push(("dom", theme.chrome_wrap()));
+    }
+    let life = match &state.lifecycle {
+        Lifecycle::Ready => "ready",
+        Lifecycle::Loading { .. } => "load",
+        Lifecycle::Error { .. } => "err",
+    };
+    right_parts.push((life, lifecycle_style));
+    // Mode only when not Normal (keeps the bar quiet while browsing).
+    let mode = state.mode_label();
+    if mode != "Normal" {
+        right_parts.push((mode, theme.chrome_mode()));
+    }
+
+    let right_plain: String = right_parts
+        .iter()
+        .map(|(t, _)| *t)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let right_width = if right_plain.is_empty() {
+        0
     } else {
-        Line::from(line1_spans)
+        right_plain.chars().count() + 1 // leading space
     };
 
-    let para = Paragraph::new(vec![
-        line1,
-        Line::from(Span::styled(
-            truncate(&url_line, area.width as usize),
-            url_style,
-        )),
-    ]);
-    frame.render_widget(para, area);
+    // Middle: prefer URL; append title in dim text when space remains.
+    let left_plain_prefix = 4usize; // "◀ ▶ " roughly 4 cells
+    let budget = width.saturating_sub(left_plain_prefix + right_width);
+    let title = state.title();
+    let mut mid = location;
+    if !title.is_empty()
+        && matches!(state.mode, InteractionMode::Normal)
+        && mid.chars().count() + 3 + title.chars().count() <= budget
+    {
+        mid = format!("{mid} · {title}");
+    }
+    mid = truncate(&mid, budget);
+
+    spans.push(Span::styled(mid, location_style));
+
+    // Pad then right cluster so flags sit at the trailing edge.
+    let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+    let pad = width.saturating_sub(used + right_plain.chars().count());
+    if pad > 0 && !right_parts.is_empty() {
+        spans.push(Span::raw(" ".repeat(pad)));
+    } else if !right_parts.is_empty() {
+        spans.push(Span::raw(" "));
+    }
+    for (i, (text, style)) in right_parts.into_iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw(" "));
+        }
+        spans.push(Span::styled(text.to_string(), style));
+    }
+
+    // Hard clip if we still overflow (narrow terminals).
+    let plain: String = spans.iter().map(|s| s.content.as_ref()).collect();
+    let line = if plain.chars().count() > width {
+        Line::from(Span::styled(truncate(&plain, width), theme.base()))
+    } else {
+        Line::from(spans)
+    };
+    frame.render_widget(Paragraph::new(line), area);
 }
 
 fn draw_content(frame: &mut Frame, area: Rect, controller: &Controller, theme: &TuiTheme) {
@@ -339,20 +395,37 @@ fn truncate(s: &str, width: usize) -> String {
     }
 }
 
-/// Build chrome text lines for tests (no terminal).
+/// Build chrome text for tests (no terminal). Single browser-like bar.
 #[allow(dead_code)]
 pub fn chrome_lines(controller: &Controller) -> Vec<String> {
     let state = &controller.state;
+    let back = if state.can_go_back { "◀" } else { "◁" };
+    let fwd = if state.can_go_forward { "▶" } else { "▷" };
+    let life = match &state.lifecycle {
+        Lifecycle::Ready => "ready",
+        Lifecycle::Loading { .. } => "load",
+        Lifecycle::Error { .. } => "err",
+    };
+    let mut flags = Vec::new();
+    if state.view.wrap {
+        flags.push("wrap");
+    }
+    if state.view.projection.is_structure() {
+        flags.push("dom");
+    }
+    flags.push(life);
     let mode = state.mode_label();
-    let lifecycle = state.lifecycle.status_label();
-    let hist = format!(
-        "back={} forward={}",
-        state.can_go_back, state.can_go_forward
-    );
-    vec![
-        format!("[{mode}] [{lifecycle}] {hist} {}", state.title()),
-        state.url().to_string(),
-    ]
+    if mode != "Normal" {
+        flags.push(mode);
+    }
+    let mid = if state.title().is_empty() {
+        state.url().to_string()
+    } else if state.url().is_empty() {
+        state.title().to_string()
+    } else {
+        format!("{} · {}", state.url(), state.title())
+    };
+    vec![format!("{back} {fwd} {mid}  {}", flags.join(" "))]
 }
 
 #[cfg(test)]

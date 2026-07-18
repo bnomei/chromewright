@@ -29,6 +29,7 @@
 - Exit link-hint mode after a successful current-tab follow (`f`); new-tab hints (`F`) still chain until Esc.
 - Anchor the inspect panel under the selected block and refresh it as selection moves until Esc.
 - Add prose-only heading spacing (2 lines above h1/h2, 1 above h3+, 2 after h1 unless h2 follows); spacer rows are non-selectable and omitted in structure mode.
+- Collapse TUI chrome to a single browser-like header bar (history, location, title, status flags) using color only.
 
 ## 0.7.1 - 2026-06-28
 

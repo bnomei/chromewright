@@ -21,10 +21,6 @@ impl TuiTheme {
         Style::default()
     }
 
-    pub fn chrome_title(&self) -> Style {
-        self.base().add_modifier(Modifier::BOLD)
-    }
-
     pub fn chrome_mode(&self) -> Style {
         self.base()
             .fg(Color::Green)
