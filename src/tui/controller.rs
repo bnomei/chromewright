@@ -658,8 +658,12 @@ impl Controller {
         if self.state.lifecycle.is_loading() {
             return;
         }
-        let buffer = self.state.url().to_string();
-        self.state.mode = InteractionMode::Input(InputKind::Url { buffer });
+        // Opening a location prompt starts a new navigation. Reusing the
+        // current URL both hides the mode change and causes typed URLs to be
+        // appended to it rather than replacing it.
+        self.state.mode = InteractionMode::Input(InputKind::Url {
+            buffer: String::new(),
+        });
     }
 
     pub fn enter_search(&mut self) {
@@ -929,6 +933,19 @@ mod tests {
         assert!(ctl.has_pending_page_action());
         ctl.acknowledge_loading_frame();
         ctl.perform_pending_page_action(driver)
+    }
+
+    #[test]
+    fn open_url_starts_with_an_empty_location_buffer() {
+        let mut ctl = Controller::new();
+        ctl.state.publish_page(text_doc("1", "t", "one"));
+
+        ctl.enter_url_input();
+
+        assert!(matches!(
+            ctl.state.mode,
+            InteractionMode::Input(InputKind::Url { ref buffer }) if buffer.is_empty()
+        ));
     }
 
     #[test]
