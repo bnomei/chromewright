@@ -63,10 +63,22 @@ pub fn build_content_lines_with(
     projection: ContentProjection,
 ) -> Vec<ContentLine> {
     let mut lines = Vec::new();
-    for root in &document.roots {
-        push_component(root, 0, collapsed, projection, &mut lines);
-    }
+    push_siblings(&document.roots, 0, collapsed, projection, &mut lines);
     lines
+}
+
+/// Walk siblings with lookahead so heading spacing can see the next node.
+fn push_siblings(
+    children: &[SemanticComponent],
+    depth: usize,
+    collapsed: &HashSet<SemanticRef>,
+    projection: ContentProjection,
+    lines: &mut Vec<ContentLine>,
+) {
+    for (index, child) in children.iter().enumerate() {
+        let next = children.get(index + 1);
+        push_component(child, depth, collapsed, projection, next, lines);
+    }
 }
 
 /// Soft-wrap content lines to `width` columns (Unicode scalar count).
@@ -155,11 +167,67 @@ fn push_line(
     });
 }
 
+/// Blank spacer line for prose readability.
+///
+/// Never carries a `semantic_ref`, so j/k / search / hints skip these rows.
+fn push_blank_lines(lines: &mut Vec<ContentLine>, count: usize) {
+    for _ in 0..count {
+        lines.push(ContentLine {
+            text: String::new(),
+            semantic_ref: None,
+            kind: None,
+            heading_level: None,
+            block_start: false,
+        });
+    }
+}
+
+fn has_selectable_line(lines: &[ContentLine]) -> bool {
+    lines.iter().any(|l| l.semantic_ref.is_some())
+}
+
+/// Blank (non-selectable) lines already trailing at the end of `lines`.
+fn trailing_blank_count(lines: &[ContentLine]) -> usize {
+    lines
+        .iter()
+        .rev()
+        .take_while(|l| l.semantic_ref.is_none() && l.text.is_empty())
+        .count()
+}
+
+/// Ensure at least `needed` blank lines before the next content line (prose only).
+fn ensure_blank_before(lines: &mut Vec<ContentLine>, needed: usize) {
+    if needed == 0 || !has_selectable_line(lines) {
+        return;
+    }
+    let have = trailing_blank_count(lines);
+    if have < needed {
+        push_blank_lines(lines, needed - have);
+    }
+}
+
+fn heading_level_of(component: &SemanticComponent) -> Option<u8> {
+    if component.kind == SemanticKind::Heading {
+        Some(component.attrs.heading_level.unwrap_or(2).clamp(1, 6))
+    } else {
+        None
+    }
+}
+
+/// Spacing above a heading in prose: h1/h2 → 2, h3+ → 1 (none at document start).
+fn blanks_before_heading(level: u8) -> usize {
+    match level {
+        1 | 2 => 2,
+        _ => 1,
+    }
+}
+
 fn push_component(
     component: &SemanticComponent,
     depth: usize,
     collapsed: &HashSet<SemanticRef>,
     projection: ContentProjection,
+    next_sibling: Option<&SemanticComponent>,
     lines: &mut Vec<ContentLine>,
 ) {
     // Prose is fully flat; structure keeps DOM-like depth indent.
@@ -184,9 +252,13 @@ fn push_component(
             }
             // Prose: omit landmark chrome; still walk children (collapse only in structure).
             if projection.is_prose() || !is_collapsed {
-                for child in &component.children {
-                    push_component(child, depth + 1, collapsed, projection, lines);
-                }
+                push_siblings(
+                    &component.children,
+                    depth + 1,
+                    collapsed,
+                    projection,
+                    lines,
+                );
             }
         }
         SemanticKind::Group => {
@@ -196,16 +268,33 @@ fn push_component(
                 push_line(lines, format!("{indent}[{label}]"), component, true);
             }
             if projection.is_prose() || !is_collapsed {
-                for child in &component.children {
-                    push_component(child, depth + 1, collapsed, projection, lines);
-                }
+                push_siblings(
+                    &component.children,
+                    depth + 1,
+                    collapsed,
+                    projection,
+                    lines,
+                );
             }
         }
         SemanticKind::Heading => {
             let level = component.attrs.heading_level.unwrap_or(2).clamp(1, 6);
             let hashes = "#".repeat(level as usize);
             let text = display_text(component);
+            // Heading breathing room is prose-only; structure stays dense/DOM-like.
+            // Spacers never get a semantic_ref (not selectable).
+            if projection.is_prose() {
+                ensure_blank_before(lines, blanks_before_heading(level));
+            }
             push_line(lines, format!("{indent}{hashes} {text}"), component, true);
+            // Two blank lines after h1 unless the next sibling is an h2
+            // (h2 already brings two lines of leading space).
+            if projection.is_prose() && level == 1 {
+                let next_is_h2 = next_sibling.is_some_and(|n| heading_level_of(n) == Some(2));
+                if !next_is_h2 {
+                    push_blank_lines(lines, 2usize.saturating_sub(trailing_blank_count(lines)));
+                }
+            }
         }
         SemanticKind::Text => {
             let text = display_text(component);
@@ -229,7 +318,9 @@ fn push_component(
             }
             if projection.is_prose() || !is_collapsed {
                 let mut index = 1usize;
-                for child in &component.children {
+                let children = &component.children;
+                for (child_index, child) in children.iter().enumerate() {
+                    let next = children.get(child_index + 1);
                     if child.kind == SemanticKind::ListItem {
                         let bullet = if ordered {
                             format!("{index}.")
@@ -245,19 +336,18 @@ fn push_component(
                         );
                         let item_collapsed = collapsed.contains(&child.semantic_ref);
                         if projection.is_prose() || !item_collapsed {
-                            for nested in &child.children {
-                                push_component(
-                                    nested,
-                                    depth + 1,
-                                    collapsed,
-                                    projection,
-                                    lines,
-                                );
-                            }
+                            push_siblings(
+                                &child.children,
+                                depth + 1,
+                                collapsed,
+                                projection,
+                                lines,
+                            );
                         }
                         index += 1;
+                        let _ = next; // list items use sibling walk only for nested non-items
                     } else {
-                        push_component(child, depth + 1, collapsed, projection, lines);
+                        push_component(child, depth + 1, collapsed, projection, next, lines);
                     }
                 }
             }
@@ -271,9 +361,13 @@ fn push_component(
                 true,
             );
             if projection.is_prose() || !is_collapsed {
-                for child in &component.children {
-                    push_component(child, depth + 1, collapsed, projection, lines);
-                }
+                push_siblings(
+                    &component.children,
+                    depth + 1,
+                    collapsed,
+                    projection,
+                    lines,
+                );
             }
         }
         SemanticKind::Link => {
@@ -481,6 +575,7 @@ pub fn rendered_block_text(
         0,
         &collapsed,
         ContentProjection::Structure,
+        None,
         &mut lines,
     );
     Some(
@@ -587,6 +682,133 @@ mod tests {
     #[test]
     fn ordinary_press_content_is_not_a_shortcut_legend() {
         assert!(!contains_shortcut_legend("Press releases"));
+    }
+
+    fn heading_node(level: u8, id: &str, text: &str) -> RawSemanticNode {
+        RawSemanticNode {
+            kind: "heading".into(),
+            tag: Some(format!("h{level}")),
+            id: Some(id.into()),
+            unique_id: true,
+            selector: None,
+            text: Some(text.into()),
+            href: None,
+            landmark: None,
+            heading_level: Some(level),
+            ordered: None,
+            label: Some(text.into()),
+            src: None,
+            alt: None,
+            name: None,
+            value: None,
+            input_type: None,
+            placeholder: None,
+            checked: None,
+            disabled: None,
+            required: None,
+            readonly: None,
+            multiple: None,
+            button_type: None,
+            options: vec![],
+            children: vec![],
+        }
+    }
+
+    fn text_node(id: &str, text: &str) -> RawSemanticNode {
+        RawSemanticNode {
+            kind: "text".into(),
+            tag: Some("p".into()),
+            id: Some(id.into()),
+            unique_id: true,
+            selector: None,
+            text: Some(text.into()),
+            href: None,
+            landmark: None,
+            heading_level: None,
+            ordered: None,
+            label: None,
+            src: None,
+            alt: None,
+            name: None,
+            value: None,
+            input_type: None,
+            placeholder: None,
+            checked: None,
+            disabled: None,
+            required: None,
+            readonly: None,
+            multiple: None,
+            button_type: None,
+            options: vec![],
+            children: vec![],
+        }
+    }
+
+    #[test]
+    fn prose_heading_spacing_and_non_selectable_blanks() {
+        let doc = normalize_fixture(
+            meta(),
+            vec![
+                heading_node(1, "h1", "Title"),
+                text_node("p1", "body"),
+                heading_node(2, "h2", "Section"),
+                text_node("p2", "more"),
+                heading_node(3, "h3", "Sub"),
+            ],
+        )
+        .expect("doc");
+        let empty = HashSet::new();
+        let prose = build_content_lines_with(&doc, &empty, ContentProjection::Prose);
+        let structure = build_content_lines_with(&doc, &empty, ContentProjection::Structure);
+
+        // Structure: dense, no blank spacers.
+        assert!(
+            structure
+                .iter()
+                .all(|l| l.semantic_ref.is_some() || !l.text.is_empty()),
+            "structure must not insert blank spacers: {structure:?}"
+        );
+
+        // Helper: index of selectable heading lines in prose.
+        let idx = |needle: &str| {
+            prose
+                .iter()
+                .position(|l| l.text.contains(needle))
+                .unwrap_or_else(|| panic!("missing {needle} in {prose:?}"))
+        };
+        let h1 = idx("# Title");
+        let body = idx("body");
+        let h2 = idx("## Section");
+        let h3 = idx("### Sub");
+
+        // h1 at start: no leading blanks.
+        assert_eq!(h1, 0);
+        // 2 blanks after h1 before body.
+        assert_eq!(body - h1 - 1, 2);
+        // 2 blanks before h2.
+        assert_eq!(h2 - body - 1, 2);
+        // 1 blank before h3.
+        let more = idx("more");
+        assert_eq!(h3 - more - 1, 1);
+
+        // Blank spacers are never selectable.
+        for line in &prose {
+            if line.text.is_empty() {
+                assert!(line.semantic_ref.is_none());
+            }
+        }
+
+        // h1 immediately followed by h2: no extra after-h1 blanks (h2 provides leading).
+        let h1h2 = normalize_fixture(
+            meta(),
+            vec![heading_node(1, "a", "A"), heading_node(2, "b", "B")],
+        )
+        .expect("doc");
+        let lines = build_content_lines_with(&h1h2, &empty, ContentProjection::Prose);
+        let i1 = lines.iter().position(|l| l.text.contains("# A")).unwrap();
+        let i2 = lines.iter().position(|l| l.text.contains("## B")).unwrap();
+        // Only the 2 leading blanks for h2 between them (not 2 after + 2 before).
+        assert_eq!(i2 - i1 - 1, 2);
     }
 
     #[test]
