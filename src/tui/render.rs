@@ -11,7 +11,9 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::widgets::{
+    Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap,
+};
 
 /// Draw one frame of the terminal browser.
 pub fn draw(frame: &mut Frame, controller: &Controller) {
@@ -161,7 +163,20 @@ fn draw_content(frame: &mut Frame, area: Rect, controller: &Controller, theme: &
     let lines = controller.content_lines();
     let scroll = state.view.scroll_y;
     let height = area.height as usize;
-    let width = area.width as usize;
+    // Always reserve one right-edge column for an Amp-style scrollbar track so
+    // wrap width and layout stay stable as content grows/shrinks.
+    let show_scrollbar = area.width >= 2;
+    let text_area = if show_scrollbar {
+        Rect {
+            x: area.x,
+            y: area.y,
+            width: area.width.saturating_sub(1),
+            height: area.height,
+        }
+    } else {
+        area
+    };
+    let width = text_area.width as usize;
     let hscroll = if state.view.wrap {
         0
     } else {
@@ -232,7 +247,47 @@ fn draw_content(frame: &mut Frame, area: Rect, controller: &Controller, theme: &
         text_lines.push(Line::from(Span::styled(empty, style)));
     }
 
-    frame.render_widget(Paragraph::new(text_lines).style(theme.base()), area);
+    frame.render_widget(Paragraph::new(text_lines).style(theme.base()), text_area);
+
+    if show_scrollbar {
+        draw_content_scrollbar(frame, area, lines.len(), scroll, height, theme);
+    }
+}
+
+/// Thin Amp-like vertical scrollbar on the right edge of the content pane.
+///
+/// Track is a dim continuous line; thumb is a brighter half-block segment.
+/// When content fits the viewport the track still draws and the thumb spans
+/// the full height (nothing to scroll).
+fn draw_content_scrollbar(
+    frame: &mut Frame,
+    area: Rect,
+    content_len: usize,
+    scroll_y: usize,
+    viewport_height: usize,
+    theme: &TuiTheme,
+) {
+    // content_length is the scrollable range (items beyond the viewport).
+    // Use at least 1 so the widget always paints a track+thumb.
+    let scrollable = content_len.saturating_sub(viewport_height.max(1)).max(1);
+    let position = if content_len <= viewport_height {
+        0
+    } else {
+        scroll_y.min(content_len.saturating_sub(viewport_height))
+    };
+    let mut sb_state = ScrollbarState::new(scrollable)
+        .position(position)
+        .viewport_content_length(viewport_height.max(1));
+
+    let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+        .begin_symbol(None)
+        .end_symbol(None)
+        .track_symbol(Some("│"))
+        .thumb_symbol("▐")
+        .track_style(theme.muted())
+        .thumb_style(theme.chrome_mode());
+
+    frame.render_stateful_widget(scrollbar, area, &mut sb_state);
 }
 
 fn draw_status(frame: &mut Frame, area: Rect, controller: &Controller, theme: &TuiTheme) {
