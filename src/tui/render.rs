@@ -76,12 +76,10 @@ fn draw_chrome(frame: &mut Frame, area: Rect, controller: &Controller, theme: &T
     ));
     spans.push(Span::raw(" "));
 
+    // Search lives in the footer (Vim cmdline), not the location bar.
     let (location, location_style) = match &state.mode {
         InteractionMode::Input(InputKind::Url { buffer }) => {
             (format!("URL {buffer}"), theme.chrome_mode())
-        }
-        InteractionMode::Input(InputKind::Search { buffer }) => {
-            (format!("/{buffer}"), theme.chrome_mode())
         }
         InteractionMode::Input(InputKind::Form { buffer, .. }) => {
             (format!("IN {buffer}"), theme.chrome_mode())
@@ -90,7 +88,7 @@ fn draw_chrome(frame: &mut Frame, area: Rect, controller: &Controller, theme: &T
             format!("hint {}", state.view.hint_buffer),
             theme.chrome_mode(),
         ),
-        InteractionMode::Normal => {
+        InteractionMode::Input(InputKind::Search { .. }) | InteractionMode::Normal => {
             let url = state.url();
             if url.is_empty() {
                 (String::new(), theme.muted())
@@ -101,6 +99,7 @@ fn draw_chrome(frame: &mut Frame, area: Rect, controller: &Controller, theme: &T
     };
 
     // Right cluster: lifecycle + non-Normal mode only (no wrap/structure flags).
+    // Search mode is shown in the footer cmdline, not here.
     let mut right_parts: Vec<(&str, Style)> = Vec::new();
     let life = match &state.lifecycle {
         Lifecycle::Ready => "ready",
@@ -108,9 +107,8 @@ fn draw_chrome(frame: &mut Frame, area: Rect, controller: &Controller, theme: &T
         Lifecycle::Error { .. } => "err",
     };
     right_parts.push((life, lifecycle_style));
-    // Mode only when not Normal (keeps the bar quiet while browsing).
     let mode = state.mode_label();
-    if mode != "Normal" {
+    if mode != "Normal" && mode != "Search" {
         right_parts.push((mode, theme.chrome_mode()));
     }
 
@@ -247,38 +245,80 @@ fn draw_content(frame: &mut Frame, area: Rect, controller: &Controller, theme: &
 fn draw_status(frame: &mut Frame, area: Rect, controller: &Controller, theme: &TuiTheme) {
     let state = &controller.state;
     let mut spans = Vec::new();
-    match &state.lifecycle {
-        Lifecycle::Loading { action } => {
-            spans.push(Span::styled(
-                format!("loading:{action}"),
-                theme.status_loading(),
-            ));
-        }
-        Lifecycle::Error { action, message } => {
-            spans.push(Span::styled(
-                format!("error:{action}: {message}"),
-                theme.status_error(),
-            ));
-        }
-        Lifecycle::Ready => {
-            spans.push(Span::styled(
-                format!("rev {}", state.revision()),
-                theme.muted(),
-            ));
+
+    // Vim-style search cmdline takes the footer while typing or while a pattern
+    // remains active (query set). Other status rides after it.
+    if let Some((search_text, search_style)) = search_status_line(state, theme) {
+        spans.push(Span::styled(search_text, search_style));
+    } else {
+        match &state.lifecycle {
+            Lifecycle::Loading { action } => {
+                spans.push(Span::styled(
+                    format!("loading:{action}"),
+                    theme.status_loading(),
+                ));
+            }
+            Lifecycle::Error { action, message } => {
+                spans.push(Span::styled(
+                    format!("error:{action}: {message}"),
+                    theme.status_error(),
+                ));
+            }
+            Lifecycle::Ready => {
+                spans.push(Span::styled(
+                    format!("rev {}", state.revision()),
+                    theme.muted(),
+                ));
+            }
         }
     }
-    if let Some(msg) = &state.view.status_message {
-        if !spans.is_empty() {
-            spans.push(Span::raw(" │ "));
+
+    // When search owns the bar, still surface lifecycle errors on the right.
+    if matches!(
+        state.mode,
+        InteractionMode::Input(InputKind::Search { .. })
+    ) || !state.view.search_query.is_empty()
+    {
+        match &state.lifecycle {
+            Lifecycle::Loading { action } => {
+                if !spans.is_empty() {
+                    spans.push(Span::raw(" │ "));
+                }
+                spans.push(Span::styled(
+                    format!("loading:{action}"),
+                    theme.status_loading(),
+                ));
+            }
+            Lifecycle::Error { action, message } => {
+                if !spans.is_empty() {
+                    spans.push(Span::raw(" │ "));
+                }
+                spans.push(Span::styled(
+                    format!("error:{action}: {message}"),
+                    theme.status_error(),
+                ));
+            }
+            Lifecycle::Ready => {}
         }
-        let style = if msg.starts_with("dismissed:") || msg.contains("not found") {
-            theme.muted()
-        } else if msg.starts_with("wrap:") {
-            theme.chrome_wrap()
-        } else {
-            theme.status_ok()
-        };
-        spans.push(Span::styled(msg.clone(), style));
+    }
+
+    if let Some(msg) = &state.view.status_message {
+        // Avoid duplicating match counts already shown as `/{q}  n/m`.
+        let redundant = msg.starts_with("search:")
+            || (msg == "pattern not found" && !state.view.search_query.is_empty());
+        if !redundant {
+            if !spans.is_empty() {
+                spans.push(Span::raw(" │ "));
+            }
+            let style = if msg.starts_with("dismissed:") || msg.contains("not found") {
+                theme.muted()
+            } else if msg.starts_with("wrap:") {
+                theme.chrome_wrap()
+            } else {
+                theme.status_ok()
+            };
+            spans.push(Span::styled(msg.clone(), style));
+        }
     }
     if let Some(fb) = &state.clipboard_fallback {
         if !spans.is_empty() {
@@ -300,6 +340,37 @@ fn draw_status(frame: &mut Frame, area: Rect, controller: &Controller, theme: &T
         Line::from(spans)
     };
     frame.render_widget(Paragraph::new(line), area);
+}
+
+/// Vim-style search indicator for the footer.
+///
+/// - While typing: `/{buffer}`
+/// - After submit with matches: `/{query}  n/m`
+/// - After submit with no matches: `/{query}  0/0`
+fn search_status_line(
+    state: &crate::tui::state::TuiState,
+    theme: &TuiTheme,
+) -> Option<(String, Style)> {
+    if let InteractionMode::Input(InputKind::Search { buffer }) = &state.mode {
+        return Some((format!("/{buffer}"), theme.chrome_mode()));
+    }
+    let query = state.view.search_query.as_str();
+    if query.is_empty() {
+        return None;
+    }
+    let total = state.view.search_matches.len();
+    let text = if total == 0 {
+        format!("/{query}  0/0")
+    } else {
+        let n = state.view.search_index.saturating_add(1).min(total);
+        format!("/{query}  {n}/{total}")
+    };
+    let style = if total == 0 {
+        theme.status_error()
+    } else {
+        theme.chrome_mode()
+    };
+    Some((text, style))
 }
 
 /// Draw the inspect panel just below the last visible line of the selection.
@@ -422,7 +493,8 @@ pub fn chrome_lines(controller: &Controller) -> Vec<String> {
     };
     let mut flags = vec![life];
     let mode = state.mode_label();
-    if mode != "Normal" {
+    // Search is footer-only (Vim cmdline), not header chrome.
+    if mode != "Normal" && mode != "Search" {
         flags.push(mode);
     }
     let mid = if state.title().is_empty() {
@@ -440,7 +512,9 @@ mod tests {
     use super::*;
     use crate::dom::DocumentMetadata;
     use crate::semantic::SemanticDocument;
+    use crate::semantic::SemanticRef;
     use crate::tui::content::contains_shortcut_legend;
+    use crate::tui::state::InputKind;
 
     #[test]
     fn chrome_has_no_shortcut_legend() {
@@ -458,6 +532,39 @@ mod tests {
         for line in chrome_lines(&ctl) {
             assert!(!contains_shortcut_legend(&line), "legend leaked: {line}");
         }
+    }
+
+    #[test]
+    fn search_status_shows_prompt_while_typing() {
+        let mut ctl = Controller::new();
+        ctl.state.mode = InteractionMode::Input(InputKind::Search {
+            buffer: "leo".into(),
+        });
+        let theme = TuiTheme::new();
+        let (text, _) = search_status_line(&ctl.state, &theme).expect("search prompt");
+        assert_eq!(text, "/leo");
+    }
+
+    #[test]
+    fn search_status_stays_while_pattern_active() {
+        let mut ctl = Controller::new();
+        ctl.state.view.search_query = "space".into();
+        ctl.state.view.search_matches = vec![
+            SemanticRef::from_opaque("r1"),
+            SemanticRef::from_opaque("r2"),
+            SemanticRef::from_opaque("r3"),
+        ];
+        ctl.state.view.search_index = 1;
+        let theme = TuiTheme::new();
+        let (text, _) = search_status_line(&ctl.state, &theme).expect("active search");
+        assert_eq!(text, "/space  2/3");
+    }
+
+    #[test]
+    fn search_status_absent_without_query() {
+        let ctl = Controller::new();
+        let theme = TuiTheme::new();
+        assert!(search_status_line(&ctl.state, &theme).is_none());
     }
 
     #[test]

@@ -72,7 +72,9 @@ the first visible descendant when the current ref has no prose line.
 
 Search follows Vim semantics: a new `/pattern` starts after the current
 selection and wraps at the end; `n` repeats forward, `N` repeats backward, and
-submitting an empty `/` prompt repeats the previous pattern. Bracketed paste is
+submitting an empty `/` prompt repeats the previous pattern. The footer hosts the
+search cmdline while typing (`/…`) and keeps `/{pattern}  n/m` while a search is
+active (cleared when the pattern is empty / no prior search). Bracketed paste is
 accepted only in URL, search, and form input modes and is bounded to 4096
 characters.
 

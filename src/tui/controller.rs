@@ -1155,11 +1155,16 @@ impl Controller {
         if let Some(line) = line_index_of(lines, &selected) {
             self.ensure_visible(line, lines.len());
         }
-        self.state.view.set_status(format!(
-            "search: {}/{}",
-            self.state.view.search_index + 1,
-            self.state.view.search_matches.len()
-        ));
+        // Match count lives in the footer (`/{query}  n/m`); clear stale status.
+        if self
+            .state
+            .view
+            .status_message
+            .as_deref()
+            .is_some_and(|m| m.starts_with("search:"))
+        {
+            self.state.view.clear_status();
+        }
         self.refresh_inspect_panel();
     }
 
