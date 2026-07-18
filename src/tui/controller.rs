@@ -756,16 +756,41 @@ impl Controller {
         &self,
         document: &SemanticDocument,
     ) -> Vec<crate::tui::content::ContentLine> {
-        let lines = build_content_lines_with(
+        let (overlay, editing) = self.form_display_overlay();
+        let lines = crate::tui::content::build_content_lines_with_overlay(
             document,
             &self.state.view.collapsed,
             self.state.view.projection,
+            overlay.as_ref(),
+            editing.as_ref(),
         );
         if self.state.view.wrap {
             crate::tui::content::wrap_content_lines(&lines, self.state.view.viewport_width.max(1))
         } else {
             lines
         }
+    }
+
+    /// Staged + active edit values for inline form display.
+    fn form_display_overlay(
+        &self,
+    ) -> (
+        Option<crate::tui::content::FormValueOverlay>,
+        Option<SemanticRef>,
+    ) {
+        let mut map = self.state.view.pending_form_values.clone();
+        let editing = if let InteractionMode::Input(InputKind::Form {
+            semantic_ref,
+            buffer,
+        }) = &self.state.mode
+        {
+            map.insert(semantic_ref.clone(), buffer.clone());
+            Some(semantic_ref.clone())
+        } else {
+            None
+        };
+        let overlay = if map.is_empty() { None } else { Some(map) };
+        (overlay, editing)
     }
 
     /// If selection is missing or has no line in the current projection, pick a
@@ -1245,7 +1270,8 @@ impl Controller {
     /// Start editing the current selection when it is a text-like form control.
     ///
     /// Returns `true` when form-input mode was entered. Checkboxes, radios,
-    /// buttons, and non-controls return `false` so callers can activate instead.
+    /// buttons, selects, and non-controls return `false` so callers can
+    /// activate / cycle instead.
     pub fn edit_selection_if_form(&mut self) -> bool {
         let Some(sel) = self.state.view.selection.clone() else {
             return false;
@@ -1260,6 +1286,67 @@ impl Controller {
             return false;
         }
         self.begin_form_edit(sel);
+        true
+    }
+
+    /// Cycle a selected `<select>` through its options (local staged value).
+    ///
+    /// Returns `true` when the selection was a select and the staged value moved.
+    /// Enter after cycling still goes through form submit / button activate.
+    pub fn cycle_select_if_selected(&mut self) -> bool {
+        let Some(sel) = self.state.view.selection.clone() else {
+            return false;
+        };
+        let (options, captured_value) = {
+            let Some(doc) = self.state.document() else {
+                return false;
+            };
+            let Ok(component) = doc.resolve(&sel) else {
+                return false;
+            };
+            if component.kind != crate::semantic::SemanticKind::Select {
+                return false;
+            }
+            let options: Vec<(String, String)> = component
+                .attrs
+                .options
+                .iter()
+                .map(|o| {
+                    (
+                        o.value.clone(),
+                        o.label
+                            .clone()
+                            .filter(|l| !l.is_empty())
+                            .unwrap_or_else(|| o.value.clone()),
+                    )
+                })
+                .collect();
+            (options, component.attrs.value.clone())
+        };
+        if options.is_empty() {
+            self.state.view.set_status("select has no options");
+            return true;
+        }
+        let current = self
+            .state
+            .view
+            .pending_form_values
+            .get(&sel)
+            .cloned()
+            .or(captured_value)
+            .unwrap_or_default();
+        let idx = options
+            .iter()
+            .position(|(v, _)| v == &current)
+            .unwrap_or(usize::MAX);
+        let next = if idx == usize::MAX {
+            0
+        } else {
+            (idx + 1) % options.len()
+        };
+        let (next_val, label) = options[next].clone();
+        self.state.view.pending_form_values.insert(sel, next_val);
+        self.state.view.set_status(format!("select: {label}"));
         true
     }
 
@@ -1450,11 +1537,14 @@ impl Controller {
     }
 }
 
-/// Text-like controls that open form-input mode (not checkbox/radio/button).
+/// Text-like controls that open form-input mode.
+///
+/// Checkboxes/radios toggle via activate; selects cycle via
+/// [`Controller::cycle_select_if_selected`]; buttons activate.
 fn is_text_editable_control(component: &crate::semantic::SemanticComponent) -> bool {
     use crate::semantic::SemanticKind;
     match component.kind {
-        SemanticKind::Textarea | SemanticKind::Select => true,
+        SemanticKind::Textarea => true,
         SemanticKind::Input => {
             let t = component
                 .attrs
@@ -1476,6 +1566,8 @@ fn is_text_editable_control(component: &crate::semantic::SemanticComponent) -> b
                     | "color"
             )
         }
+        // Select uses Enter to cycle options, not free-text edit.
+        SemanticKind::Select => false,
         _ => false,
     }
 }

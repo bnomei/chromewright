@@ -27,6 +27,7 @@
 - Replace header lifecycle words (`ready`/`load`/`err`) with single glyphs (`●`/`◐`/`✕`); detail stays in the footer.
 - Multi-field TUI forms: Tab stashes field values; Enter writes all staged fields then submits (`requestSubmit`) and recaptures the resulting page like Chrome.
 - Enter on a selected text input starts form edit mode (header shows `IN …`); type freely, then Enter again to submit.
+- Render form controls inline with live values (staged Tab edits + active `IN` buffer with cursor); checkbox/radio toggle on Enter, select cycles options.
 
 ### Fixed
 

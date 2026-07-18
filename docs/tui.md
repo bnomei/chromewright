@@ -49,6 +49,11 @@ all staged fields then `requestSubmit` / button click, settles, and recaptures
 the resulting page like Chrome), Escape cancel (and dismiss a failed page-action
 Error back to Ready while retaining the last good page), and Ctrl-C quit.
 
+Form controls render inline in the content pane. Text inputs show
+`[input name: value]` (live staged/`IN` buffer with a `█` cursor while editing).
+Checkboxes/radios show `☑`/`☐` and `●`/`○` and toggle on Enter. Selects show the
+current option and cycle on Enter; submit via a button or a text field's Enter.
+
 Failed page actions (history, navigate, reload, tab changes, …) enter the
 Error lifecycle, keep the last published page on screen, and block normal
 keys until Escape dismisses the error. With `CHROMEWRIGHT_LOG` set, those

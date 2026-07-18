@@ -7,7 +7,14 @@
 use crate::semantic::{
     SemanticComponent, SemanticDocument, SemanticKind, SemanticRatatuiView, SemanticRef,
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+
+/// Live form values overlaid on content lines (staged Tab values + active edit).
+///
+/// Keys are exact `semantic_ref`s. When present they replace the captured
+/// `attrs.value` / checked state for display only (DOM write still happens on
+/// submit).
+pub type FormValueOverlay = HashMap<SemanticRef, String>;
 
 /// One display line in the TUI content pane.
 ///
@@ -62,8 +69,22 @@ pub fn build_content_lines_with(
     collapsed: &HashSet<SemanticRef>,
     projection: ContentProjection,
 ) -> Vec<ContentLine> {
+    build_content_lines_with_overlay(document, collapsed, projection, None, None)
+}
+
+/// Flatten with optional live form overlay (staged values + active edit buffer).
+pub fn build_content_lines_with_overlay(
+    document: &SemanticDocument,
+    collapsed: &HashSet<SemanticRef>,
+    projection: ContentProjection,
+    form_values: Option<&FormValueOverlay>,
+    editing_ref: Option<&SemanticRef>,
+) -> Vec<ContentLine> {
     let mut lines = Vec::new();
     push_siblings(&document.roots, 0, collapsed, projection, &mut lines);
+    if form_values.is_some() || editing_ref.is_some() {
+        apply_form_value_overlay(&mut lines, document, form_values, editing_ref);
+    }
     lines
 }
 
@@ -385,40 +406,12 @@ fn push_component(
             let src = fold_media_url(component.attrs.src.as_deref().unwrap_or(""));
             push_line(lines, format!("{indent}![{alt}]({src})"), component, true);
         }
-        SemanticKind::Input => {
-            let name = component.attrs.name.as_deref().unwrap_or("");
-            let value = component.attrs.value.as_deref().unwrap_or("");
-            let input_type = component.attrs.input_type.as_deref().unwrap_or("text");
-            push_line(
-                lines,
-                format!("{indent}[input {input_type} name={name} value={value}]"),
-                component,
-                true,
-            );
-        }
-        SemanticKind::Textarea => {
-            let name = component.attrs.name.as_deref().unwrap_or("");
-            let value = component.attrs.value.as_deref().unwrap_or("");
-            push_line(
-                lines,
-                format!("{indent}[textarea name={name} value={value}]"),
-                component,
-                true,
-            );
-        }
-        SemanticKind::Select => {
-            let name = component.attrs.name.as_deref().unwrap_or("");
-            let value = component.attrs.value.as_deref().unwrap_or("");
-            push_line(
-                lines,
-                format!("{indent}[select name={name} value={value}]"),
-                component,
-                true,
-            );
-        }
-        SemanticKind::Button => {
-            let label = display_text(component);
-            push_line(lines, format!("{indent}[button {label}]"), component, true);
+        SemanticKind::Input
+        | SemanticKind::Textarea
+        | SemanticKind::Select
+        | SemanticKind::Button => {
+            let text = format_control_line(component, indent.as_str(), None, false);
+            push_line(lines, text, component, true);
         }
     }
 }
@@ -464,6 +457,201 @@ fn landmark_name(component: &SemanticComponent) -> String {
         .map(|r| format!("{r:?}").to_ascii_lowercase())
         .or_else(|| component.label.clone())
         .unwrap_or_else(|| "landmark".into())
+}
+
+/// Rewrite control lines using live staged/edit values when present.
+fn apply_form_value_overlay(
+    lines: &mut [ContentLine],
+    document: &SemanticDocument,
+    form_values: Option<&FormValueOverlay>,
+    editing_ref: Option<&SemanticRef>,
+) {
+    for line in lines.iter_mut() {
+        let Some(r) = line.semantic_ref.as_ref() else {
+            continue;
+        };
+        let Ok(component) = document.resolve(r) else {
+            continue;
+        };
+        if !matches!(
+            component.kind,
+            SemanticKind::Input
+                | SemanticKind::Textarea
+                | SemanticKind::Select
+                | SemanticKind::Button
+        ) {
+            continue;
+        }
+        // Preserve leading indent from the existing line.
+        let indent_len = line.text.chars().take_while(|c| *c == ' ').count();
+        let indent: String = line.text.chars().take(indent_len).collect();
+        let live = form_values.and_then(|m| m.get(r)).map(String::as_str);
+        let editing = editing_ref.is_some_and(|e| e == r);
+        line.text = format_control_line(component, &indent, live, editing);
+    }
+}
+
+/// Compact inline rendering for form controls.
+///
+/// `live_value` overrides the captured attr when the operator has staged/edited
+/// text. `editing` marks the active field with a cursor.
+fn format_control_line(
+    component: &SemanticComponent,
+    indent: &str,
+    live_value: Option<&str>,
+    editing: bool,
+) -> String {
+    let name = component.attrs.name.as_deref().unwrap_or("");
+    let label = component
+        .label
+        .as_deref()
+        .or(component.text.as_deref())
+        .unwrap_or("")
+        .trim();
+    let captured = component.attrs.value.as_deref().unwrap_or("");
+    let value = live_value.unwrap_or(captured);
+    let cursor = if editing { "█" } else { "" };
+    let name_bit = if name.is_empty() {
+        String::new()
+    } else {
+        format!(" {name}")
+    };
+
+    match component.kind {
+        SemanticKind::Button => {
+            let text = if label.is_empty() { "Button" } else { label };
+            format!("{indent}[{text}]")
+        }
+        SemanticKind::Select => {
+            let shown = if value.is_empty() {
+                select_display_label(component).unwrap_or_else(|| "…".into())
+            } else {
+                select_label_for_value(component, value).unwrap_or_else(|| value.to_string())
+            };
+            if editing {
+                format!("{indent}[select{name_bit}: {shown}{cursor} ▾]")
+            } else {
+                format!("{indent}[select{name_bit}: {shown} ▾]")
+            }
+        }
+        SemanticKind::Textarea => {
+            let shown = if value.is_empty() && !editing {
+                "…".to_string()
+            } else {
+                format!("{value}{cursor}")
+            };
+            if label.is_empty() {
+                format!("{indent}[textarea{name_bit}: {shown}]")
+            } else {
+                format!("{indent}[textarea {label}{name_bit}: {shown}]")
+            }
+        }
+        SemanticKind::Input => {
+            let input_type = component
+                .attrs
+                .input_type
+                .as_deref()
+                .unwrap_or("text")
+                .to_ascii_lowercase();
+            match input_type.as_str() {
+                "checkbox" => {
+                    let checked = live_checked(component, live_value);
+                    let mark = if checked { "☑" } else { "☐" };
+                    let tail = if label.is_empty() {
+                        name_bit
+                    } else {
+                        format!(" {label}")
+                    };
+                    format!("{indent}{mark}{tail}")
+                }
+                "radio" => {
+                    let checked = live_checked(component, live_value);
+                    let mark = if checked { "●" } else { "○" };
+                    let tail = if label.is_empty() {
+                        name_bit
+                    } else {
+                        format!(" {label}")
+                    };
+                    format!("{indent}{mark}{tail}")
+                }
+                "submit" | "button" | "reset" => {
+                    let text = if !value.is_empty() {
+                        value.to_string()
+                    } else if !label.is_empty() {
+                        label.to_string()
+                    } else {
+                        input_type.to_string()
+                    };
+                    format!("{indent}[{text}]")
+                }
+                "password" => {
+                    let dots: String = value.chars().map(|_| '•').collect();
+                    let shown = if editing {
+                        format!("{dots}{cursor}")
+                    } else if dots.is_empty() {
+                        "…".into()
+                    } else {
+                        dots
+                    };
+                    format!("{indent}[password{name_bit}: {shown}]")
+                }
+                other => {
+                    let shown = if value.is_empty() && !editing {
+                        component
+                            .attrs
+                            .placeholder
+                            .as_deref()
+                            .filter(|p| !p.is_empty())
+                            .map(|p| format!("({p})"))
+                            .unwrap_or_else(|| "…".into())
+                    } else {
+                        format!("{value}{cursor}")
+                    };
+                    let type_bit = if other == "text" || other.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" {other}")
+                    };
+                    if label.is_empty() {
+                        format!("{indent}[input{type_bit}{name_bit}: {shown}]")
+                    } else {
+                        format!("{indent}[input {label}{type_bit}{name_bit}: {shown}]")
+                    }
+                }
+            }
+        }
+        _ => format!("{indent}[control]"),
+    }
+}
+
+fn live_checked(component: &SemanticComponent, live_value: Option<&str>) -> bool {
+    if let Some(v) = live_value {
+        return matches!(v, "true" | "1" | "on" | "yes");
+    }
+    component.attrs.checked == Some(true)
+}
+
+fn select_display_label(component: &SemanticComponent) -> Option<String> {
+    component
+        .attrs
+        .options
+        .iter()
+        .find(|o| o.selected)
+        .map(|o| {
+            o.label
+                .clone()
+                .filter(|l| !l.is_empty())
+                .unwrap_or_else(|| o.value.clone())
+        })
+}
+
+fn select_label_for_value(component: &SemanticComponent, value: &str) -> Option<String> {
+    component.attrs.options.iter().find(|o| o.value == value).map(|o| {
+        o.label
+            .clone()
+            .filter(|l| !l.is_empty())
+            .unwrap_or_else(|| o.value.clone())
+    })
 }
 
 fn display_text(component: &SemanticComponent) -> String {
@@ -1266,7 +1454,92 @@ mod tests {
     }
 
     #[test]
+    fn form_controls_render_compact_inline_values() {
+        let doc = normalize_fixture(
+            meta(),
+            vec![
+                RawSemanticNode {
+                    kind: "input".into(),
+                    tag: Some("input".into()),
+                    id: Some("email".into()),
+                    unique_id: true,
+                    selector: None,
+                    text: None,
+                    href: None,
+                    landmark: None,
+                    heading_level: None,
+                    ordered: None,
+                    label: Some("Email".into()),
+                    src: None,
+                    alt: None,
+                    name: Some("email".into()),
+                    value: Some("a@b.co".into()),
+                    input_type: Some("email".into()),
+                    placeholder: None,
+                    checked: None,
+                    disabled: None,
+                    required: None,
+                    readonly: None,
+                    multiple: None,
+                    button_type: None,
+                    options: vec![],
+                    children: vec![],
+                },
+                RawSemanticNode {
+                    kind: "input".into(),
+                    tag: Some("input".into()),
+                    id: Some("ok".into()),
+                    unique_id: true,
+                    selector: None,
+                    text: None,
+                    href: None,
+                    landmark: None,
+                    heading_level: None,
+                    ordered: None,
+                    label: Some("Agree".into()),
+                    src: None,
+                    alt: None,
+                    name: Some("ok".into()),
+                    value: None,
+                    input_type: Some("checkbox".into()),
+                    placeholder: None,
+                    checked: Some(true),
+                    disabled: None,
+                    required: None,
+                    readonly: None,
+                    multiple: None,
+                    button_type: None,
+                    options: vec![],
+                    children: vec![],
+                },
+            ],
+        )
+        .expect("doc");
+        let lines = build_content_lines_with(&doc, &HashSet::new(), ContentProjection::Prose);
+        let joined = lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join("\n");
+        assert!(joined.contains("a@b.co"), "{joined}");
+        assert!(joined.contains("Email") || joined.contains("email"), "{joined}");
+        assert!(joined.contains("☑") || joined.contains("Agree"), "{joined}");
+
+        // Overlay live edit value
+        let email = doc.roots[0].semantic_ref.clone();
+        let mut overlay = FormValueOverlay::new();
+        overlay.insert(email.clone(), "live@x".into());
+        let lines = build_content_lines_with_overlay(
+            &doc,
+            &HashSet::new(),
+            ContentProjection::Prose,
+            Some(&overlay),
+            Some(&email),
+        );
+        let joined = lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join("\n");
+        assert!(joined.contains("live@x"), "{joined}");
+        assert!(joined.contains('█'), "cursor while editing: {joined}");
+    }
+
+    #[test]
     fn copy_y_on_link_returns_resolved_href() {
+
         let doc = normalize_fixture(
             meta(),
             vec![RawSemanticNode {

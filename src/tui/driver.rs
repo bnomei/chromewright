@@ -189,8 +189,24 @@ impl PageDriver for SessionPageDriver<'_> {
                 click_component(self.session, document, component, false)?;
                 Ok(true)
             }
-            SemanticKind::Input | SemanticKind::Textarea | SemanticKind::Select => {
-                // Focusing a control is not page-changing by itself.
+            SemanticKind::Input => {
+                let t = component
+                    .attrs
+                    .input_type
+                    .as_deref()
+                    .unwrap_or("text")
+                    .to_ascii_lowercase();
+                if matches!(t.as_str(), "checkbox" | "radio" | "submit" | "button" | "reset") {
+                    // Toggle / activate — may not navigate; controller still recaptures.
+                    click_component(self.session, document, component, false)?;
+                    Ok(true)
+                } else {
+                    // Text-like: focus only (edit mode is TUI-local).
+                    focus_component(self.session, document, component)?;
+                    Ok(false)
+                }
+            }
+            SemanticKind::Textarea | SemanticKind::Select => {
                 focus_component(self.session, document, component)?;
                 Ok(false)
             }

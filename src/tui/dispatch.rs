@@ -367,10 +367,15 @@ impl Dispatcher {
                 DispatchOutcome::Redraw
             }
             Action::Confirm => {
-                // On a text input/textarea/select: enter edit mode.
-                // On a button/link/checkbox: activate (click).
+                // Text input/textarea: edit mode.
+                // Select: cycle options locally then activate writes on submit.
+                // Checkbox/radio/button/link: click/activate (+ recapture).
                 if !controller.edit_selection_if_form() {
-                    let _ = controller.activate_selection();
+                    if controller.cycle_select_if_selected() {
+                        // local only
+                    } else {
+                        let _ = controller.activate_selection();
+                    }
                 }
                 DispatchOutcome::Redraw
             }
