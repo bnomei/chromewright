@@ -21,6 +21,7 @@ const LEASE_NAME: &str = "managed-headless.json";
 const LOCK_NAME: &str = ".managed-headless.lock";
 const OWNER_NAME: &str = ".chromewright-owner";
 const STARTUP_ATTEMPTS: usize = 3;
+const INITIAL_PAGE_URL: &str = "about:blank";
 
 /// How `--headless tui` handles a previous Chromewright-owned browser.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]
@@ -78,6 +79,7 @@ impl ManagedHeadlessSession {
                     && let Ok(session) =
                         BrowserSession::connect(ConnectionOptions::new(endpoint(existing.port)))
                     && listener_belongs_to(&existing)
+                    && let Ok(session) = ensure_managed_page_target(session)
                 {
                     return Ok(Self {
                         session: Some(session),
@@ -255,6 +257,7 @@ fn launch_new(
             && let Ok(session) = BrowserSession::connect(ConnectionOptions::new(endpoint(port)))
             && child.try_wait().map_err(|e| e.to_string())?.is_none()
             && listener_belongs_to(&lease)
+            && let Ok(session) = ensure_managed_page_target(session)
         {
             return Ok(ManagedHeadlessSession {
                 session: Some(session),
@@ -281,6 +284,44 @@ fn launch_new(
             "{startup_error}; failed to confirm managed Chrome stopped, so its lease and private profile were retained: {stop_error}"
         )),
     }
+}
+
+/// Headless Chrome does not expose a visible/focused target, so an attach-style
+/// connection to a reusable page can have no active page. This applies only
+/// to the private browser we launched and verified above: first reacquire an
+/// existing page target from the inventory, creating a fresh blank page only
+/// when the inventory is empty.
+///
+/// External `--ws-endpoint` sessions continue to use the normal attach policy;
+/// this helper is intentionally called only from managed-headless startup and
+/// recovery after the lease and listener PID have been proven.
+fn ensure_managed_page_target(session: BrowserSession) -> Result<BrowserSession, String> {
+    let tabs = session
+        .list_tabs()
+        .map_err(|error| format!("inspect managed headless tabs: {error}"))?;
+    if tabs.iter().any(|tab| tab.active) {
+        return Ok(session);
+    }
+
+    if let Some(tab) = tabs.first() {
+        session
+            .activate_tab(&tab.id)
+            .map_err(|error| format!("reacquire managed headless page '{}': {error}", tab.id))?;
+    } else {
+        session
+            .open_tab(INITIAL_PAGE_URL)
+            .map_err(|error| format!("create managed headless initial page: {error}"))?;
+    }
+    let has_active_tab = session
+        .list_tabs()
+        .map_err(|error| format!("verify managed headless page target: {error}"))?
+        .iter()
+        .any(|tab| tab.active);
+    if !has_active_tab {
+        return Err("managed headless Chrome did not expose an active page target".into());
+    }
+
+    Ok(session)
 }
 
 fn runtime_root() -> Result<PathBuf, String> {
@@ -642,6 +683,78 @@ mod tests {
             "the TUI must be able to register its tools before sharing the session"
         );
         assert!(managed.take_session().is_err());
+    }
+
+    #[test]
+    fn managed_bootstrap_reacquires_existing_blank_page_without_creating_one() {
+        let session = BrowserSession::with_test_backend(
+            crate::browser::backend::FakeSessionBackend::with_no_active_tab(),
+        );
+
+        let session = ensure_managed_page_target(session)
+            .expect("managed headless bootstrap should reacquire the blank page");
+        let tabs = session.list_tabs().expect("list tabs after bootstrap");
+
+        assert_eq!(tabs.len(), 1, "the existing tab is reacquired in place");
+        assert!(
+            tabs.iter()
+                .any(|tab| { tab.active && tab.url == INITIAL_PAGE_URL && tab.id == "tab-1" })
+        );
+        assert!(session.document_metadata().is_ok());
+    }
+
+    #[test]
+    fn managed_bootstrap_creates_an_active_blank_page_for_empty_inventory() {
+        let session = BrowserSession::with_test_backend(
+            crate::browser::backend::FakeSessionBackend::with_no_tabs(),
+        );
+
+        let session = ensure_managed_page_target(session)
+            .expect("managed headless bootstrap should create an initial page");
+        let tabs = session.list_tabs().expect("list tabs after bootstrap");
+
+        assert_eq!(tabs.len(), 1, "an empty browser gets one initial tab");
+        assert!(tabs[0].active);
+        assert_eq!(tabs[0].url, INITIAL_PAGE_URL);
+        assert!(session.document_metadata().is_ok());
+    }
+
+    #[test]
+    fn managed_bootstrap_reacquires_existing_page_without_creating_blank_tab() {
+        let existing_url = "https://example.com/continuity";
+        let session = BrowserSession::with_test_backend(
+            crate::browser::backend::FakeSessionBackend::with_nonblank_tab_without_active(
+                existing_url,
+            ),
+        );
+
+        let session = ensure_managed_page_target(session)
+            .expect("managed headless reuse should reacquire its existing page");
+        let tabs = session.list_tabs().expect("list tabs after reuse");
+
+        assert_eq!(tabs.len(), 1, "reuse must not create a redundant blank tab");
+        assert_eq!(tabs[0].url, existing_url);
+        assert!(
+            tabs[0].active,
+            "the retained page becomes the active target"
+        );
+        assert!(
+            session.document_metadata().is_ok(),
+            "retained page metadata is usable"
+        );
+    }
+
+    #[test]
+    fn managed_bootstrap_keeps_existing_active_page() {
+        let session =
+            BrowserSession::with_test_backend(crate::browser::backend::FakeSessionBackend::new());
+
+        let session = ensure_managed_page_target(session)
+            .expect("an existing active page should remain usable");
+        let tabs = session.list_tabs().expect("list tabs after bootstrap");
+
+        assert_eq!(tabs.len(), 1, "no redundant bootstrap tab is created");
+        assert!(tabs[0].active);
     }
 
     #[test]

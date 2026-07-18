@@ -89,6 +89,35 @@ impl FakeSessionBackend {
         backend
     }
 
+    pub(crate) fn with_no_tabs() -> Self {
+        let backend = Self::new();
+        let mut state = backend
+            .state
+            .lock()
+            .expect("fake backend state should be writable");
+        state.tabs.clear();
+        state.active_tab_id = None;
+        drop(state);
+        backend
+    }
+
+    pub(crate) fn with_nonblank_tab_without_active(url: &str) -> Self {
+        let backend = Self::new();
+        let mut state = backend
+            .state
+            .lock()
+            .expect("fake backend state should be writable");
+        let initial_tab = state
+            .tabs
+            .first_mut()
+            .expect("fake backend should start with one tab");
+        initial_tab.url = url.to_string();
+        initial_tab.title = Self::title_for_url(url);
+        state.active_tab_id = None;
+        drop(state);
+        backend
+    }
+
     pub(crate) fn with_close_failures<I, S>(close_failure_urls: I) -> Self
     where
         I: IntoIterator<Item = S>,
