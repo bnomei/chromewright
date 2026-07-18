@@ -278,7 +278,7 @@ fn push_component(
         }
         SemanticKind::Link => {
             let label = display_text(component);
-            let href = component.attrs.href.as_deref().unwrap_or("");
+            let href = fold_media_url(component.attrs.href.as_deref().unwrap_or(""));
             push_line(lines, format!("{indent}[{label}]({href})"), component, true);
         }
         SemanticKind::Image => {
@@ -288,7 +288,7 @@ fn push_component(
                 .as_deref()
                 .or(component.label.as_deref())
                 .unwrap_or("");
-            let src = component.attrs.src.as_deref().unwrap_or("");
+            let src = fold_media_url(component.attrs.src.as_deref().unwrap_or(""));
             push_line(lines, format!("{indent}![{alt}]({src})"), component, true);
         }
         SemanticKind::Input => {
@@ -364,6 +364,54 @@ fn display_text(component: &SemanticComponent) -> String {
         .or(component.label.as_deref())
         .unwrap_or("")
         .to_string()
+}
+
+/// Collapse inline `data:` / base64 media URLs so content lines stay readable.
+///
+/// Examples:
+/// - `data:image/png;base64,iVBOR…` → `base64,…`
+/// - `data:image/svg+xml,…` → `data:…`
+/// - ordinary `https://…` / relative paths unchanged
+fn fold_media_url(src: &str) -> String {
+    let trimmed = src.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("data:") {
+        if lower.contains(";base64,") || lower.contains(";base64;") {
+            return "base64,…".into();
+        }
+        return "data:…".into();
+    }
+    // Bare base64 blobs occasionally appear without a data: prefix.
+    if trimmed.len() > 64 && looks_like_base64_blob(trimmed) {
+        return "base64,…".into();
+    }
+    trimmed.to_string()
+}
+
+fn looks_like_base64_blob(s: &str) -> bool {
+    let mut saw_payload = false;
+    for (i, b) in s.bytes().enumerate() {
+        let ok = b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'=' | b'\n' | b'\r');
+        if !ok {
+            return false;
+        }
+        if b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/') {
+            saw_payload = true;
+        }
+        // Padding only at end.
+        if b == b'=' && i + 2 < s.len() {
+            // allow == at end; reject = mid-string roughly
+            let rest = &s.as_bytes()[i..];
+            if !rest.iter().all(|c| matches!(c, b'=' | b'\n' | b'\r')) {
+                return false;
+            }
+            break;
+        }
+    }
+    saw_payload
 }
 
 /// First content line index for a semantic_ref, if present.
@@ -539,6 +587,59 @@ mod tests {
     #[test]
     fn ordinary_press_content_is_not_a_shortcut_legend() {
         assert!(!contains_shortcut_legend("Press releases"));
+    }
+
+    #[test]
+    fn fold_media_url_collapses_base64_data_uris() {
+        assert_eq!(
+            fold_media_url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB"),
+            "base64,…"
+        );
+        assert_eq!(fold_media_url("data:image/svg+xml,<svg/>"), "data:…");
+        assert_eq!(
+            fold_media_url("https://cdn.example/a.png"),
+            "https://cdn.example/a.png"
+        );
+        assert_eq!(fold_media_url("/img/logo.png"), "/img/logo.png");
+    }
+
+    #[test]
+    fn image_lines_fold_base64_src() {
+        let doc = normalize_fixture(
+            meta(),
+            vec![RawSemanticNode {
+                kind: "image".into(),
+                tag: Some("img".into()),
+                id: None,
+                unique_id: false,
+                selector: None,
+                text: None,
+                href: None,
+                landmark: None,
+                heading_level: None,
+                ordered: None,
+                label: None,
+                src: Some("data:image/png;base64,AAAA".into()),
+                alt: Some("logo".into()),
+                name: None,
+                value: None,
+                input_type: None,
+                placeholder: None,
+                checked: None,
+                disabled: None,
+                required: None,
+                readonly: None,
+                multiple: None,
+                button_type: None,
+                options: vec![],
+                children: vec![],
+            }],
+        )
+        .expect("doc");
+        let lines = build_content_lines(&doc, &HashSet::new());
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text, "![logo](base64,…)");
+        assert!(!lines[0].text.contains("AAAA"));
     }
 
     #[test]
