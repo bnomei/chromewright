@@ -96,15 +96,10 @@ fn draw_chrome(frame: &mut Frame, area: Rect, controller: &Controller, theme: &T
         }
     };
 
-    // Right cluster: lifecycle + non-Normal mode only (no wrap/structure flags).
+    // Right cluster: lifecycle glyph + non-Normal mode only (no wrap/structure flags).
     // Search / Hint are shown in the footer cmdline, not here.
     let mut right_parts: Vec<(&str, Style)> = Vec::new();
-    let life = match &state.lifecycle {
-        Lifecycle::Ready => "ready",
-        Lifecycle::Loading { .. } => "load",
-        Lifecycle::Error { .. } => "err",
-    };
-    right_parts.push((life, lifecycle_style));
+    right_parts.push((lifecycle_glyph(&state.lifecycle), lifecycle_style));
     let mode = state.mode_label();
     if mode != "Normal" && mode != "Search" && mode != "Hint" && mode != "Hint+" {
         right_parts.push((mode, theme.chrome_mode()));
@@ -510,17 +505,26 @@ fn truncate(s: &str, width: usize) -> String {
     }
 }
 
+/// Single-character lifecycle marker for the header (color carries the rest).
+///
+/// - Ready: `●`
+/// - Loading: `◐`
+/// - Error: `✕`
+fn lifecycle_glyph(lifecycle: &Lifecycle) -> &'static str {
+    match lifecycle {
+        Lifecycle::Ready => "●",
+        Lifecycle::Loading { .. } => "◐",
+        Lifecycle::Error { .. } => "✕",
+    }
+}
+
 /// Build chrome text for tests (no terminal). Single browser-like bar.
 #[allow(dead_code)]
 pub fn chrome_lines(controller: &Controller) -> Vec<String> {
     let state = &controller.state;
     let back = if state.can_go_back { "◀" } else { "◁" };
     let fwd = if state.can_go_forward { "▶" } else { "▷" };
-    let life = match &state.lifecycle {
-        Lifecycle::Ready => "ready",
-        Lifecycle::Loading { .. } => "load",
-        Lifecycle::Error { .. } => "err",
-    };
+    let life = lifecycle_glyph(&state.lifecycle);
     let mut flags = vec![life];
     let mode = state.mode_label();
     // Search / Hint are footer-only, not header chrome.
@@ -561,6 +565,32 @@ mod tests {
         ctl.state.publish_page(doc);
         for line in chrome_lines(&ctl) {
             assert!(!contains_shortcut_legend(&line), "legend leaked: {line}");
+            assert!(
+                line.contains('●'),
+                "ready lifecycle should be a single glyph: {line}"
+            );
+            assert!(!line.contains("ready"), "no verbose ready text: {line}");
+        }
+    }
+
+    #[test]
+    fn lifecycle_glyphs_are_single_chars() {
+        assert_eq!(lifecycle_glyph(&Lifecycle::Ready), "●");
+        assert_eq!(
+            lifecycle_glyph(&Lifecycle::Loading {
+                action: "navigate".into()
+            }),
+            "◐"
+        );
+        assert_eq!(
+            lifecycle_glyph(&Lifecycle::Error {
+                action: "navigate".into(),
+                message: "boom".into()
+            }),
+            "✕"
+        );
+        for g in ["●", "◐", "✕"] {
+            assert_eq!(g.chars().count(), 1);
         }
     }
 
