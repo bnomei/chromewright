@@ -25,6 +25,7 @@
 
 ### Fixed
 
+- Allow `about:blank` (and other `about:` URLs) in navigation validation so TUI `t` / `new_tab` can open a blank tab without `allow_unsafe`.
 - Make agent attention visible in prose mode: paint the whole subtree, scroll to the first visible descendant, status feedback, and a magenta background spotlight (fg-only was invisible on cyan headings).
 
 - Dismiss TUI Error lifecycle with Escape so a failed history/navigation action no longer leaves the terminal browser unresponsive; keep the retained page and log the failure when `CHROMEWRIGHT_LOG` is set.

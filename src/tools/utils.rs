@@ -70,8 +70,11 @@ fn is_protocol_relative(url: &str) -> bool {
 /// # Errors
 ///
 /// Returns [`BrowserError::InvalidArgument`] when an unsafe absolute scheme or protocol-
-/// relative URL is used without `allow_unsafe = true`. Safe http(s) and same-origin relative
-/// paths succeed without opt-in.
+/// relative URL is used without `allow_unsafe = true`. Safe http(s), `about:` (e.g.
+/// `about:blank` for new tabs), and same-origin relative paths succeed without opt-in.
+///
+/// The allowed schemes match history navigation's fail-closed gate so TUI `t` (new blank
+/// tab) and MCP `new_tab` with `about:blank` stay consistent.
 pub fn validate_navigation_url(url: &str, allow_unsafe: bool) -> Result<String> {
     let normalized = normalize_url(url);
     if allow_unsafe {
@@ -93,7 +96,8 @@ pub fn validate_navigation_url(url: &str, allow_unsafe: bool) -> Result<String> 
         .split_once(':')
         .map(|(scheme, _)| scheme.to_ascii_lowercase())
         .unwrap_or_default();
-    if matches!(scheme.as_str(), "http" | "https") {
+    // `about` matches history (`is_unsafe_history_scheme`): blank tabs and benign about: pages.
+    if matches!(scheme.as_str(), "http" | "https" | "about") {
         return Ok(normalized);
     }
 
@@ -178,6 +182,13 @@ mod tests {
         let err = validate_navigation_url("data:text/html,<h1>Test</h1>", false)
             .expect_err("data: should be blocked without explicit opt-in");
         assert!(matches!(err, BrowserError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn test_validate_navigation_url_allows_about_blank_by_default() {
+        let normalized = validate_navigation_url("about:blank", false)
+            .expect("about:blank is required for TUI/MCP new blank tabs");
+        assert_eq!(normalized, "about:blank");
     }
 
     #[test]
