@@ -479,11 +479,7 @@ impl SharedTuiState {
             {
                 return Err(CoordinationError::RefreshFailed);
             }
-            if document.document.document_id != metadata.document_id
-                || document.document.revision != metadata.revision
-                || document.document.url != metadata.url
-                || document.document.title != metadata.title
-            {
+            if !crate::semantic::capture_matches_document_metadata(&document.document, &metadata) {
                 return Err(CoordinationError::RefreshFailed);
             }
             Ok(document)

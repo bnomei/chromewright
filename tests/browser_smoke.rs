@@ -48,6 +48,40 @@ fn smoke_navigate_tool() {
 }
 
 #[test]
+fn smoke_semantic_capture_uses_main_revision_from_browser_metadata() {
+    let Some(browser) = common::browser_or_skip() else {
+        return;
+    };
+    let session = browser.session();
+
+    common::navigate_encoded_html(
+        session,
+        r#"
+            <html>
+            <head><title>Semantic Revision</title></head>
+            <body><main><h1 id="title">Semantic Revision</h1></main></body>
+            </html>
+        "#,
+    )
+    .expect("failed to navigate");
+
+    let semantic =
+        chromewright::extract_semantic_document(session).expect("semantic capture should succeed");
+    let metadata = session
+        .document_metadata()
+        .expect("document metadata should succeed");
+
+    assert_eq!(semantic.document.document_id, metadata.document_id);
+    assert_eq!(semantic.document.url, metadata.url);
+    assert_eq!(semantic.document.title, metadata.title);
+    assert_eq!(
+        metadata.revision.split('|').next(),
+        Some(semantic.document.revision.as_str()),
+        "semantic capture must retain the browser metadata main-frame revision"
+    );
+}
+
+#[test]
 fn smoke_snapshot_and_inspect() {
     let Some(browser) = common::browser_or_skip() else {
         return;

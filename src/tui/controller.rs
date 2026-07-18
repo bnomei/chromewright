@@ -406,11 +406,7 @@ impl Controller {
             {
                 return Err("browser did not provide stable complete document metadata".into());
             }
-            if doc.document.document_id != metadata.document_id
-                || doc.document.revision != metadata.revision
-                || doc.document.url != metadata.url
-                || doc.document.title != metadata.title
-            {
+            if !crate::semantic::capture_matches_document_metadata(&doc.document, &metadata) {
                 return Err("semantic capture metadata changed during publication".into());
             }
             // Atomic consistency: url/title/revision come only from this document.

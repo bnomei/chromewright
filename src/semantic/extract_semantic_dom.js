@@ -562,10 +562,17 @@ JSON.stringify((function() {
         var nodes = root ? visit(root, 0) : [];
         markUniqueIds(nodes, root);
 
+        // Semantic capture deliberately models the top-level document only:
+        // iframe content is neither walked nor exposed as semantic components.
+        // Keep its revision in the same canonical main-frame namespace as the
+        // browser metadata probe (`main:<revision>`), so publication can prove
+        // that the represented DOM did not change after this capture. Frame
+        // suffixes are intentionally excluded because they describe content
+        // outside this semantic document.
         return {
             document: {
                 document_id: documentState.documentId,
-                revision: String(documentState.revision),
+                revision: 'main:' + String(documentState.revision),
                 url: document.location.href,
                 title: document.title || '',
                 ready_state: document.readyState,
