@@ -655,10 +655,21 @@ impl Controller {
         if lines.is_empty() {
             return;
         }
+        // One stop per addressable component. Soft-wrap continuations share the
+        // same semantic_ref; including every row would trap j/k on the first
+        // continuation because line_index_of always returns the block start.
+        let mut seen = std::collections::HashSet::new();
         let positions: Vec<usize> = lines
             .iter()
             .enumerate()
-            .filter_map(|(i, l)| l.semantic_ref.as_ref().map(|_| i))
+            .filter_map(|(i, l)| {
+                let r = l.semantic_ref.as_ref()?;
+                if seen.insert(r.clone()) {
+                    Some(i)
+                } else {
+                    None
+                }
+            })
             .collect();
         if positions.is_empty() {
             return;
@@ -1509,6 +1520,92 @@ mod tests {
         assert!(!ctl.state.view.wrap);
         assert_eq!(ctl.state.view.status_message.as_deref(), Some("wrap: off"));
         assert_eq!(ctl.content_lines().len(), unwrapped);
+    }
+
+    #[test]
+    fn j_moves_past_wrapped_block_to_next_component() {
+        let long = "word ".repeat(30);
+        let doc = normalize_fixture(
+            meta("1", "https://example.com/"),
+            vec![
+                RawSemanticNode {
+                    kind: "text".into(),
+                    tag: Some("p".into()),
+                    id: Some("a".into()),
+                    unique_id: true,
+                    selector: None,
+                    text: Some(long.trim().into()),
+                    href: None,
+                    landmark: None,
+                    heading_level: None,
+                    ordered: None,
+                    label: None,
+                    src: None,
+                    alt: None,
+                    name: None,
+                    value: None,
+                    input_type: None,
+                    placeholder: None,
+                    checked: None,
+                    disabled: None,
+                    required: None,
+                    readonly: None,
+                    multiple: None,
+                    button_type: None,
+                    options: vec![],
+                    children: vec![],
+                },
+                RawSemanticNode {
+                    kind: "text".into(),
+                    tag: Some("p".into()),
+                    id: Some("b".into()),
+                    unique_id: true,
+                    selector: None,
+                    text: Some("second".into()),
+                    href: None,
+                    landmark: None,
+                    heading_level: None,
+                    ordered: None,
+                    label: None,
+                    src: None,
+                    alt: None,
+                    name: None,
+                    value: None,
+                    input_type: None,
+                    placeholder: None,
+                    checked: None,
+                    disabled: None,
+                    required: None,
+                    readonly: None,
+                    multiple: None,
+                    button_type: None,
+                    options: vec![],
+                    children: vec![],
+                },
+            ],
+        )
+        .expect("doc");
+        let refs = doc.semantic_refs();
+        assert_eq!(refs.len(), 2);
+        let mut ctl = Controller::new();
+        ctl.state.publish_page(doc);
+        ctl.set_viewport(12, 20);
+        ctl.state.view.selection = Some(refs[0].clone());
+        ctl.toggle_wrap();
+        let wrapped = ctl.content_lines();
+        assert!(
+            wrapped
+                .iter()
+                .filter(|l| l.semantic_ref.as_ref() == Some(&refs[0]))
+                .count()
+                > 1,
+            "first block must occupy multiple wrap rows"
+        );
+        // j must leave the wrapped first block, not stall on continuations.
+        ctl.scroll_down();
+        assert_eq!(ctl.state.view.selection.as_ref(), Some(&refs[1]));
+        ctl.scroll_up();
+        assert_eq!(ctl.state.view.selection.as_ref(), Some(&refs[0]));
     }
 
     #[test]
