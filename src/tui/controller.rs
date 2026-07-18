@@ -15,6 +15,9 @@ use crate::tui::hints::{HintMatch, LinkHint, assign_hints, match_hint};
 use crate::tui::shared::SharedTuiState;
 use crate::tui::state::{HintMode, InputKind, InteractionMode, Lifecycle, TuiState};
 
+/// Rows kept above a `#fragment` target when scrolling it into view.
+const FRAGMENT_VIEWPORT_TOP_MARGIN: usize = 5;
+
 /// Orchestrates page-changing actions and pure view updates against [`TuiState`].
 ///
 /// Page mutations go through a deferred queue: claim Loading on
@@ -528,6 +531,10 @@ impl Controller {
     }
 
     /// Expand collapsed ancestors, select the fragment target, and scroll it into view.
+    ///
+    /// The target is placed near the upper third of the viewport with a fixed
+    /// top margin ([`FRAGMENT_VIEWPORT_TOP_MARGIN`] rows above) when content
+    /// allows; normal scroll clamping still applies at document ends.
     fn select_fragment_target(&mut self, document: &SemanticDocument, fragment: &str) {
         match document.resolve_fragment(fragment) {
             FragmentResolution::Target(target) => {
@@ -539,7 +546,11 @@ impl Controller {
                 self.state.view.selection = Some(target.clone());
                 let lines = self.lines_for_document(document);
                 if let Some(idx) = line_index_of(&lines, &target) {
-                    self.ensure_visible(idx, lines.len());
+                    self.scroll_line_with_top_margin(
+                        idx,
+                        lines.len(),
+                        FRAGMENT_VIEWPORT_TOP_MARGIN,
+                    );
                 }
             }
             FragmentResolution::Top => {
@@ -749,6 +760,21 @@ impl Controller {
             self.state.view.scroll_y = line_idx + 1 - vh;
         }
         self.state.clamp_scroll(content_len);
+    }
+
+    /// Place `line_idx` approximately `margin` rows below the top of the viewport.
+    ///
+    /// Used for in-page `#fragment` jumps so the target is not flush against the
+    /// chrome. Falls back to document start/end via [`TuiState::clamp_scroll`].
+    fn scroll_line_with_top_margin(&mut self, line_idx: usize, content_len: usize, margin: usize) {
+        self.state.view.scroll_y = line_idx.saturating_sub(margin);
+        self.state.clamp_scroll(content_len);
+        // If clamping pushed the target above the viewport (short docs / tiny
+        // height), fall back to the standard ensure-visible path.
+        let vh = self.state.view.viewport_height.max(1);
+        if line_idx < self.state.view.scroll_y || line_idx >= self.state.view.scroll_y + vh {
+            self.ensure_visible(line_idx, content_len);
+        }
     }
 
     /// Collapse or expand the selected block by exact `semantic_ref` only (never rebind).
@@ -1490,7 +1516,67 @@ mod tests {
         );
         ctl.apply_fragment_from_url(&heading);
         assert_eq!(ctl.state.view.selection.as_ref(), Some(&target));
+        // Single-line doc: margin clamps to top.
         assert_eq!(ctl.state.view.scroll_y, 0);
+    }
+
+    #[test]
+    fn fragment_target_scrolls_with_top_margin() {
+        let mut nodes = Vec::new();
+        for i in 0..20 {
+            nodes.push(RawSemanticNode {
+                kind: "text".into(),
+                tag: Some("p".into()),
+                id: Some(format!("p{i}")),
+                unique_id: true,
+                selector: None,
+                text: Some(format!("paragraph {i}")),
+                href: None,
+                landmark: None,
+                heading_level: None,
+                ordered: None,
+                label: None,
+                src: None,
+                alt: None,
+                name: None,
+                value: None,
+                input_type: None,
+                placeholder: None,
+                checked: None,
+                disabled: None,
+                required: None,
+                readonly: None,
+                multiple: None,
+                button_type: None,
+                options: vec![],
+                children: vec![],
+            });
+        }
+        // Put the fragment target mid-document.
+        nodes[12].id = Some("sec".into());
+        let doc = normalize_fixture(meta("1", "https://example.com/page#sec"), nodes).expect("doc");
+        let target = doc
+            .components()
+            .find(|c| c.attrs.element_id.as_deref() == Some("sec"))
+            .expect("target")
+            .semantic_ref
+            .clone();
+        let mut ctl = Controller::new();
+        // Viewport shorter than content so a non-zero scroll offset is allowed.
+        ctl.set_viewport(80, 10);
+        ctl.state.publish_page(doc.clone());
+        ctl.apply_fragment_from_url(&doc);
+        assert_eq!(ctl.state.view.selection.as_ref(), Some(&target));
+        let lines = ctl.content_lines();
+        let idx = line_index_of(&lines, &target).expect("line");
+        assert!(idx >= FRAGMENT_VIEWPORT_TOP_MARGIN);
+        // Prefer ~5 rows of context above the target.
+        assert_eq!(
+            ctl.state.view.scroll_y,
+            idx.saturating_sub(FRAGMENT_VIEWPORT_TOP_MARGIN)
+        );
+        assert!(idx >= ctl.state.view.scroll_y);
+        assert!(idx < ctl.state.view.scroll_y + ctl.state.view.viewport_height);
     }
 
     #[test]
