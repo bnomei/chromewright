@@ -331,7 +331,7 @@ fn focus_component(
 ) -> Result<()> {
     let prelude = exact_target_prelude(document, component)?;
     let script = format!(
-        r#"(function(){{ {prelude} el.focus(); return document.activeElement === el ? 'ok' : 'missing'; }})()"#
+        r#"(function(){{ {prelude} el.focus(); const root = el.getRootNode(); return root.activeElement === el ? 'ok' : 'missing'; }})()"#
     );
     ensure_target_result(session.evaluate(&script, false)?)
 }

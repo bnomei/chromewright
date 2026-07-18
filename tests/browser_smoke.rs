@@ -103,7 +103,11 @@ fn smoke_tui_operates_idless_semantic_controls_and_rejects_stale_refs() {
               <div class="widget"></div>
               <script>
                 const shadow = document.querySelector('.widget').attachShadow({ mode: 'open' });
-                shadow.innerHTML = '<button onclick="window.__tuiShadowClicked = true">Shadow Save</button>';
+                shadow.innerHTML = `
+                  <button onclick="window.__tuiShadowFirstClicked = true">Shadow First</button>
+                  <button onclick="window.__tuiShadowClicked = true">Shadow Save</button>
+                  <input placeholder="Shadow name">
+                `;
               </script>
             </body></html>
         "##,
@@ -183,6 +187,64 @@ fn smoke_tui_operates_idless_semantic_controls_and_rejects_stale_refs() {
         Value::Bool(true)
     );
 
+    let document = driver
+        .capture_semantic()
+        .expect("capture after shadow click");
+    let shadow_input_ref = document
+        .components()
+        .find(|component| {
+            component.kind == SemanticKind::Input
+                && component
+                    .attrs
+                    .placeholder
+                    .as_deref()
+                    .is_some_and(|text| text == "Shadow name")
+        })
+        .expect("id-less shadow input")
+        .semantic_ref
+        .clone();
+    driver
+        .activate_ref(&document, &shadow_input_ref, false)
+        .expect("focus id-less shadow input");
+    assert_eq!(
+        common::evaluate(
+            session,
+            "document.querySelector('.widget').shadowRoot.activeElement.placeholder"
+        )
+        .expect("shadow focus marker")
+        .as_str(),
+        Some("Shadow name")
+    );
+
+    let stale_shadow_document = driver
+        .capture_semantic()
+        .expect("capture before shadow mutation");
+    let stale_shadow_ref = stale_shadow_document
+        .components()
+        .find(|component| {
+            component.kind == SemanticKind::Button
+                && component
+                    .text
+                    .as_deref()
+                    .or(component.label.as_deref())
+                    .is_some_and(|text| text.contains("Shadow Save"))
+        })
+        .expect("shadow button before mutation")
+        .semantic_ref
+        .clone();
+    common::evaluate(
+        session,
+        "document.querySelector('.widget').shadowRoot.children[1].replaceWith(document.createElement('button'))",
+    )
+    .expect("mutate open shadow root");
+    let stale_shadow_error = driver
+        .activate_ref(&stale_shadow_document, &stale_shadow_ref, false)
+        .expect_err("stale shadow interaction must fail");
+    assert!(
+        stale_shadow_error.to_string().contains("stale"),
+        "{stale_shadow_error}"
+    );
+
     let stale_document = driver.capture_semantic().expect("capture before mutation");
     let stale_button_ref = stale_document
         .components()
@@ -226,7 +288,13 @@ fn smoke_tui_controller_publishes_loading_then_atomic_ready_on_reload() {
     };
     common::navigate_encoded_html(
         browser.session(),
-        "<html><head><title>TUI lifecycle</title></head><body><main>ready</main></body></html>",
+        r#"<html><head><title>TUI lifecycle</title></head><body>
+            <main>ready</main>
+            <form onsubmit="event.preventDefault(); document.querySelector('output').textContent = this.elements[0].value">
+              <input name="message"><button>Submit</button>
+            </form>
+            <output></output>
+        </body></html>"#,
     )
     .expect("failed to navigate");
     let (_guard, session) = browser.into_shared();
@@ -245,8 +313,37 @@ fn smoke_tui_controller_publishes_loading_then_atomic_ready_on_reload() {
         .perform_pending_page_action(&mut driver)
         .expect("initial semantic capture");
     assert!(matches!(controller.state.lifecycle, Lifecycle::Ready));
-    let before = controller.state.revision().to_string();
 
+    let input_ref = controller
+        .state
+        .document()
+        .expect("published semantic document")
+        .components()
+        .find(|component| component.kind == chromewright::SemanticKind::Input)
+        .expect("form input")
+        .semantic_ref
+        .clone();
+    controller
+        .submit_form_input(&input_ref, "submitted through controller")
+        .expect("queue form submission");
+    assert!(matches!(
+        controller.state.lifecycle,
+        Lifecycle::Loading { .. }
+    ));
+    assert!(matches!(shared.lifecycle(), Lifecycle::Loading { .. }));
+    controller.acknowledge_loading_frame();
+    controller
+        .perform_pending_page_action(&mut driver)
+        .expect("submit form and recapture");
+    assert!(matches!(controller.state.lifecycle, Lifecycle::Ready));
+    assert_eq!(
+        common::evaluate(&session, "document.querySelector('output').textContent")
+            .expect("submitted form marker")
+            .as_str(),
+        Some("submitted through controller")
+    );
+
+    let before = controller.state.revision().to_string();
     controller.reload();
     assert!(matches!(
         controller.state.lifecycle,

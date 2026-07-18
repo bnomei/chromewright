@@ -48,6 +48,23 @@ JSON.stringify((function() {
         return view.__browserUseDocumentState;
     }
 
+    function observeOpenShadowRoot(root) {
+        if (!root) return;
+        var state = ensureDocumentState(root.ownerDocument);
+        if (!state.observer) return;
+        if (!state.semanticShadowRoots) {
+            state.semanticShadowRoots = new WeakSet();
+        }
+        if (state.semanticShadowRoots.has(root)) return;
+        state.observer.observe(root, {
+            subtree: true,
+            childList: true,
+            attributes: true,
+            characterData: true
+        });
+        state.semanticShadowRoots.add(root);
+    }
+
     function clipString(value) {
         if (value == null) {
             return null;
@@ -309,6 +326,7 @@ JSON.stringify((function() {
         }
 
         if (element.shadowRoot) {
+            observeOpenShadowRoot(element.shadowRoot);
             for (var shadowChild = element.shadowRoot.firstChild; shadowChild; shadowChild = shadowChild.nextSibling) {
                 visitChildNode(shadowChild);
             }
@@ -397,6 +415,10 @@ JSON.stringify((function() {
                 var index = Array.prototype.indexOf.call(parent.children, current) + 1;
                 if (index <= 0) return null;
                 tag += ':nth-child(' + index + ')';
+            } else if (current.parentNode === root && root.children) {
+                var rootIndex = Array.prototype.indexOf.call(root.children, current) + 1;
+                if (rootIndex <= 0) return null;
+                tag += ':nth-child(' + rootIndex + ')';
             }
             path.unshift(tag);
             if (!parent) break;
