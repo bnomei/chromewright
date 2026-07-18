@@ -43,7 +43,7 @@ Vimari: `f`/`F` link hints (footer cmdline while active), `j`/`k`/`h`/`l` scroll
 match, `N` previous match, Space collapse (structure mode only), `zw` toggle soft
 word-wrap (off by default), `zs` toggle prose vs structure projection (prose by
 default; Vim-style `z`-prefix view commands), `i`
-inspection, `y` content copy, `Y` semantic-ref copy, Tab/Shift-Tab focus,
+inspection, `y` copy (link/image URL or block text), `Y` semantic-ref copy, Tab/Shift-Tab focus,
 Enter confirm, Escape cancel (and dismiss a failed page-action Error back to
 Ready while retaining the last good page), and Ctrl-C quit.
 

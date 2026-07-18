@@ -30,6 +30,7 @@
 
 ### Fixed
 
+- Make TUI `y` copy the resolved URL for links and images instead of the full rendered element.
 - Allow `about:blank` (and other `about:` URLs) in navigation validation so TUI `t` / `new_tab` can open a blank tab without `allow_unsafe`.
 - Make agent attention visible in prose mode: paint the whole subtree, scroll to the first visible descendant, status feedback, and a magenta background spotlight (fg-only was invisible on cyan headings).
 

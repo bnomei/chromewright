@@ -226,7 +226,7 @@ Keyboard bindings are not shown in the terminal chrome. Defaults are Vimari-comp
 | `zw` | `toggle_wrap` | Toggle soft word-wrap (off by default). When on, long lines wrap to the viewport and `h`/`l` horizontal pan is disabled. |
 | `zs` | `toggle_structure` | Toggle prose (default) vs structure projection. Prose hides landmark/list/group chrome and flattens indent; structure shows DOM-like containers. Collapse (`Space`) only works in structure mode. |
 | `i` | `inspect` | Open a compact inspect panel under the selected block; title is the full DOM path (`main > … > tag#id`), body has action fields and ref/rev; follows selection until Esc. |
-| `y` | `copy_block` | Copy rendered block text (OSC 52). |
+| `y` | `copy_block` | Copy selection: link/image URL (resolved), otherwise rendered block text (OSC 52). |
 | `Y` | `copy_ref` | Copy the opaque `semantic_ref` (OSC 52). |
 | `Tab` | `tab_next` | Move to the next focusable control. |
 | `Shift-Tab` | `tab_prev` | Move to the previous focusable control. |

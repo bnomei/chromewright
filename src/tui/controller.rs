@@ -1030,7 +1030,7 @@ impl Controller {
         })
     }
 
-    /// Rendered plain text for the selected block (clipboard payload for `y`).
+    /// Clipboard payload for `y`: link/image URL when selected, else rendered block text.
     pub fn copy_block_text(&mut self) -> Option<String> {
         let doc = self.state.document()?;
         let sel = self.state.view.selection.as_ref()?;

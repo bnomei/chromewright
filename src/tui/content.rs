@@ -582,6 +582,11 @@ pub fn rendered_block_text(
     semantic_ref: &SemanticRef,
 ) -> Option<String> {
     let component = document.resolve(semantic_ref).ok()?;
+    // Links and images copy their URL (resolved against the page when relative),
+    // not the full markdown-ish element rendering.
+    if let Some(url) = copy_url_for_component(document, component) {
+        return Some(url);
+    }
     let collapsed = HashSet::new();
     let mut lines = Vec::new();
     // Copy uses structure projection so container labels remain available.
@@ -600,6 +605,72 @@ pub fn rendered_block_text(
             .collect::<Vec<_>>()
             .join("\n"),
     )
+}
+
+/// Clipboard payload for link/image selection: resolved href or src.
+///
+/// Returns `None` for other kinds (caller falls back to rendered block text).
+/// Empty/missing URLs also return `None`. Data/base64 media stays full so the
+/// clipboard can carry the real URL (display folding is separate).
+fn copy_url_for_component(
+    document: &SemanticDocument,
+    component: &SemanticComponent,
+) -> Option<String> {
+    let raw = match component.kind {
+        SemanticKind::Link => component.attrs.href.as_deref(),
+        SemanticKind::Image => component.attrs.src.as_deref(),
+        _ => None,
+    }?
+    .trim();
+    if raw.is_empty() {
+        return None;
+    }
+    Some(resolve_copy_url(document.document.url.as_str(), raw))
+}
+
+/// Resolve a possibly-relative link/image URL against the document base.
+fn resolve_copy_url(base: &str, href: &str) -> String {
+    if href.starts_with("http://")
+        || href.starts_with("https://")
+        || href.starts_with("about:")
+        || href.starts_with("data:")
+        || href.starts_with("file:")
+        || href.starts_with("mailto:")
+        || href.starts_with("tel:")
+        || href.starts_with("blob:")
+    {
+        return href.to_string();
+    }
+    if href.starts_with("//") {
+        let scheme = if base.starts_with("https") {
+            "https:"
+        } else {
+            "http:"
+        };
+        return format!("{scheme}{href}");
+    }
+    if href.starts_with('#') {
+        // Fragment-only: keep page URL and replace/append fragment.
+        if let Some(hash) = base.find('#') {
+            return format!("{}{href}", &base[..hash]);
+        }
+        return format!("{base}{href}");
+    }
+    if href.starts_with('/')
+        && let Some(origin_end) = base.find("://")
+    {
+        let after = &base[origin_end + 3..];
+        let host_end = after
+            .find('/')
+            .map(|i| origin_end + 3 + i)
+            .unwrap_or(base.len());
+        return format!("{}{}", &base[..host_end], href);
+    }
+    // Relative to current path directory.
+    if let Some(slash) = base.rfind('/') {
+        return format!("{}{}", &base[..=slash], href);
+    }
+    href.to_string()
 }
 
 /// Search content lines for a query; returns matching semantic_refs in order (exact ref ownership).
@@ -1192,6 +1263,124 @@ mod tests {
         let i2 = lines.iter().position(|l| l.text.contains("## B")).unwrap();
         // Only the 2 leading blanks for h2 between them (not 2 after + 2 before).
         assert_eq!(i2 - i1 - 1, 2);
+    }
+
+    #[test]
+    fn copy_y_on_link_returns_resolved_href() {
+        let doc = normalize_fixture(
+            meta(),
+            vec![RawSemanticNode {
+                kind: "link".into(),
+                tag: Some("a".into()),
+                id: Some("svc".into()),
+                unique_id: true,
+                selector: None,
+                text: Some("SERVICE".into()),
+                href: Some("/en/#service".into()),
+                landmark: None,
+                heading_level: None,
+                ordered: None,
+                label: None,
+                src: None,
+                alt: None,
+                name: None,
+                value: None,
+                input_type: None,
+                placeholder: None,
+                checked: None,
+                disabled: None,
+                required: None,
+                readonly: None,
+                multiple: None,
+                button_type: None,
+                options: vec![],
+                children: vec![],
+            }],
+        )
+        .expect("doc");
+        let r = doc.roots[0].semantic_ref.clone();
+        let text = rendered_block_text(&doc, &r).expect("copy");
+        assert_eq!(text, "https://example.com/en/#service");
+        assert!(!text.contains("SERVICE"));
+        assert!(!text.contains("]("));
+    }
+
+    #[test]
+    fn copy_y_on_image_returns_src_url() {
+        let doc = normalize_fixture(
+            meta(),
+            vec![RawSemanticNode {
+                kind: "image".into(),
+                tag: Some("img".into()),
+                id: None,
+                unique_id: false,
+                selector: None,
+                text: None,
+                href: None,
+                landmark: None,
+                heading_level: None,
+                ordered: None,
+                label: None,
+                src: Some("https://cdn.example/a.png".into()),
+                alt: Some("logo".into()),
+                name: None,
+                value: None,
+                input_type: None,
+                placeholder: None,
+                checked: None,
+                disabled: None,
+                required: None,
+                readonly: None,
+                multiple: None,
+                button_type: None,
+                options: vec![],
+                children: vec![],
+            }],
+        )
+        .expect("doc");
+        let r = doc.roots[0].semantic_ref.clone();
+        let text = rendered_block_text(&doc, &r).expect("copy");
+        assert_eq!(text, "https://cdn.example/a.png");
+        assert!(!text.contains("logo"));
+        assert!(!text.contains("!["));
+    }
+
+    #[test]
+    fn copy_y_on_text_still_returns_rendered_block() {
+        let doc = normalize_fixture(
+            meta(),
+            vec![RawSemanticNode {
+                kind: "text".into(),
+                tag: Some("p".into()),
+                id: Some("p1".into()),
+                unique_id: true,
+                selector: None,
+                text: Some("hello body".into()),
+                href: None,
+                landmark: None,
+                heading_level: None,
+                ordered: None,
+                label: None,
+                src: None,
+                alt: None,
+                name: None,
+                value: None,
+                input_type: None,
+                placeholder: None,
+                checked: None,
+                disabled: None,
+                required: None,
+                readonly: None,
+                multiple: None,
+                button_type: None,
+                options: vec![],
+                children: vec![],
+            }],
+        )
+        .expect("doc");
+        let r = doc.roots[0].semantic_ref.clone();
+        let text = rendered_block_text(&doc, &r).expect("copy");
+        assert!(text.contains("hello body"), "{text}");
     }
 
     #[test]
