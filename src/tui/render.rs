@@ -210,6 +210,18 @@ fn draw_content(frame: &mut Frame, area: Rect, controller: &Controller, theme: &
         }
 
         let style = theme.line_style(line.kind, line.heading_level, selected, agent_attention);
+        // Pad attention rows to the full viewport width so the magenta bar is a
+        // solid strip, not only under the glyph run (easy to miss on short h2s).
+        if agent_attention {
+            let used: usize = spans
+                .iter()
+                .map(|s| s.content.chars().count())
+                .sum::<usize>()
+                + text.chars().count();
+            if used < width {
+                text.push_str(&" ".repeat(width - used));
+            }
+        }
         spans.push(Span::styled(text, style));
         text_lines.push(Line::from(spans));
     }
