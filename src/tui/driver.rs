@@ -139,12 +139,31 @@ impl PageDriver for SessionPageDriver<'_> {
         match component.kind {
             SemanticKind::Link => {
                 if new_tab {
-                    let target = resolved_link_target(self.session, document, component)?;
-                    self.open_tab(&target)?;
+                    match resolved_link_target(self.session, document, component) {
+                        Ok(target) => self.open_tab(&target)?,
+                        Err(_) => {
+                            // Live locator went stale; fall back to captured href.
+                            let target = link_href_fallback(document, component)?;
+                            self.open_tab(&target)?;
+                        }
+                    }
                 } else {
-                    // A real click preserves fragment/query resolution and page-defined
-                    // click semantics. The locator is derived from the exact ref only.
-                    click_component(self.session, document, component, true)?;
+                    // Prefer a real click (SPA handlers, relative resolution).
+                    // On dynamic pages the capture revision/locator often goes
+                    // stale before the click runs — fall back to navigating the
+                    // captured/resolved href so the user can still leave the page.
+                    if let Err(click_err) = click_component(self.session, document, component, true)
+                    {
+                        match link_href_fallback(document, component) {
+                            Ok(target) => {
+                                log::warn!(
+                                    "link click failed ({click_err}); navigating to fallback href {target}"
+                                );
+                                self.navigate(&target)?;
+                            }
+                            Err(_) => return Err(click_err),
+                        }
+                    }
                 }
                 Ok(true)
             }
@@ -223,7 +242,6 @@ fn cycle_tab(session: &BrowserSession, delta: isize) -> Result<()> {
     Ok(())
 }
 
-#[allow(dead_code)]
 fn resolve_href(base: &str, href: &str) -> String {
     if href.starts_with("http://")
         || href.starts_with("https://")
@@ -421,6 +439,27 @@ fn resolved_link_target(
         .ok_or_else(|| BrowserError::InvalidArgument("target link not found in page".into()))
 }
 
+/// Build an absolute navigation target from the captured href when the live
+/// DOM locator is no longer valid (SPA re-render, revision bump, etc.).
+fn link_href_fallback(
+    document: &SemanticDocument,
+    component: &crate::semantic::SemanticComponent,
+) -> Result<String> {
+    let href = component
+        .attrs
+        .href
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            BrowserError::InvalidArgument("link has no href for navigation fallback".into())
+        })?;
+    let base = document.document.url.as_str();
+    let absolute = resolve_href(base, href);
+    // Reuse the same safety gate as explicit navigation (http/https only by default).
+    validate_navigation_url(&absolute, false)
+}
+
 /// Scripted fake driver for unit tests of lifecycle atomicity without Chrome.
 ///
 /// Pages advance on navigation/history/reload; failures and metadata handoffs
@@ -535,6 +574,10 @@ impl PageDriver for FakePageDriver {
     fn document_metadata(&mut self) -> Result<DocumentMetadata> {
         if self.metadata_responses.is_empty() {
             Ok(self.current()?.document)
+        } else if self.metadata_responses.len() == 1 {
+            // Sticky final scripted response so capture retries keep seeing the
+            // injected mismatch instead of falling through to a matching doc.
+            Ok(self.metadata_responses[0].clone())
         } else {
             Ok(self.metadata_responses.remove(0))
         }

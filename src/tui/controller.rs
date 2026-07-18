@@ -440,20 +440,33 @@ impl Controller {
             // hydrated page can mutate between settling and capture, so a
             // pre-capture metadata read would reject a valid later snapshot.
             // The post-capture metadata must instead describe exactly what we
-            // captured before it can be published.
-            let doc = driver.capture_semantic().map_err(|e| e.to_string())?;
-            let metadata = driver.document_metadata().map_err(|e| e.to_string())?;
-            if metadata.document_id.is_empty()
-                || metadata.revision.is_empty()
-                || metadata.ready_state != "complete"
-            {
-                return Err("browser did not provide stable complete document metadata".into());
+            // captured before it can be published. Dynamic sites often keep
+            // mutating briefly after settle — retry only the metadata barrier
+            // (hard capture failures still fail closed immediately).
+            const METADATA_RETRY_ATTEMPTS: usize = 4;
+            let mut last_err = String::new();
+            for attempt in 0..METADATA_RETRY_ATTEMPTS {
+                if attempt > 0 {
+                    let _ = driver.wait_settle();
+                }
+                let doc = driver.capture_semantic().map_err(|e| e.to_string())?;
+                let metadata = driver.document_metadata().map_err(|e| e.to_string())?;
+                if metadata.document_id.is_empty()
+                    || metadata.revision.is_empty()
+                    || metadata.ready_state != "complete"
+                {
+                    last_err =
+                        "browser did not provide stable complete document metadata".into();
+                    continue;
+                }
+                if !crate::semantic::capture_matches_document_metadata(&doc.document, &metadata) {
+                    last_err = "semantic capture metadata changed during publication".into();
+                    continue;
+                }
+                // Atomic consistency: url/title/revision come only from this document.
+                return Ok(doc);
             }
-            if !crate::semantic::capture_matches_document_metadata(&doc.document, &metadata) {
-                return Err("semantic capture metadata changed during publication".into());
-            }
-            // Atomic consistency: url/title/revision come only from this document.
-            Ok(doc)
+            Err(last_err)
         })();
         match result {
             Ok(doc) => {

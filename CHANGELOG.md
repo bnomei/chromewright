@@ -23,6 +23,7 @@
 ### Fixed
 
 - Dismiss TUI Error lifecycle with Escape so a failed history/navigation action no longer leaves the terminal browser unresponsive; keep the retained page and log the failure when `CHROMEWRIGHT_LOG` is set.
+- Fall back to navigating a link's captured href when the live DOM click locator is stale/missing, and retry post-capture metadata matching a few times on dynamic pages.
 
 ## 0.7.1 - 2026-06-28
 
