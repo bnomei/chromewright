@@ -395,7 +395,7 @@ impl Controller {
             return Err(message);
         }
 
-        let result = (|| -> Result<SemanticDocument, String> {
+        let result = (|| -> Result<Option<SemanticDocument>, String> {
             match pending.operation {
                 PageOperation::Bootstrap => {}
                 PageOperation::Navigate(url) => driver.navigate(&url).map_err(|e| e.to_string())?,
@@ -404,7 +404,14 @@ impl Controller {
                 PageOperation::Reload => driver.reload().map_err(|e| e.to_string())?,
                 PageOperation::NextTab => driver.next_tab().map_err(|e| e.to_string())?,
                 PageOperation::PrevTab => driver.prev_tab().map_err(|e| e.to_string())?,
-                PageOperation::CloseTab => driver.close_active_tab().map_err(|e| e.to_string())?,
+                PageOperation::CloseTab => {
+                    driver.close_active_tab().map_err(|e| e.to_string())?;
+                    if !driver.has_open_tabs().map_err(|e| e.to_string())? {
+                        // Last tab closed: clear retained UI instead of recapturing
+                        // a missing active page (which would Error and look stuck).
+                        return Ok(None);
+                    }
+                }
                 PageOperation::NewTab => {
                     driver.open_tab("about:blank").map_err(|e| e.to_string())?
                 }
@@ -464,12 +471,12 @@ impl Controller {
                     continue;
                 }
                 // Atomic consistency: url/title/revision come only from this document.
-                return Ok(doc);
+                return Ok(Some(doc));
             }
             Err(last_err)
         })();
         match result {
-            Ok(doc) => {
+            Ok(Some(doc)) => {
                 self.finish_capture(
                     doc,
                     pending.previous_selection,
@@ -482,6 +489,10 @@ impl Controller {
                 }
                 Ok(())
             }
+            Ok(None) => {
+                self.clear_empty_session();
+                Ok(())
+            }
             Err(msg) => {
                 // Retain last valid page; never publish partial update as Ready.
                 log::error!("tui page action '{}' failed: {msg}", pending.action);
@@ -491,6 +502,15 @@ impl Controller {
                 Err(msg)
             }
         }
+    }
+
+    /// Browser has zero tabs: drop retained page so chrome/content clear and
+    /// lifecycle stays Ready for recovery via `t` / new tab.
+    fn clear_empty_session(&mut self) {
+        self.pending_page_action = None;
+        self.hints.clear();
+        self.state.clear_session();
+        self.shared.clear_session();
     }
 
     fn finish_capture(
@@ -1683,6 +1703,31 @@ mod tests {
         assert!(!ctl.state.view.wrap);
         assert_eq!(ctl.state.view.status_message.as_deref(), Some("wrap: off"));
         assert_eq!(ctl.content_lines().len(), unwrapped);
+    }
+
+    #[test]
+    fn closing_last_tab_clears_ui_and_new_tab_recovers() {
+        let d1 = text_doc("1", "only", "solo tab");
+        let mut driver = FakePageDriver::new(vec![d1.clone()]);
+        driver.open_tab_count = 1;
+        let mut ctl = Controller::new();
+        ctl.state.publish_page(d1);
+        ctl.close_tab();
+        render_loading_and_run(&mut ctl, &mut driver).expect("close last");
+        assert!(ctl.state.page.is_none());
+        assert!(ctl.state.lifecycle.is_ready());
+        assert_eq!(
+            ctl.state.view.status_message.as_deref(),
+            Some("no open tabs — press t for a new tab")
+        );
+        assert!(driver.tab_ops.contains(&"close"));
+
+        ctl.new_tab();
+        render_loading_and_run(&mut ctl, &mut driver).expect("new tab");
+        assert!(ctl.state.lifecycle.is_ready());
+        assert!(ctl.state.page.is_some());
+        assert_eq!(ctl.state.url(), "about:blank");
+        assert!(!driver.open_tabs.is_empty());
     }
 
     #[test]

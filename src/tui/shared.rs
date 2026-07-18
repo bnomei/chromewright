@@ -332,6 +332,17 @@ impl SharedTuiState {
         }
     }
 
+    /// Clear the published document and view-facing selection/attention after
+    /// the browser has no remaining tabs. Leaves lifecycle Ready so recovery
+    /// actions (new tab) can run.
+    pub fn clear_session(&self) {
+        let mut state = self.inner.lock().unwrap();
+        state.active = None;
+        state.selection = None;
+        state.attention = Attention::default();
+        state.lifecycle = Lifecycle::Ready;
+    }
+
     /// Atomically publish a complete SemanticDocument as active and transition
     /// lifecycle to Ready.
     ///

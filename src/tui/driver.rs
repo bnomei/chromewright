@@ -30,6 +30,8 @@ pub trait PageDriver {
     fn document_metadata(&mut self) -> Result<DocumentMetadata>;
     fn open_tab(&mut self, url: &str) -> Result<()>;
     fn close_active_tab(&mut self) -> Result<()>;
+    /// Whether the browser still has at least one open tab after a close.
+    fn has_open_tabs(&mut self) -> Result<bool>;
     fn next_tab(&mut self) -> Result<()>;
     fn prev_tab(&mut self) -> Result<()>;
     /// Activate a link or control identified by an exact current-document `semantic_ref`.
@@ -117,6 +119,10 @@ impl PageDriver for SessionPageDriver<'_> {
     fn close_active_tab(&mut self) -> Result<()> {
         self.session.close_active_tab()?;
         Ok(())
+    }
+
+    fn has_open_tabs(&mut self) -> Result<bool> {
+        Ok(!self.session.list_tabs()?.is_empty())
     }
 
     fn next_tab(&mut self) -> Result<()> {
@@ -464,7 +470,7 @@ fn link_href_fallback(
 ///
 /// Pages advance on navigation/history/reload; failures and metadata handoffs
 /// are injectable so tests can assert Loading → Ready | Error without a browser.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct FakePageDriver {
     pub pages: Vec<SemanticDocument>,
     pub page_index: usize,
@@ -486,7 +492,33 @@ pub struct FakePageDriver {
     pub filled: Vec<(String, String)>,
     pub open_tabs: Vec<String>,
     pub tab_ops: Vec<&'static str>,
+    /// Simulated open-tab count for empty-session close tests.
+    pub open_tab_count: usize,
     pub history: (bool, bool),
+}
+
+impl Default for FakePageDriver {
+    fn default() -> Self {
+        Self {
+            pages: Vec::new(),
+            page_index: 0,
+            navigate_calls: Vec::new(),
+            back_calls: 0,
+            forward_calls: 0,
+            reload_calls: 0,
+            capture_calls: 0,
+            metadata_responses: Vec::new(),
+            advance_page_on_capture: false,
+            fail_next: None,
+            fail_capture: None,
+            activated: Vec::new(),
+            filled: Vec::new(),
+            open_tabs: Vec::new(),
+            tab_ops: Vec::new(),
+            open_tab_count: 1,
+            history: (false, false),
+        }
+    }
 }
 
 impl FakePageDriver {
@@ -585,12 +617,35 @@ impl PageDriver for FakePageDriver {
 
     fn open_tab(&mut self, url: &str) -> Result<()> {
         self.open_tabs.push(url.to_string());
+        self.open_tab_count = self.open_tab_count.saturating_add(1);
+        // Always provide a captureable blank page for the new tab so empty
+        // sessions and multi-tab tests can settle after `t`.
+        let blank = SemanticDocument::empty(DocumentMetadata {
+            document_id: format!("blank-{}", self.open_tabs.len()),
+            revision: "main:1".into(),
+            url: url.to_string(),
+            title: String::new(),
+            ready_state: "complete".into(),
+            frames: vec![],
+        })
+        .map_err(|e| BrowserError::DomParseFailed(e.to_string()))?;
+        self.pages.push(blank);
+        self.page_index = self.pages.len() - 1;
         Ok(())
     }
 
     fn close_active_tab(&mut self) -> Result<()> {
         self.tab_ops.push("close");
+        self.open_tab_count = self.open_tab_count.saturating_sub(1);
+        if self.open_tab_count == 0 {
+            self.pages.clear();
+            self.page_index = 0;
+        }
         Ok(())
+    }
+
+    fn has_open_tabs(&mut self) -> Result<bool> {
+        Ok(self.open_tab_count > 0)
     }
 
     fn next_tab(&mut self) -> Result<()> {

@@ -205,8 +205,12 @@ impl Dispatcher {
 
     fn dispatch_action(&mut self, controller: &mut Controller, action: Action) -> DispatchOutcome {
         // Double-check mode boundary for normal actions.
+        // Escape/Quit/NewTab remain available in Error so recovery is possible
+        // after a failed page action or empty tab set.
         if !controller.state.allows_normal_commands()
-            && !matches!(action, Action::Escape | Action::Quit)
+            && action != Action::Escape
+            && action != Action::Quit
+            && action != Action::NewTab
         {
             return DispatchOutcome::Continue;
         }
@@ -642,6 +646,20 @@ mod tests {
             DispatchOutcome::Redraw
         );
         assert!(ctl.state.lifecycle.is_ready());
+    }
+
+    #[test]
+    fn error_state_still_allows_new_tab_recovery() {
+        let mut ctl = Controller::new();
+        ctl.state.publish_page(empty_doc());
+        ctl.state.enter_error("close_tab", "no tabs");
+        ctl.shared.fail_page_action("close_tab", "no tabs");
+        let mut dispatcher = Dispatcher::new(TuiKeymap::defaults());
+        assert_eq!(
+            dispatcher.dispatch_action(&mut ctl, Action::NewTab),
+            DispatchOutcome::Redraw
+        );
+        assert!(ctl.has_pending_page_action());
     }
 
     #[test]

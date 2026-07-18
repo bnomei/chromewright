@@ -271,6 +271,24 @@ impl TuiState {
         self.view.hint_buffer.clear();
     }
 
+    /// Clear the published page and view after the browser has no open tabs.
+    pub fn clear_session(&mut self) {
+        self.lifecycle = Lifecycle::Ready;
+        self.mode = InteractionMode::Normal;
+        self.page = None;
+        self.view = ViewState {
+            viewport_height: self.view.viewport_height,
+            viewport_width: self.view.viewport_width,
+            wrap: self.view.wrap,
+            projection: self.view.projection,
+            ..ViewState::default()
+        };
+        self.can_go_back = false;
+        self.can_go_forward = false;
+        self.clipboard_fallback = None;
+        self.view.set_status("no open tabs — press t for a new tab");
+    }
+
     /// Dismiss Error back to Ready while retaining the last published page.
     ///
     /// Returns `true` when an Error was cleared. Loading and Ready are left
