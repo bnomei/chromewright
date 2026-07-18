@@ -203,8 +203,10 @@ Keyboard bindings are not shown in the terminal chrome. Defaults are Vimari-comp
 | `k` | `scroll_up` | Scroll or move selection up one block. |
 | `h` | `scroll_left` | Horizontal scroll left when content overflows. |
 | `l` | `scroll_right` | Horizontal scroll right when content overflows. |
-| `u` | `half_page_up` | Half-page up. |
-| `d` | `half_page_down` | Half-page down. |
+| `u` | `half_page_up` | Pan the view half a page up (selection unchanged). |
+| `d` | `half_page_down` | Pan the view half a page down (selection unchanged). |
+| `Ctrl-u` | `page_select_up` | Move selection up by about half a page. |
+| `Ctrl-d` | `page_select_down` | Move selection down by about half a page. |
 | `gg` | `go_top` | Jump to the document top. |
 | `G` | `go_bottom` | Jump to the document bottom. |
 | `gi` | `focus_first_input` | Focus the first focusable form control. |

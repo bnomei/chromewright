@@ -214,6 +214,16 @@ impl TuiKeymap {
         insert(&mut map, Action::ScrollRight, KeySequence::chars("l"));
         insert(&mut map, Action::HalfPageUp, KeySequence::chars("u"));
         insert(&mut map, Action::HalfPageDown, KeySequence::chars("d"));
+        insert(
+            &mut map,
+            Action::PageSelectUp,
+            KeySequence::with_modifiers(KeyCode::Char('u'), KeyModifiers::CTRL),
+        );
+        insert(
+            &mut map,
+            Action::PageSelectDown,
+            KeySequence::with_modifiers(KeyCode::Char('d'), KeyModifiers::CTRL),
+        );
         insert(&mut map, Action::GoTop, KeySequence::chars("gg"));
         insert(&mut map, Action::GoBottom, KeySequence::chars("G"));
         insert(&mut map, Action::FocusFirstInput, KeySequence::chars("gi"));
@@ -468,6 +478,20 @@ mod tests {
         assert_eq!(
             km.resolve_sequence(&KeySequence::chars("zw")),
             Some(Action::ToggleWrap)
+        );
+        assert_eq!(
+            km.resolve_sequence(&KeySequence::with_modifiers(
+                KeyCode::Char('d'),
+                KeyModifiers::CTRL
+            )),
+            Some(Action::PageSelectDown)
+        );
+        assert_eq!(
+            km.resolve_sequence(&KeySequence::with_modifiers(
+                KeyCode::Char('u'),
+                KeyModifiers::CTRL
+            )),
+            Some(Action::PageSelectUp)
         );
         assert_eq!(
             km.resolve_sequence(&KeySequence::chars("zs")),

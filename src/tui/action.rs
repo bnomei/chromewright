@@ -26,10 +26,14 @@ pub enum Action {
     ScrollLeft,
     /// `l` — horizontal scroll right when content overflows.
     ScrollRight,
-    /// `u` — half-page up.
+    /// `u` — half-page view pan up (selection unchanged).
     HalfPageUp,
-    /// `d` — half-page down.
+    /// `d` — half-page view pan down (selection unchanged).
     HalfPageDown,
+    /// `Ctrl-u` — move selection up by about half a page.
+    PageSelectUp,
+    /// `Ctrl-d` — move selection down by about half a page.
+    PageSelectDown,
     /// `gg` — jump to document top.
     GoTop,
     /// `G` — jump to document bottom.
@@ -94,6 +98,8 @@ impl Action {
             Self::ScrollRight => "scroll_right",
             Self::HalfPageUp => "half_page_up",
             Self::HalfPageDown => "half_page_down",
+            Self::PageSelectUp => "page_select_up",
+            Self::PageSelectDown => "page_select_down",
             Self::GoTop => "go_top",
             Self::GoBottom => "go_bottom",
             Self::FocusFirstInput => "focus_first_input",
@@ -133,6 +139,8 @@ impl Action {
             "scroll_right" => Some(Self::ScrollRight),
             "half_page_up" => Some(Self::HalfPageUp),
             "half_page_down" => Some(Self::HalfPageDown),
+            "page_select_up" => Some(Self::PageSelectUp),
+            "page_select_down" => Some(Self::PageSelectDown),
             "go_top" => Some(Self::GoTop),
             "go_bottom" => Some(Self::GoBottom),
             "focus_first_input" => Some(Self::FocusFirstInput),
@@ -186,7 +194,7 @@ impl Action {
     }
 }
 
-const ALL_ACTIONS: [Action; 33] = [
+const ALL_ACTIONS: [Action; 35] = [
     Action::LinkHintsFollow,
     Action::LinkHintsNewTab,
     Action::ScrollDown,
@@ -195,6 +203,8 @@ const ALL_ACTIONS: [Action; 33] = [
     Action::ScrollRight,
     Action::HalfPageUp,
     Action::HalfPageDown,
+    Action::PageSelectUp,
+    Action::PageSelectDown,
     Action::GoTop,
     Action::GoBottom,
     Action::FocusFirstInput,

@@ -830,6 +830,23 @@ impl Controller {
         self.state.view.scroll_y = self.state.view.scroll_y.saturating_sub(h);
     }
 
+    /// Move selection down by about half a viewport of addressable stops (`Ctrl-d`).
+    pub fn page_select_down(&mut self) {
+        let steps = self.page_select_step();
+        self.move_selection(steps as isize);
+    }
+
+    /// Move selection up by about half a viewport of addressable stops (`Ctrl-u`).
+    pub fn page_select_up(&mut self) {
+        let steps = self.page_select_step();
+        self.move_selection(-(steps as isize));
+    }
+
+    fn page_select_step(&self) -> usize {
+        // At least one stop so Ctrl-d/u always move when possible.
+        (self.state.view.viewport_height.max(1) / 2).max(1)
+    }
+
     /// Jump to the first content line and select its `semantic_ref` when present.
     pub fn go_top(&mut self) {
         self.state.view.scroll_y = 0;
@@ -2056,6 +2073,30 @@ mod tests {
         assert_eq!(ctl.state.view.selection.as_ref(), Some(&refs[1]));
         ctl.scroll_up();
         assert_eq!(ctl.state.view.selection.as_ref(), Some(&refs[0]));
+    }
+
+    #[test]
+    fn ctrl_d_moves_selection_by_half_page() {
+        let mut nodes = Vec::new();
+        for i in 0..30 {
+            nodes.push(raw_text(&format!("p{i}"), &format!("line {i}")));
+        }
+        let doc = normalize_fixture(meta("1", "https://example.com/"), nodes).expect("doc");
+        let refs = doc.semantic_refs();
+        let mut ctl = Controller::new();
+        ctl.set_viewport(80, 10); // half page = 5 stops
+        ctl.state.publish_page(doc);
+        ctl.state.view.selection = Some(refs[0].clone());
+        ctl.page_select_down();
+        assert_eq!(ctl.state.view.selection.as_ref(), Some(&refs[5]));
+        ctl.page_select_up();
+        assert_eq!(ctl.state.view.selection.as_ref(), Some(&refs[0]));
+        // Plain d only pans the view.
+        let sel = ctl.state.view.selection.clone();
+        let scroll_before = ctl.state.view.scroll_y;
+        ctl.half_page_down();
+        assert_eq!(ctl.state.view.selection, sel);
+        assert!(ctl.state.view.scroll_y >= scroll_before);
     }
 
     #[test]

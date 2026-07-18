@@ -248,6 +248,14 @@ impl Dispatcher {
                 controller.half_page_down();
                 DispatchOutcome::Redraw
             }
+            Action::PageSelectUp => {
+                controller.page_select_up();
+                DispatchOutcome::Redraw
+            }
+            Action::PageSelectDown => {
+                controller.page_select_down();
+                DispatchOutcome::Redraw
+            }
             Action::GoTop => {
                 controller.go_top();
                 DispatchOutcome::Redraw
