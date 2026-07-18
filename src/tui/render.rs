@@ -2,18 +2,19 @@
 //!
 //! Draws lifecycle/mode chrome, addressable content lines (with independent
 //! human selection vs agent attention styles), and status. Never renders key
-//! binding legends in the UI.
+//! binding legends in the UI. Colors come from [`crate::tui::theme::TuiTheme`].
 
 use crate::tui::controller::Controller;
 use crate::tui::state::{InputKind, InteractionMode, Lifecycle};
+use crate::tui::theme::TuiTheme;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
 /// Draw one frame of the terminal browser.
 pub fn draw(frame: &mut Frame, controller: &Controller) {
+    let theme = TuiTheme::new();
     let area = frame.area();
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -24,57 +25,93 @@ pub fn draw(frame: &mut Frame, controller: &Controller) {
         ])
         .split(area);
 
-    draw_chrome(frame, chunks[0], controller);
-    draw_content(frame, chunks[1], controller);
-    draw_status(frame, chunks[2], controller);
+    draw_chrome(frame, chunks[0], controller, &theme);
+    draw_content(frame, chunks[1], controller, &theme);
+    draw_status(frame, chunks[2], controller, &theme);
 
     if let Some(inspect) = &controller.state.view.inspect_text {
-        draw_inspect_overlay(frame, area, inspect);
+        draw_inspect_overlay(frame, area, inspect, &theme);
     }
 }
 
-fn draw_chrome(frame: &mut Frame, area: Rect, controller: &Controller) {
+fn draw_chrome(frame: &mut Frame, area: Rect, controller: &Controller, theme: &TuiTheme) {
     let state = &controller.state;
     let mode = state.mode_label();
     let lifecycle = state.lifecycle.status_label();
-    let hist = format!(
-        "←{} →{}",
-        if state.can_go_back { "●" } else { "○" },
-        if state.can_go_forward { "●" } else { "○" }
-    );
-    let wrap = if state.view.wrap { " wrap" } else { "" };
+    let lifecycle_style = match &state.lifecycle {
+        Lifecycle::Ready => theme.chrome_ready(),
+        Lifecycle::Loading { .. } => theme.chrome_loading(),
+        Lifecycle::Error { .. } => theme.chrome_error(),
+    };
+
+    let mut line1_spans = vec![
+        Span::styled(format!("[{mode}]"), theme.chrome_mode()),
+        Span::raw(" "),
+        Span::styled(format!("[{lifecycle}]"), lifecycle_style),
+    ];
+    if state.view.wrap {
+        line1_spans.push(Span::styled(" wrap", theme.chrome_wrap()));
+    }
+    line1_spans.push(Span::raw(" "));
+    line1_spans.push(Span::styled(
+        if state.can_go_back { "←●" } else { "←○" },
+        if state.can_go_back {
+            theme.chrome_hist_enabled()
+        } else {
+            theme.chrome_hist_disabled()
+        },
+    ));
+    line1_spans.push(Span::raw(" "));
+    line1_spans.push(Span::styled(
+        if state.can_go_forward { "→●" } else { "→○" },
+        if state.can_go_forward {
+            theme.chrome_hist_enabled()
+        } else {
+            theme.chrome_hist_disabled()
+        },
+    ));
+    line1_spans.push(Span::raw("  "));
+    line1_spans.push(Span::styled(state.title().to_string(), theme.chrome_title()));
 
     let url_line = match &state.mode {
         InteractionMode::Input(InputKind::Url { buffer }) => format!("URL> {buffer}"),
         InteractionMode::Input(InputKind::Search { buffer }) => format!("/{buffer}"),
         InteractionMode::Input(InputKind::Form { buffer, .. }) => format!("IN> {buffer}"),
-        InteractionMode::Hint(_) => {
-            format!("hint: {}", state.view.hint_buffer)
-        }
+        InteractionMode::Hint(_) => format!("hint: {}", state.view.hint_buffer),
         InteractionMode::Normal => state.url().to_string(),
     };
+    let url_style = match &state.mode {
+        InteractionMode::Input(_) | InteractionMode::Hint(_) => theme.chrome_mode(),
+        InteractionMode::Normal => theme.muted(),
+    };
 
-    let title = state.title();
-    let line1 = format!("[{mode}] [{lifecycle}]{wrap} {hist}  {title}");
-    let line2 = truncate(&url_line, area.width as usize);
+    let line1_text: String = line1_spans.iter().map(|s| s.content.as_ref()).collect();
+    let line1 = if line1_text.chars().count() > area.width as usize {
+        // Fall back to truncated plain line when the chrome overflows.
+        Line::from(Span::styled(
+            truncate(&line1_text, area.width as usize),
+            theme.chrome_title(),
+        ))
+    } else {
+        Line::from(line1_spans)
+    };
 
     let para = Paragraph::new(vec![
+        line1,
         Line::from(Span::styled(
-            truncate(&line1, area.width as usize),
-            Style::default().add_modifier(Modifier::BOLD),
+            truncate(&url_line, area.width as usize),
+            url_style,
         )),
-        Line::from(line2),
     ]);
     frame.render_widget(para, area);
 }
 
-fn draw_content(frame: &mut Frame, area: Rect, controller: &Controller) {
+fn draw_content(frame: &mut Frame, area: Rect, controller: &Controller, theme: &TuiTheme) {
     let state = &controller.state;
     let lines = controller.content_lines();
     let scroll = state.view.scroll_y;
     let height = area.height as usize;
     let width = area.width as usize;
-    // Horizontal pan only applies when wrap is off; wrapped lines already fit.
     let hscroll = if state.view.wrap {
         0
     } else {
@@ -101,63 +138,101 @@ fn draw_content(frame: &mut Frame, area: Rect, controller: &Controller) {
             .zip(line.semantic_ref.as_ref())
             .is_some_and(|(a, r)| a == r);
 
-        // Overlay hint labels for links
+        let mut spans = Vec::new();
         if let Some(ref_r) = &line.semantic_ref
             && let Some(hint) = controller.hints.iter().find(|h| &h.semantic_ref == ref_r)
         {
-            text = format!("[{}] {}", hint.label, text);
-            if text.chars().count() > width {
-                text = text.chars().take(width).collect();
+            let label = format!("[{}] ", hint.label);
+            spans.push(Span::styled(label, theme.hint_label()));
+            let label_len = format!("[{}] ", hint.label).chars().count();
+            let remain = width.saturating_sub(label_len);
+            if text.chars().count() > remain {
+                text = text.chars().take(remain).collect();
             }
         }
 
-        // Human selection and agent attention are independent: selection wins
-        // for reverse video; attention uses a distinct underline/bold highlight.
-        let style = if selected {
-            Style::default().add_modifier(Modifier::REVERSED)
-        } else if agent_attention {
-            Style::default().add_modifier(Modifier::UNDERLINED | Modifier::BOLD)
-        } else {
-            Style::default()
-        };
-        text_lines.push(Line::from(Span::styled(text, style)));
+        let style = theme.line_style(line.kind, line.heading_level, selected, agent_attention);
+        spans.push(Span::styled(text, style));
+        text_lines.push(Line::from(spans));
     }
 
     if text_lines.is_empty() {
-        let empty = match &state.lifecycle {
-            Lifecycle::Loading { action } => format!("Loading {action}…"),
-            Lifecycle::Error { message, .. } => format!("(error retained prior page) {message}"),
-            Lifecycle::Ready if state.page.is_none() => "No document".into(),
-            Lifecycle::Ready => String::new(),
+        let (empty, style) = match &state.lifecycle {
+            Lifecycle::Loading { action } => {
+                (format!("Loading {action}…"), theme.status_loading())
+            }
+            Lifecycle::Error { message, .. } => (
+                format!("(error retained prior page) {message}"),
+                theme.status_error(),
+            ),
+            Lifecycle::Ready if state.page.is_none() => ("No document".into(), theme.muted()),
+            Lifecycle::Ready => (String::new(), theme.base()),
         };
-        text_lines.push(Line::from(empty));
+        text_lines.push(Line::from(Span::styled(empty, style)));
     }
 
-    frame.render_widget(Paragraph::new(text_lines), area);
+    frame.render_widget(Paragraph::new(text_lines).style(theme.base()), area);
 }
 
-fn draw_status(frame: &mut Frame, area: Rect, controller: &Controller) {
+fn draw_status(frame: &mut Frame, area: Rect, controller: &Controller, theme: &TuiTheme) {
     let state = &controller.state;
-    let mut parts = Vec::new();
+    let mut spans = Vec::new();
     match &state.lifecycle {
-        Lifecycle::Loading { action } => parts.push(format!("loading:{action}")),
-        Lifecycle::Error { action, message } => {
-            parts.push(format!("error:{action}: {message}"));
+        Lifecycle::Loading { action } => {
+            spans.push(Span::styled(
+                format!("loading:{action}"),
+                theme.status_loading(),
+            ));
         }
-        Lifecycle::Ready => parts.push(format!("rev {}", state.revision())),
+        Lifecycle::Error { action, message } => {
+            spans.push(Span::styled(
+                format!("error:{action}: {message}"),
+                theme.status_error(),
+            ));
+        }
+        Lifecycle::Ready => {
+            spans.push(Span::styled(
+                format!("rev {}", state.revision()),
+                theme.muted(),
+            ));
+        }
     }
     if let Some(msg) = &state.view.status_message {
-        parts.push(msg.clone());
+        if !spans.is_empty() {
+            spans.push(Span::raw(" │ "));
+        }
+        let style = if msg.starts_with("dismissed:") || msg.contains("not found") {
+            theme.muted()
+        } else if msg.starts_with("wrap:") {
+            theme.chrome_wrap()
+        } else {
+            theme.status_ok()
+        };
+        spans.push(Span::styled(msg.clone(), style));
     }
     if let Some(fb) = &state.clipboard_fallback {
+        if !spans.is_empty() {
+            spans.push(Span::raw(" │ "));
+        }
         let preview: String = fb.chars().take(32).collect();
-        parts.push(format!("clip-fallback:{preview}"));
+        spans.push(Span::styled(
+            format!("clip-fallback:{preview}"),
+            theme.muted(),
+        ));
     }
-    let text = truncate(&parts.join(" │ "), area.width as usize);
-    frame.render_widget(Paragraph::new(text), area);
+    let plain: String = spans.iter().map(|s| s.content.as_ref()).collect();
+    let line = if plain.chars().count() > area.width as usize {
+        Line::from(Span::styled(
+            truncate(&plain, area.width as usize),
+            theme.base(),
+        ))
+    } else {
+        Line::from(spans)
+    };
+    frame.render_widget(Paragraph::new(line), area);
 }
 
-fn draw_inspect_overlay(frame: &mut Frame, area: Rect, inspect: &str) {
+fn draw_inspect_overlay(frame: &mut Frame, area: Rect, inspect: &str, theme: &TuiTheme) {
     let width = area.width.saturating_sub(4).max(10);
     let height = 6u16.min(area.height.saturating_sub(2)).max(3);
     let x = area.x + 2;
@@ -168,12 +243,18 @@ fn draw_inspect_overlay(frame: &mut Frame, area: Rect, inspect: &str) {
         width,
         height,
     };
-    let block = Block::default().borders(Borders::ALL).title("inspect");
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title("inspect")
+        .border_style(theme.chrome_mode())
+        .title_style(theme.chrome_mode());
     let inner = block.inner(rect);
     frame.render_widget(Clear, rect);
     frame.render_widget(block, rect);
     frame.render_widget(
-        Paragraph::new(inspect.to_string()).wrap(Wrap { trim: true }),
+        Paragraph::new(inspect.to_string())
+            .wrap(Wrap { trim: true })
+            .style(theme.base()),
         inner,
     );
 }
@@ -224,7 +305,7 @@ mod tests {
             document_id: "d".into(),
             revision: "1".into(),
             url: "https://example.com/".into(),
-            title: "Example".into(),
+            title: "T".into(),
             ready_state: "complete".into(),
             frames: vec![],
         })

@@ -24,6 +24,7 @@ mod managed_headless;
 mod render;
 mod shared;
 mod state;
+mod theme;
 
 pub use action::Action;
 pub use app::{TuiOptions, run_tui, run_tui_with_config};

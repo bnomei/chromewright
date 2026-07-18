@@ -5,7 +5,7 @@
 //! Loading lock and one published SemanticDocument. Browser work is always
 //! deferred until the event loop has drawn a Loading frame.
 
-use crate::semantic::{SemanticDocument, SemanticRef};
+use crate::semantic::{FragmentResolution, SemanticDocument, SemanticRef};
 use crate::tui::content::{
     build_content_lines, focusable_refs, form_control_refs, line_index_of, rendered_block_text,
     search_refs,
@@ -499,6 +499,8 @@ impl Controller {
             content_line_of,
         );
         if let Some(document) = self.state.document().cloned() {
+            // Prefer fragment target from the new URL when present.
+            self.apply_fragment_from_url(&document);
             let lines = self.lines_for_document(&document);
             self.state.clamp_scroll(lines.len());
             // Ensure selection exists
@@ -515,6 +517,44 @@ impl Controller {
         let document = self.state.document().expect("capture published").clone();
         let selection = self.state.view.selection.clone();
         let _ = self.shared.publish_with_selection(document, selection);
+    }
+
+    /// After a capture, if the document URL has a fragment, move selection to it.
+    fn apply_fragment_from_url(&mut self, document: &SemanticDocument) {
+        let Some(fragment) = url_fragment(&document.document.url) else {
+            return;
+        };
+        self.select_fragment_target(document, &fragment);
+    }
+
+    /// Expand collapsed ancestors, select the fragment target, and scroll it into view.
+    fn select_fragment_target(&mut self, document: &SemanticDocument, fragment: &str) {
+        match document.resolve_fragment(fragment) {
+            FragmentResolution::Target(target) => {
+                for ancestor in document.ancestor_refs(&target) {
+                    self.state.view.collapsed.remove(&ancestor);
+                }
+                // Also expand the target itself if it was collapsed as a landmark/list.
+                self.state.view.collapsed.remove(&target);
+                self.state.view.selection = Some(target.clone());
+                let lines = self.lines_for_document(document);
+                if let Some(idx) = line_index_of(&lines, &target) {
+                    self.ensure_visible(idx, lines.len());
+                }
+            }
+            FragmentResolution::Top => {
+                self.state.view.scroll_y = 0;
+                let lines = self.lines_for_document(document);
+                if let Some(r) = lines.iter().find_map(|l| l.semantic_ref.clone()) {
+                    self.state.view.selection = Some(r);
+                }
+            }
+            FragmentResolution::NotFound => {
+                self.state
+                    .view
+                    .set_status("fragment target not represented");
+            }
+        }
     }
 
     /// Push the current human selection into shared coordination for companion tools.
@@ -556,6 +596,16 @@ impl Controller {
             lines
         }
     }
+}
+
+/// Fragment portion of a URL without the leading `#`, if any.
+fn url_fragment(url: &str) -> Option<String> {
+    let hash = url.find('#')?;
+    Some(url[hash + 1..].to_string())
+}
+
+// Re-open Controller impl block for pure view operations.
+impl Controller {
 
     // --- Pure view operations (no driver) ---
 
@@ -1359,6 +1409,77 @@ mod tests {
             ctl.state.view.status_message.as_deref(),
             Some("anchor changed")
         );
+    }
+
+    #[test]
+    fn finish_capture_selects_fragment_target_from_url() {
+        let heading = normalize_fixture(
+            meta("1", "https://example.com/page#sec"),
+            vec![RawSemanticNode {
+                kind: "heading".into(),
+                tag: Some("h2".into()),
+                id: Some("sec".into()),
+                unique_id: true,
+                selector: None,
+                text: Some("Section".into()),
+                href: None,
+                landmark: None,
+                heading_level: Some(2),
+                ordered: None,
+                label: Some("Section".into()),
+                src: None,
+                alt: None,
+                name: None,
+                value: None,
+                input_type: None,
+                placeholder: None,
+                checked: None,
+                disabled: None,
+                required: None,
+                readonly: None,
+                multiple: None,
+                button_type: None,
+                options: vec![],
+                children: vec![],
+            }],
+        )
+        .expect("doc");
+        // Ensure element_id survived normalize
+        let target = heading.semantic_refs()[0].clone();
+        assert_eq!(
+            heading.resolve_fragment("sec"),
+            FragmentResolution::Target(target.clone())
+        );
+
+        let mut ctl = Controller::new();
+        ctl.set_viewport(80, 20);
+        // Seed a different page first so finish_capture path is exercised via publish.
+        ctl.state.publish_page(text_doc("0", "prev", "before"));
+        ctl.state.view.selection = ctl
+            .state
+            .document()
+            .unwrap()
+            .semantic_refs()
+            .into_iter()
+            .next();
+        ctl.state.view.scroll_y = 5;
+
+        // Simulate finish_capture body: reconcile then apply fragment.
+        let collapsed = ctl.state.view.collapsed.clone();
+        let content_line_of = move |document: &SemanticDocument, r: &SemanticRef| {
+            let lines = build_content_lines(document, &collapsed);
+            line_index_of(&lines, r)
+        };
+        ctl.state.reconcile_after_capture(
+            heading.clone(),
+            ctl.state.view.selection.clone(),
+            5,
+            0,
+            content_line_of,
+        );
+        ctl.apply_fragment_from_url(&heading);
+        assert_eq!(ctl.state.view.selection.as_ref(), Some(&target));
+        assert_eq!(ctl.state.view.scroll_y, 0);
     }
 
     #[test]

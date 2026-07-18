@@ -17,7 +17,7 @@ mod render;
 mod tests;
 
 pub use component::{LandmarkRole, SelectOption, SemanticAttrs, SemanticComponent, SemanticKind};
-pub use document::{SemanticComponentIter, SemanticDocument};
+pub use document::{FragmentResolution, SemanticComponentIter, SemanticDocument};
 pub(crate) use extract::capture_matches_document_metadata;
 pub use extract::extract_semantic_document;
 pub use identity::{SemanticRef, SemanticRefError};

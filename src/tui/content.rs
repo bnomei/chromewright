@@ -18,6 +18,8 @@ pub struct ContentLine {
     pub text: String,
     pub semantic_ref: Option<SemanticRef>,
     pub kind: Option<SemanticKind>,
+    /// Heading level 1–6 when `kind` is Heading (for theme hierarchy).
+    pub heading_level: Option<u8>,
     /// True when this is the first line of a collapsible block.
     pub block_start: bool,
 }
@@ -57,6 +59,7 @@ fn wrap_one_line(line: &ContentLine, width: usize, out: &mut Vec<ContentLine>) {
             text: String::new(),
             semantic_ref: line.semantic_ref.clone(),
             kind: line.kind,
+            heading_level: line.heading_level,
             block_start: line.block_start,
         });
         return;
@@ -99,7 +102,23 @@ fn push_wrapped_segment(
         text: segment.iter().collect(),
         semantic_ref: line.semantic_ref.clone(),
         kind: line.kind,
+        heading_level: line.heading_level,
         block_start: first && line.block_start,
+    });
+}
+
+fn push_line(
+    lines: &mut Vec<ContentLine>,
+    text: String,
+    component: &SemanticComponent,
+    block_start: bool,
+) {
+    lines.push(ContentLine {
+        text,
+        semantic_ref: Some(component.semantic_ref.clone()),
+        kind: Some(component.kind),
+        heading_level: component.attrs.heading_level,
+        block_start,
     });
 }
 
@@ -116,12 +135,7 @@ fn push_component(
         SemanticKind::Landmark => {
             let role = landmark_name(component);
             let marker = if is_collapsed { "▸" } else { "▾" };
-            lines.push(ContentLine {
-                text: format!("{indent}{marker} [{role}]"),
-                semantic_ref: Some(component.semantic_ref.clone()),
-                kind: Some(component.kind),
-                block_start: true,
-            });
+            push_line(lines, format!("{indent}{marker} [{role}]"), component, true);
             if !is_collapsed {
                 for child in &component.children {
                     push_component(child, depth + 1, collapsed, lines);
@@ -130,12 +144,7 @@ fn push_component(
         }
         SemanticKind::Group => {
             if let Some(label) = component.label.as_deref().filter(|s| !s.is_empty()) {
-                lines.push(ContentLine {
-                    text: format!("{indent}[{label}]"),
-                    semantic_ref: Some(component.semantic_ref.clone()),
-                    kind: Some(component.kind),
-                    block_start: true,
-                });
+                push_line(lines, format!("{indent}[{label}]"), component, true);
             }
             if !is_collapsed {
                 for child in &component.children {
@@ -147,33 +156,18 @@ fn push_component(
             let level = component.attrs.heading_level.unwrap_or(2).clamp(1, 6);
             let hashes = "#".repeat(level as usize);
             let text = display_text(component);
-            lines.push(ContentLine {
-                text: format!("{indent}{hashes} {text}"),
-                semantic_ref: Some(component.semantic_ref.clone()),
-                kind: Some(component.kind),
-                block_start: true,
-            });
+            push_line(lines, format!("{indent}{hashes} {text}"), component, true);
         }
         SemanticKind::Text => {
             let text = display_text(component);
             if !text.is_empty() {
-                lines.push(ContentLine {
-                    text: format!("{indent}{text}"),
-                    semantic_ref: Some(component.semantic_ref.clone()),
-                    kind: Some(component.kind),
-                    block_start: true,
-                });
+                push_line(lines, format!("{indent}{text}"), component, true);
             }
         }
         SemanticKind::List => {
             let ordered = component.attrs.ordered.unwrap_or(false);
             let marker = if is_collapsed { "▸" } else { "▾" };
-            lines.push(ContentLine {
-                text: format!("{indent}{marker} {}", if ordered { "ol" } else { "ul" }),
-                semantic_ref: Some(component.semantic_ref.clone()),
-                kind: Some(component.kind),
-                block_start: true,
-            });
+            push_line(lines, format!("{indent}{marker} {}", if ordered { "ol" } else { "ul" }), component, true);
             if !is_collapsed {
                 let mut index = 1usize;
                 for child in &component.children {
@@ -183,12 +177,7 @@ fn push_component(
                         } else {
                             "-".into()
                         };
-                        lines.push(ContentLine {
-                            text: format!("{indent}  {bullet} {}", display_text(child)),
-                            semantic_ref: Some(child.semantic_ref.clone()),
-                            kind: Some(child.kind),
-                            block_start: true,
-                        });
+                        push_line(lines, format!("{indent}  {bullet} {}", display_text(child)), child, true);
                         if !collapsed.contains(&child.semantic_ref) {
                             for nested in &child.children {
                                 push_component(nested, depth + 2, collapsed, lines);
@@ -202,12 +191,7 @@ fn push_component(
             }
         }
         SemanticKind::ListItem => {
-            lines.push(ContentLine {
-                text: format!("{indent}- {}", display_text(component)),
-                semantic_ref: Some(component.semantic_ref.clone()),
-                kind: Some(component.kind),
-                block_start: true,
-            });
+            push_line(lines, format!("{indent}- {}", display_text(component)), component, true);
             if !is_collapsed {
                 for child in &component.children {
                     push_component(child, depth + 1, collapsed, lines);
@@ -217,12 +201,7 @@ fn push_component(
         SemanticKind::Link => {
             let label = display_text(component);
             let href = component.attrs.href.as_deref().unwrap_or("");
-            lines.push(ContentLine {
-                text: format!("{indent}[{label}]({href})"),
-                semantic_ref: Some(component.semantic_ref.clone()),
-                kind: Some(component.kind),
-                block_start: true,
-            });
+            push_line(lines, format!("{indent}[{label}]({href})"), component, true);
         }
         SemanticKind::Image => {
             let alt = component
@@ -232,52 +211,27 @@ fn push_component(
                 .or(component.label.as_deref())
                 .unwrap_or("");
             let src = component.attrs.src.as_deref().unwrap_or("");
-            lines.push(ContentLine {
-                text: format!("{indent}![{alt}]({src})"),
-                semantic_ref: Some(component.semantic_ref.clone()),
-                kind: Some(component.kind),
-                block_start: true,
-            });
+            push_line(lines, format!("{indent}![{alt}]({src})"), component, true);
         }
         SemanticKind::Input => {
             let name = component.attrs.name.as_deref().unwrap_or("");
             let value = component.attrs.value.as_deref().unwrap_or("");
             let input_type = component.attrs.input_type.as_deref().unwrap_or("text");
-            lines.push(ContentLine {
-                text: format!("{indent}[input {input_type} name={name} value={value}]"),
-                semantic_ref: Some(component.semantic_ref.clone()),
-                kind: Some(component.kind),
-                block_start: true,
-            });
+            push_line(lines, format!("{indent}[input {input_type} name={name} value={value}]"), component, true);
         }
         SemanticKind::Textarea => {
             let name = component.attrs.name.as_deref().unwrap_or("");
             let value = component.attrs.value.as_deref().unwrap_or("");
-            lines.push(ContentLine {
-                text: format!("{indent}[textarea name={name} value={value}]"),
-                semantic_ref: Some(component.semantic_ref.clone()),
-                kind: Some(component.kind),
-                block_start: true,
-            });
+            push_line(lines, format!("{indent}[textarea name={name} value={value}]"), component, true);
         }
         SemanticKind::Select => {
             let name = component.attrs.name.as_deref().unwrap_or("");
             let value = component.attrs.value.as_deref().unwrap_or("");
-            lines.push(ContentLine {
-                text: format!("{indent}[select name={name} value={value}]"),
-                semantic_ref: Some(component.semantic_ref.clone()),
-                kind: Some(component.kind),
-                block_start: true,
-            });
+            push_line(lines, format!("{indent}[select name={name} value={value}]"), component, true);
         }
         SemanticKind::Button => {
             let label = display_text(component);
-            lines.push(ContentLine {
-                text: format!("{indent}[button {label}]"),
-                semantic_ref: Some(component.semantic_ref.clone()),
-                kind: Some(component.kind),
-                block_start: true,
-            });
+            push_line(lines, format!("{indent}[button {label}]"), component, true);
         }
     }
 }
@@ -474,6 +428,7 @@ mod tests {
             text: "hello beautiful world".into(),
             semantic_ref: Some(SemanticRef::from_opaque("r1")),
             kind: Some(SemanticKind::Text),
+            heading_level: None,
             block_start: true,
         };
         // "hello " is 6; width 10 → "hello" then "beautiful" then "world"
@@ -494,6 +449,7 @@ mod tests {
             text: "abcdefghij".into(),
             semantic_ref: None,
             kind: Some(SemanticKind::Text),
+            heading_level: None,
             block_start: true,
         };
         let wrapped = wrap_content_lines(std::slice::from_ref(&line), 4);

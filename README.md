@@ -232,6 +232,10 @@ Keyboard bindings are not shown in the terminal chrome. Defaults are Vimari-comp
 
 Link hints use deterministic two-key labels from the alphabet `asdfgqwertzxcvb` (for example `aa`, `as`), assigned only to viewport-visible links.
 
+After navigation or a link follow settles, a URL fragment such as `#section` moves the TUI selection to the matching component (`id`, then named anchor), expands collapsed ancestors, and scrolls it into view. Unmatched fragments keep the prior selection.
+
+The content pane uses a terminal-native ANSI color theme (headings, links, landmarks, controls) with reverse-video selection applied last. Colors inherit the terminal light/dark theme.
+
 Search follows Vim semantics: a new `/pattern` starts after the current selection and wraps at the end; `n` repeats forward, `N` repeats backward, and submitting an empty `/` prompt repeats the previous pattern. Bracketed paste is accepted only in URL, search, and form input modes and is bounded to 4096 characters.
 
 ### Custom keymap

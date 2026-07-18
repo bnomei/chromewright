@@ -135,6 +135,11 @@ pub struct SemanticAttrs {
     /// Source HTML tag when useful for debug projections (not required for renderers).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tag: Option<String>,
+    /// Author `id` attribute when present (fragment target resolution).
+    ///
+    /// Not unique-guaranteed; first match in document order wins for `#id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub element_id: Option<String>,
 }
 
 impl SemanticAttrs {
@@ -158,6 +163,7 @@ impl SemanticAttrs {
             && self.button_type.is_none()
             && self.options.is_empty()
             && self.tag.is_none()
+            && self.element_id.is_none()
     }
 }
 

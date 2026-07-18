@@ -52,6 +52,17 @@ keys until Escape dismisses the error. With `CHROMEWRIGHT_LOG` set, those
 failures are also written at `error` level (for example
 `tui page action 'history_back' failed: …`).
 
+After a successful capture whose URL includes a fragment (`#section`), the TUI
+moves selection to the matching component (`id` first, then named `<a name>`),
+expands collapsed ancestors, and scrolls the target into view. Empty `#` and
+unmatched `#top` jump to the document top. Missing targets keep the prior
+selection and set status `fragment target not represented`.
+
+Content uses a terminal-native color theme (ANSI-16): headings, links,
+landmarks, and form controls are colored; selection is reverse+bold applied
+last so it stays visible over kind colors. Soft wrap (`zw`) is independent of
+theme.
+
 Search follows Vim semantics: a new `/pattern` starts after the current
 selection and wraps at the end; `n` repeats forward, `N` repeats backward, and
 submitting an empty `/` prompt repeats the previous pattern. Bracketed paste is

@@ -12,6 +12,39 @@ use crate::semantic::limits::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Outcome of resolving a URL fragment against this document's components.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FragmentResolution {
+    /// Select this exact `semantic_ref` and scroll it into view.
+    Target(SemanticRef),
+    /// Jump to document top (empty fragment or unmatched `#top`).
+    Top,
+    /// No representable target; keep selection and surface a status.
+    NotFound,
+}
+
+/// Percent-decode a fragment for id/name matching. Returns `None` on invalid UTF-8.
+fn percent_decode_fragment(fragment: &str) -> Option<String> {
+    let bytes = fragment.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'%' if i + 2 < bytes.len() => {
+                let h = (bytes[i + 1] as char).to_digit(16)?;
+                let l = (bytes[i + 2] as char).to_digit(16)?;
+                out.push(((h << 4) | l) as u8);
+                i += 3;
+            }
+            b => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
 /// One bounded, revision-identified semantic capture of the hydrated page.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SemanticDocument {
@@ -102,6 +135,71 @@ impl SemanticDocument {
     /// Total number of components in the tree.
     pub fn component_count(&self) -> usize {
         self.ref_index.len()
+    }
+
+    /// Resolve a URL fragment (`#section`, empty, or `#top`) to a selection target.
+    ///
+    /// Steps (HTML-ish, fail closed):
+    /// 1. Percent-decode the fragment (no `+` → space).
+    /// 2. Match first `element_id` in document order (case-sensitive).
+    /// 3. Else match first `<a name="…">` via `attrs.name` on a Link with empty/missing href.
+    /// 4. Empty fragment or unmatched ASCII-case-insensitive `top` → document top.
+    /// 5. Otherwise [`FragmentResolution::NotFound`].
+    pub fn resolve_fragment(&self, fragment: &str) -> FragmentResolution {
+        let decoded = match percent_decode_fragment(fragment) {
+            Some(s) => s,
+            None => return FragmentResolution::NotFound,
+        };
+
+        if decoded.is_empty() {
+            return FragmentResolution::Top;
+        }
+
+        for component in self.components() {
+            if component
+                .attrs
+                .element_id
+                .as_deref()
+                .is_some_and(|id| id == decoded)
+            {
+                return FragmentResolution::Target(component.semantic_ref.clone());
+            }
+        }
+
+        for component in self.components() {
+            if component.kind == crate::semantic::SemanticKind::Link
+                && component.attrs.href.as_deref().unwrap_or("").is_empty()
+                && component
+                    .attrs
+                    .name
+                    .as_deref()
+                    .is_some_and(|n| n == decoded)
+            {
+                return FragmentResolution::Target(component.semantic_ref.clone());
+            }
+        }
+
+        if decoded.eq_ignore_ascii_case("top") {
+            return FragmentResolution::Top;
+        }
+
+        FragmentResolution::NotFound
+    }
+
+    /// Ancestor refs from root to the parent of `semantic_ref` (exclusive), document path order.
+    pub fn ancestor_refs(&self, semantic_ref: &SemanticRef) -> Vec<SemanticRef> {
+        let Ok(path) = self.resolve_path(semantic_ref) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        let mut current_path = Vec::new();
+        for &idx in &path[..path.len().saturating_sub(1)] {
+            current_path.push(idx);
+            if let Some(component) = self.component_at_path(&current_path) {
+                out.push(component.semantic_ref.clone());
+            }
+        }
+        out
     }
 
     /// Depth-first iterator over all components.
@@ -305,7 +403,8 @@ fn accumulate_attr_text(
         ("placeholder", attrs.placeholder.as_deref()),
         ("button_type", attrs.button_type.as_deref()),
         ("tag", attrs.tag.as_deref()),
-    ] {
+        ("element_id", attrs.element_id.as_deref()),
+        ] {
         if let Some(value) = value {
             validate_semantic_string(field, value)?;
             *total_text += value.chars().count();
@@ -522,6 +621,39 @@ mod tests {
         assert!(matches!(
             second.resolve_surviving(&first.semantic_refs()[0]),
             Err(SemanticRefError::WrongDocument { .. })
+        ));
+    }
+
+    #[test]
+    fn resolve_fragment_matches_element_id_and_top() {
+        let mut heading = text_component(
+            "doc-a",
+            "rev-1",
+            SemanticIdentity::author_id("sec"),
+            "Section",
+        );
+        heading.kind = crate::semantic::SemanticKind::Heading;
+        heading.attrs.element_id = Some("sec".into());
+        heading.attrs.heading_level = Some(2);
+
+        let doc = SemanticDocument::from_components(meta("doc-a", "rev-1"), vec![heading])
+            .expect("doc");
+        match doc.resolve_fragment("sec") {
+            FragmentResolution::Target(r) => {
+                assert_eq!(r, doc.semantic_refs()[0]);
+            }
+            other => panic!("expected target, got {other:?}"),
+        }
+        assert_eq!(doc.resolve_fragment(""), FragmentResolution::Top);
+        assert_eq!(doc.resolve_fragment("top"), FragmentResolution::Top);
+        assert_eq!(
+            doc.resolve_fragment("missing"),
+            FragmentResolution::NotFound
+        );
+        // Percent-decoded fragment
+        assert!(matches!(
+            doc.resolve_fragment("%73ec"),
+            FragmentResolution::Target(_)
         ));
     }
 }

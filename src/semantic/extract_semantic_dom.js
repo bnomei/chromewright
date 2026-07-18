@@ -144,12 +144,15 @@ JSON.stringify((function() {
         if (isHeading(tag)) return true;
         if (tag === 'P' || tag === 'BLOCKQUOTE' || tag === 'PRE' || tag === 'FIGCAPTION') return true;
         if (tag === 'OL' || tag === 'UL' || tag === 'LI') return true;
-        if (tag === 'A' && element.hasAttribute('href')) return true;
+        // Named anchors and href links are both semantic (fragment targets).
+        if (tag === 'A' && (element.hasAttribute('href') || element.getAttribute('name'))) return true;
         if (tag === 'IMG') return true;
         if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'BUTTON') return true;
         if (tag === 'ARTICLE' || tag === 'FIGURE' || tag === 'FIELDSET' || tag === 'FORM' || tag === 'DETAILS') {
             return true;
         }
+        // Id-bearing wrappers become groups so #id targets remain addressable.
+        if (element.id) return true;
         if (role === 'group' || role === 'list' || role === 'listitem' || role === 'link' ||
             role === 'button' || role === 'img' || role === 'textbox' || role === 'combobox') {
             return true;
@@ -516,11 +519,15 @@ JSON.stringify((function() {
             node = makeTextualContainer('list_item', element, depth, {});
         } else if (tag === 'A' || role === 'link') {
             // Terminal leaf: aggregate label only; never fragment descendants.
+            // Named anchors (name= without href) are still links for fragment targets.
             var linkText = clipString(visibleText(element));
+            var hrefAttr = element.getAttribute('href');
+            var nameAttr = element.getAttribute('name');
             node = makeNode('link', element, {
-                href: clipString(element.getAttribute('href') || ''),
+                href: hrefAttr != null ? clipString(hrefAttr) : '',
+                name: nameAttr ? clipString(nameAttr) : null,
                 text: linkText,
-                label: linkText
+                label: linkText || (nameAttr ? clipString(nameAttr) : null)
             }, []);
         } else if (tag === 'IMG' || role === 'img') {
             node = makeNode('image', element, {
@@ -576,16 +583,18 @@ JSON.stringify((function() {
                 label: buttonText || controlLabel(element)
             }, []);
         } else {
-            // Generic semantic group (article, figure, form, fieldset, details, role=group).
+            // Generic semantic group (article, figure, form, fieldset, details,
+            // role=group, or id-bearing wrappers kept for fragment targets).
             children = visitOrdered(element, depth + 1);
             if (!children.length) {
                 var groupText = clipString(visibleText(element));
-                if (!groupText) {
+                // Keep empty id-bearing nodes so #id can still resolve.
+                if (!groupText && !element.id) {
                     return [];
                 }
                 node = makeNode('group', element, {
                     text: groupText,
-                    label: clipString(element.getAttribute('aria-label') || '')
+                    label: clipString(element.getAttribute('aria-label') || element.id || '')
                 }, []);
             } else {
                 node = makeNode('group', element, {

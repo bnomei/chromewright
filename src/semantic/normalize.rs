@@ -369,6 +369,7 @@ fn build_attrs(node: &RawSemanticNode, kind: SemanticKind) -> Result<SemanticAtt
         button_type: optional_clipped(&node.button_type, "button_type")?,
         options: Vec::new(),
         tag: optional_clipped(&node.tag, "tag")?,
+        element_id: optional_clipped(&node.id, "element_id")?,
     };
 
     if kind == SemanticKind::Select {
