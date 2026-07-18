@@ -563,6 +563,7 @@ impl Controller {
         }
         // Drop stale inspect text; sticky follow rebuilds for the new selection.
         self.state.view.inspect_text = None;
+        self.state.view.inspect_title = None;
         self.hints.clear();
         let document = self.state.document().expect("capture published").clone();
         let selection = self.state.view.selection.clone();
@@ -961,29 +962,28 @@ impl Controller {
         }
         let Some(doc) = self.state.document() else {
             self.state.view.inspect_text = None;
+            self.state.view.inspect_title = None;
             return;
         };
         let Some(sel) = &self.state.view.selection else {
             self.state.view.inspect_text = Some("(no selection)".into());
+            self.state.view.inspect_title = None;
             return;
         };
         match doc.resolve(sel) {
             Ok(c) => {
-                let text = format!(
-                    "kind={:?}\nref={}\nlabel={:?}\ntext={:?}\nhref={:?}\nname={:?}\nvalue={:?}",
-                    c.kind,
-                    c.semantic_ref.as_str(),
-                    c.label,
-                    c.text,
-                    c.attrs.href,
-                    c.attrs.name,
-                    c.attrs.value
+                let text = crate::tui::content::format_inspect_panel(
+                    c,
+                    doc.document.revision.as_str(),
                 );
+                let title = crate::tui::content::format_inspect_dom_path(doc, c);
                 self.state.view.inspect_text = Some(text);
+                self.state.view.inspect_title = Some(title);
             }
             Err(e) => {
                 self.state.view.inspect_text =
                     Some(format!("inspect failed: {e}"));
+                self.state.view.inspect_title = None;
             }
         }
     }
@@ -1283,6 +1283,7 @@ impl Controller {
             self.state.mode = InteractionMode::Normal;
             self.state.view.hint_buffer.clear();
             self.state.view.inspect_text = None;
+            self.state.view.inspect_title = None;
             self.state.view.inspect_follow = false;
         }
         self.hints.clear();
@@ -2143,15 +2144,25 @@ mod tests {
         ctl.inspect_selection();
         assert!(ctl.state.view.inspect_follow);
         let first = ctl.state.view.inspect_text.clone().expect("inspect open");
-        assert!(first.contains("first") || first.contains(refs[0].as_str()));
+        assert!(first.contains("\"first\"") || first.contains("first"), "{first}");
+        assert!(first.contains("rev="), "{first}");
+        assert!(!first.contains("Some("), "{first}");
         ctl.scroll_down();
         assert_eq!(ctl.state.view.selection.as_ref(), Some(&refs[1]));
         let second = ctl.state.view.inspect_text.clone().expect("still open");
         assert_ne!(first, second);
-        assert!(second.contains("second") || second.contains(refs[1].as_str()));
+        assert!(second.contains("\"second\"") || second.contains("second"), "{second}");
+        let title = ctl
+            .state
+            .view
+            .inspect_title
+            .clone()
+            .expect("dom path title");
+        assert!(!title.is_empty(), "{title}");
         ctl.escape();
         assert!(!ctl.state.view.inspect_follow);
         assert!(ctl.state.view.inspect_text.is_none());
+        assert!(ctl.state.view.inspect_title.is_none());
     }
 
     #[test]

@@ -31,11 +31,17 @@ pub fn draw(frame: &mut Frame, controller: &Controller) {
     draw_status(frame, chunks[2], controller, &theme);
 
     if let Some(inspect) = &controller.state.view.inspect_text {
-        draw_inspect_under_selection(frame, chunks[1], controller, inspect, &theme);
+        let title = controller
+            .state
+            .view
+            .inspect_title
+            .as_deref()
+            .unwrap_or("");
+        draw_inspect_under_selection(frame, chunks[1], controller, inspect, title, &theme);
     }
 }
 
-/// Single-line browser chrome: history · location · title · flags (color only).
+/// Single-line browser chrome: history · location · title · lifecycle/mode (color only).
 fn draw_chrome(frame: &mut Frame, area: Rect, controller: &Controller, theme: &TuiTheme) {
     let state = &controller.state;
     let width = area.width as usize;
@@ -94,14 +100,8 @@ fn draw_chrome(frame: &mut Frame, area: Rect, controller: &Controller, theme: &T
         }
     };
 
-    // Right cluster: optional flags + lifecycle + mode (compact, colored).
+    // Right cluster: lifecycle + non-Normal mode only (no wrap/structure flags).
     let mut right_parts: Vec<(&str, Style)> = Vec::new();
-    if state.view.wrap {
-        right_parts.push(("wrap", theme.chrome_wrap()));
-    }
-    if state.view.projection.is_structure() {
-        right_parts.push(("dom", theme.chrome_wrap()));
-    }
     let life = match &state.lifecycle {
         Lifecycle::Ready => "ready",
         Lifecycle::Loading { .. } => "load",
@@ -300,6 +300,7 @@ fn draw_inspect_under_selection(
     content_area: Rect,
     controller: &Controller,
     inspect: &str,
+    title: &str,
     theme: &TuiTheme,
 ) {
     let lines = controller.content_lines();
@@ -358,9 +359,16 @@ fn draw_inspect_under_selection(
         width,
         height: panel_h,
     };
+    // Title is the full DOM path; truncate from the left so the leaf stays visible.
+    let title_budget = width.saturating_sub(2).max(1);
+    let title_text = if title.is_empty() {
+        "inspect".to_string()
+    } else {
+        crate::tui::content::truncate_inspect_dom_path(title, title_budget as usize)
+    };
     let block = Block::default()
         .borders(Borders::ALL)
-        .title("inspect")
+        .title(title_text)
         .border_style(theme.chrome_mode())
         .title_style(theme.chrome_mode());
     let inner = block.inner(rect);
@@ -401,14 +409,7 @@ pub fn chrome_lines(controller: &Controller) -> Vec<String> {
         Lifecycle::Loading { .. } => "load",
         Lifecycle::Error { .. } => "err",
     };
-    let mut flags = Vec::new();
-    if state.view.wrap {
-        flags.push("wrap");
-    }
-    if state.view.projection.is_structure() {
-        flags.push("dom");
-    }
-    flags.push(life);
+    let mut flags = vec![life];
     let mode = state.mode_label();
     if mode != "Normal" {
         flags.push(mode);

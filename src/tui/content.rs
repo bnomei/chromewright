@@ -623,6 +623,374 @@ pub fn ratatui_inspection_lines(document: &SemanticDocument) -> Vec<String> {
     SemanticRatatuiView::new(document).lines()
 }
 
+/// Max chars for inspect label/text/value snippets (grapheme-ish: Unicode scalar values).
+const INSPECT_CLIP: usize = 48;
+
+/// Compact developer inspect panel body for the TUI (`i`).
+///
+/// CSS-selector-first layout, 1–3 lines, no `None`/`Some` noise:
+/// 1. identity (`tag#id`) + short quoted label
+/// 2. kind-specific action fields (omitted when empty)
+/// 3. opaque ref + document revision
+///
+/// Panel title is the full DOM path from [`format_inspect_dom_path`].
+pub fn format_inspect_panel(component: &SemanticComponent, revision: &str) -> String {
+    let mut lines = Vec::with_capacity(3);
+
+    let identity = inspect_identity(component);
+    let label = inspect_label(component);
+    lines.push(match label {
+        Some(q) => format!("{identity}  {q}"),
+        None => identity,
+    });
+
+    if let Some(action) = inspect_action_line(component) {
+        lines.push(action);
+    }
+
+    lines.push(format!(
+        "{}  rev={}",
+        component.semantic_ref.as_str(),
+        revision
+    ));
+
+    lines.join("\n")
+}
+
+/// Full CSS-selector-style path from document root to `component` (inclusive).
+///
+/// Example: `main > form#signup > input#email`
+pub fn format_inspect_dom_path(
+    document: &SemanticDocument,
+    component: &SemanticComponent,
+) -> String {
+    let mut segments = Vec::new();
+    for ancestor_ref in document.ancestor_refs(&component.semantic_ref) {
+        if let Ok(ancestor) = document.resolve(&ancestor_ref) {
+            segments.push(inspect_path_segment(ancestor));
+        }
+    }
+    segments.push(inspect_path_segment(component));
+    if segments.is_empty() {
+        inspect_path_segment(component)
+    } else {
+        segments.join(" > ")
+    }
+}
+
+/// Truncate a DOM path from the left so the leaf stays visible.
+///
+/// `main > … > form#x > input#y` when the full path exceeds `max_chars`.
+pub fn truncate_inspect_dom_path(path: &str, max_chars: usize) -> String {
+    if max_chars == 0 {
+        return String::new();
+    }
+    let count = path.chars().count();
+    if count <= max_chars {
+        return path.to_string();
+    }
+    if max_chars <= 1 {
+        return "…".to_string();
+    }
+    // Prefer keeping trailing segments after a leading ellipsis.
+    let ellipsis = "…";
+    let budget = max_chars.saturating_sub(ellipsis.chars().count() + 1); // "… "
+    if budget == 0 {
+        return "…".to_string();
+    }
+    let parts: Vec<&str> = path.split(" > ").collect();
+    if parts.is_empty() {
+        return clip_inspect(path, max_chars);
+    }
+    let mut kept: Vec<&str> = Vec::new();
+    let mut used = 0usize;
+    for part in parts.iter().rev() {
+        let add = part.chars().count() + if kept.is_empty() { 0 } else { 3 }; // " > "
+        if used + add > budget && !kept.is_empty() {
+            break;
+        }
+        if used + add > budget && kept.is_empty() {
+            // Single segment still too long: hard clip the leaf.
+            return format!("{ellipsis} {}", clip_inspect(part, budget.saturating_sub(1)));
+        }
+        kept.push(part);
+        used += add;
+    }
+    kept.reverse();
+    format!("{ellipsis} {}", kept.join(" > "))
+}
+
+/// Path segment without kind annotations (tag#id only).
+fn inspect_path_segment(component: &SemanticComponent) -> String {
+    let mut id = String::new();
+    if let Some(tag) = component.attrs.tag.as_deref().filter(|t| !t.is_empty()) {
+        id.push_str(tag);
+    } else {
+        id.push_str(inspect_kind_fallback(component));
+    }
+    if let Some(eid) = component
+        .attrs
+        .element_id
+        .as_deref()
+        .filter(|s| !s.is_empty())
+    {
+        id.push('#');
+        id.push_str(eid);
+    }
+    id
+}
+
+fn inspect_identity(component: &SemanticComponent) -> String {
+    let mut id = String::new();
+    if let Some(tag) = component.attrs.tag.as_deref().filter(|t| !t.is_empty()) {
+        id.push_str(tag);
+    } else {
+        id.push_str(inspect_kind_fallback(component));
+    }
+    if let Some(eid) = component
+        .attrs
+        .element_id
+        .as_deref()
+        .filter(|s| !s.is_empty())
+    {
+        id.push('#');
+        id.push_str(eid);
+    }
+    // When tag already conveys kind (a/input/button/…), skip redundant kind token.
+    if inspect_kind_needed(component) {
+        id.push(' ');
+        id.push_str(inspect_kind_token(component));
+    }
+    id
+}
+
+fn inspect_kind_fallback(component: &SemanticComponent) -> &'static str {
+    match component.kind {
+        SemanticKind::Landmark => landmark_role_str(component).unwrap_or("landmark"),
+        SemanticKind::Heading => "heading",
+        SemanticKind::Text => "text",
+        SemanticKind::List => "list",
+        SemanticKind::ListItem => "li",
+        SemanticKind::Link => "a",
+        SemanticKind::Image => "img",
+        SemanticKind::Input => "input",
+        SemanticKind::Textarea => "textarea",
+        SemanticKind::Select => "select",
+        SemanticKind::Button => "button",
+        SemanticKind::Group => "group",
+    }
+}
+
+fn inspect_kind_token(component: &SemanticComponent) -> &'static str {
+    match component.kind {
+        SemanticKind::Landmark => landmark_role_str(component).unwrap_or("landmark"),
+        SemanticKind::Heading => "heading",
+        SemanticKind::Text => "text",
+        SemanticKind::List => {
+            if component.attrs.ordered == Some(true) {
+                "ol"
+            } else {
+                "list"
+            }
+        }
+        SemanticKind::ListItem => "li",
+        SemanticKind::Link => "link",
+        SemanticKind::Image => "image",
+        SemanticKind::Input => "input",
+        SemanticKind::Textarea => "textarea",
+        SemanticKind::Select => "select",
+        SemanticKind::Button => "button",
+        SemanticKind::Group => "group",
+    }
+}
+
+fn inspect_kind_needed(component: &SemanticComponent) -> bool {
+    let tag = component.attrs.tag.as_deref().unwrap_or("").to_ascii_lowercase();
+    // No tag → identity already used the kind fallback; do not double-annotate.
+    if tag.is_empty() {
+        return false;
+    }
+    match component.kind {
+        SemanticKind::Link => tag != "a" && tag != "link",
+        SemanticKind::Image => tag != "img" && tag != "image",
+        SemanticKind::Input => tag != "input",
+        SemanticKind::Textarea => tag != "textarea",
+        SemanticKind::Select => tag != "select",
+        SemanticKind::Button => tag != "button",
+        SemanticKind::ListItem => tag != "li",
+        SemanticKind::Heading => {
+            // h1–h6 already encode level.
+            !(tag.len() == 2
+                && tag.as_bytes()[0].eq_ignore_ascii_case(&b'h')
+                && tag.as_bytes()[1].is_ascii_digit())
+        }
+        SemanticKind::Landmark => {
+            let role = landmark_role_str(component).unwrap_or("");
+            tag != role
+                && tag != "nav"
+                && tag != "main"
+                && tag != "aside"
+                && tag != "header"
+                && tag != "footer"
+                && tag != "section"
+        }
+        // Tag alone is enough for prose/containers.
+        SemanticKind::Text | SemanticKind::List | SemanticKind::Group => false,
+    }
+}
+
+fn landmark_role_str(component: &SemanticComponent) -> Option<&'static str> {
+    use crate::semantic::LandmarkRole;
+    match component.attrs.landmark? {
+        LandmarkRole::Main => Some("main"),
+        LandmarkRole::Aside => Some("aside"),
+        LandmarkRole::Header => Some("header"),
+        LandmarkRole::Nav => Some("nav"),
+        LandmarkRole::Section => Some("section"),
+        LandmarkRole::Footer => Some("footer"),
+    }
+}
+
+fn inspect_label(component: &SemanticComponent) -> Option<String> {
+    let raw = component
+        .label
+        .as_deref()
+        .or(component.text.as_deref())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?;
+    Some(format!("\"{}\"", clip_inspect(raw, INSPECT_CLIP)))
+}
+
+fn inspect_action_line(component: &SemanticComponent) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    match component.kind {
+        SemanticKind::Link => {
+            if let Some(href) = non_empty(&component.attrs.href) {
+                parts.push(format!("href={}", fold_media_url(href)));
+            }
+        }
+        SemanticKind::Input | SemanticKind::Textarea => {
+            if let Some(t) = non_empty(&component.attrs.input_type) {
+                parts.push(format!("type={t}"));
+            }
+            if let Some(n) = non_empty(&component.attrs.name) {
+                parts.push(format!("name={n}"));
+            }
+            // Always show value key for controls when present (including empty string).
+            if let Some(v) = component.attrs.value.as_deref() {
+                parts.push(format!("value={}", clip_inspect(v, INSPECT_CLIP)));
+            }
+            if let Some(ph) = non_empty(&component.attrs.placeholder) {
+                parts.push(format!("ph={}", clip_inspect(ph, INSPECT_CLIP)));
+            }
+            push_flags(&mut parts, component);
+        }
+        SemanticKind::Select => {
+            if let Some(n) = non_empty(&component.attrs.name) {
+                parts.push(format!("name={n}"));
+            }
+            if let Some(v) = component.attrs.value.as_deref() {
+                parts.push(format!("value={}", clip_inspect(v, INSPECT_CLIP)));
+            }
+            if !component.attrs.options.is_empty() {
+                parts.push(format!("options={}", component.attrs.options.len()));
+            }
+            push_flags(&mut parts, component);
+        }
+        SemanticKind::Button => {
+            if let Some(t) = non_empty(&component.attrs.button_type) {
+                parts.push(format!("type={t}"));
+            }
+            if let Some(n) = non_empty(&component.attrs.name) {
+                parts.push(format!("name={n}"));
+            }
+            push_flags(&mut parts, component);
+        }
+        SemanticKind::Image => {
+            if let Some(alt) = non_empty(&component.attrs.alt) {
+                parts.push(format!("alt={}", clip_inspect(alt, INSPECT_CLIP)));
+            }
+            if let Some(src) = non_empty(&component.attrs.src) {
+                parts.push(format!("src={}", fold_media_url(src)));
+            }
+        }
+        SemanticKind::Heading => {
+            if let Some(level) = component.attrs.heading_level {
+                let tag = component.attrs.tag.as_deref().unwrap_or("");
+                // Only emit level when tag didn't already encode it.
+                let tag_encodes = tag.len() == 2
+                    && tag.as_bytes()[0].eq_ignore_ascii_case(&b'h')
+                    && tag.as_bytes()[1].is_ascii_digit();
+                if !tag_encodes {
+                    parts.push(format!("h{level}"));
+                }
+            }
+        }
+        SemanticKind::Landmark => {
+            if let Some(role) = landmark_role_str(component) {
+                let tag = component
+                    .attrs
+                    .tag
+                    .as_deref()
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                if tag != role {
+                    parts.push(format!("landmark={role}"));
+                }
+            }
+        }
+        SemanticKind::List => {
+            if component.attrs.ordered == Some(true) {
+                parts.push("ordered".into());
+            }
+        }
+        SemanticKind::Text | SemanticKind::ListItem | SemanticKind::Group => {}
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("  "))
+    }
+}
+
+fn push_flags(parts: &mut Vec<String>, component: &SemanticComponent) {
+    if component.attrs.required == Some(true) {
+        parts.push("required".into());
+    }
+    if component.attrs.disabled == Some(true) {
+        parts.push("disabled".into());
+    }
+    if component.attrs.readonly == Some(true) {
+        parts.push("readonly".into());
+    }
+    if component.attrs.checked == Some(true) {
+        parts.push("checked".into());
+    }
+    if component.attrs.multiple == Some(true) {
+        parts.push("multiple".into());
+    }
+}
+
+fn non_empty(value: &Option<String>) -> Option<&str> {
+    value.as_deref().map(str::trim).filter(|s| !s.is_empty())
+}
+
+fn clip_inspect(value: &str, max_chars: usize) -> String {
+    if max_chars == 0 {
+        return String::new();
+    }
+    let count = value.chars().count();
+    if count <= max_chars {
+        return value.to_string();
+    }
+    if max_chars <= 1 {
+        return "…".to_string();
+    }
+    let mut out: String = value.chars().take(max_chars - 1).collect();
+    out.push('…');
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -862,6 +1230,257 @@ mod tests {
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].text, "![logo](base64,…)");
         assert!(!lines[0].text.contains("AAAA"));
+    }
+
+    #[test]
+    fn format_inspect_panel_link_is_compact() {
+        let doc = normalize_fixture(
+            meta(),
+            vec![RawSemanticNode {
+                kind: "link".into(),
+                tag: Some("a".into()),
+                id: Some("pricing".into()),
+                unique_id: true,
+                selector: None,
+                text: Some("Start free trial".into()),
+                href: Some("/signup".into()),
+                landmark: None,
+                heading_level: None,
+                ordered: None,
+                label: None,
+                src: None,
+                alt: None,
+                name: None,
+                value: None,
+                input_type: None,
+                placeholder: None,
+                checked: None,
+                disabled: None,
+                required: None,
+                readonly: None,
+                multiple: None,
+                button_type: None,
+                options: vec![],
+                children: vec![],
+            }],
+        )
+        .expect("doc");
+        let c = doc.roots.first().expect("root");
+        let text = format_inspect_panel(c, doc.document.revision.as_str());
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 3, "{text}");
+        assert_eq!(lines[0], "a#pricing  \"Start free trial\"");
+        assert_eq!(lines[1], "href=/signup");
+        assert!(lines[2].starts_with(c.semantic_ref.as_str()), "{text}");
+        assert!(lines[2].contains("rev=1"), "{text}");
+        assert!(!text.contains("Some("));
+        assert!(!text.contains("None"));
+    }
+
+    #[test]
+    fn format_inspect_panel_input_shows_flags_not_defaults() {
+        let doc = normalize_fixture(
+            meta(),
+            vec![RawSemanticNode {
+                kind: "input".into(),
+                tag: Some("input".into()),
+                id: Some("email".into()),
+                unique_id: true,
+                selector: None,
+                text: None,
+                href: None,
+                landmark: None,
+                heading_level: None,
+                ordered: None,
+                label: Some("Email".into()),
+                src: None,
+                alt: None,
+                name: Some("email".into()),
+                value: Some("".into()),
+                input_type: Some("email".into()),
+                placeholder: Some("you@example.com".into()),
+                checked: None,
+                disabled: None,
+                required: Some(true),
+                readonly: None,
+                multiple: None,
+                button_type: None,
+                options: vec![],
+                children: vec![],
+            }],
+        )
+        .expect("doc");
+        let c = doc.roots.first().expect("root");
+        let text = format_inspect_panel(c, "main:19");
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines[0], "input#email  \"Email\"");
+        assert!(lines[1].contains("type=email"), "{text}");
+        assert!(lines[1].contains("name=email"), "{text}");
+        assert!(lines[1].contains("ph=you@example.com"), "{text}");
+        assert!(lines[1].contains("required"), "{text}");
+        assert!(!lines[1].contains("disabled"), "{text}");
+        // Empty value may be dropped by normalize; only assert when retained.
+        if c.attrs.value.is_some() {
+            assert!(lines[1].contains("value="), "{text}");
+        }
+        assert!(lines[2].contains("rev=main:19"), "{text}");
+    }
+
+    #[test]
+    fn format_inspect_panel_heading_omits_redundant_action() {
+        let doc = normalize_fixture(
+            meta(),
+            vec![RawSemanticNode {
+                kind: "heading".into(),
+                tag: Some("h2".into()),
+                id: Some("install".into()),
+                unique_id: true,
+                selector: None,
+                text: Some("Install".into()),
+                href: None,
+                landmark: None,
+                heading_level: Some(2),
+                ordered: None,
+                label: Some("Install".into()),
+                src: None,
+                alt: None,
+                name: None,
+                value: None,
+                input_type: None,
+                placeholder: None,
+                checked: None,
+                disabled: None,
+                required: None,
+                readonly: None,
+                multiple: None,
+                button_type: None,
+                options: vec![],
+                children: vec![],
+            }],
+        )
+        .expect("doc");
+        let c = doc.roots.first().expect("root");
+        let text = format_inspect_panel(c, "1");
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 2, "{text}");
+        assert_eq!(lines[0], "h2#install  \"Install\"");
+        assert!(lines[1].contains("rev=1"), "{text}");
+    }
+
+    #[test]
+    fn format_inspect_dom_path_includes_ancestors() {
+        let doc = normalize_fixture(
+            meta(),
+            vec![RawSemanticNode {
+                kind: "landmark".into(),
+                tag: Some("main".into()),
+                id: None,
+                unique_id: false,
+                selector: None,
+                text: None,
+                href: None,
+                landmark: Some("main".into()),
+                heading_level: None,
+                ordered: None,
+                label: None,
+                src: None,
+                alt: None,
+                name: None,
+                value: None,
+                input_type: None,
+                placeholder: None,
+                checked: None,
+                disabled: None,
+                required: None,
+                readonly: None,
+                multiple: None,
+                button_type: None,
+                options: vec![],
+                children: vec![RawSemanticNode {
+                    kind: "input".into(),
+                    tag: Some("input".into()),
+                    id: Some("email".into()),
+                    unique_id: true,
+                    selector: None,
+                    text: None,
+                    href: None,
+                    landmark: None,
+                    heading_level: None,
+                    ordered: None,
+                    label: Some("Email".into()),
+                    src: None,
+                    alt: None,
+                    name: Some("email".into()),
+                    value: None,
+                    input_type: Some("email".into()),
+                    placeholder: None,
+                    checked: None,
+                    disabled: None,
+                    required: None,
+                    readonly: None,
+                    multiple: None,
+                    button_type: None,
+                    options: vec![],
+                    children: vec![],
+                }],
+            }],
+        )
+        .expect("doc");
+        let input = doc
+            .components()
+            .find(|c| c.attrs.element_id.as_deref() == Some("email"))
+            .expect("input");
+        let path = format_inspect_dom_path(&doc, input);
+        assert_eq!(path, "main > input#email", "{path}");
+        let truncated = truncate_inspect_dom_path("main > section > form#signup > input#email", 22);
+        assert!(truncated.starts_with('…'), "{truncated}");
+        assert!(truncated.contains("input#email"), "{truncated}");
+        assert!(truncated.chars().count() <= 22, "{truncated}");
+    }
+
+    #[test]
+    fn format_inspect_panel_folds_data_urls_and_clips_long_text() {
+        let long = "x".repeat(80);
+        let doc = normalize_fixture(
+            meta(),
+            vec![RawSemanticNode {
+                kind: "image".into(),
+                tag: Some("img".into()),
+                id: None,
+                unique_id: false,
+                selector: None,
+                text: None,
+                href: None,
+                landmark: None,
+                heading_level: None,
+                ordered: None,
+                label: None,
+                src: Some("data:image/png;base64,AAAA".into()),
+                alt: Some(long.clone()),
+                name: None,
+                value: None,
+                input_type: None,
+                placeholder: None,
+                checked: None,
+                disabled: None,
+                required: None,
+                readonly: None,
+                multiple: None,
+                button_type: None,
+                options: vec![],
+                children: vec![],
+            }],
+        )
+        .expect("doc");
+        let c = doc.roots.first().expect("root");
+        let text = format_inspect_panel(c, "1");
+        assert!(text.contains("src=base64,…"), "{text}");
+        assert!(text.contains("alt="), "{text}");
+        assert!(!text.contains("AAAA"), "{text}");
+        // clipped alt ends with ellipsis and is bounded
+        let alt_line = text.lines().nth(1).unwrap_or("");
+        assert!(alt_line.contains('…'), "{text}");
+        assert!(alt_line.len() < long.len(), "{text}");
     }
 
     #[test]

@@ -137,8 +137,10 @@ pub struct ViewState {
     pub search_index: usize,
     /// Last search query (for status).
     pub search_query: String,
-    /// Inspection overlay text (no key legends).
+    /// Inspection overlay body (no key legends).
     pub inspect_text: Option<String>,
+    /// Inspection panel title: full DOM path (`main > form#x > input#email`).
+    pub inspect_title: Option<String>,
     /// When true, inspect stays open and refreshes as selection moves (j/k, tab, …).
     pub inspect_follow: bool,
     /// Transient status (anchor changed, clipboard fallback, etc.).
@@ -303,6 +305,7 @@ impl TuiState {
                 self.mode = InteractionMode::Normal;
                 self.view.hint_buffer.clear();
                 self.view.inspect_text = None;
+                self.view.inspect_title = None;
                 self.view.inspect_follow = false;
                 self.view.set_status(format!("dismissed: {message}"));
                 true

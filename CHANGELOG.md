@@ -16,6 +16,8 @@
 
 ### Changed
 
+- Make the TUI inspect panel a compact CSS-selector-first developer view (identity, action fields, ref/rev) without Debug/`None` noise.
+- Show the full DOM path (`main > form#x > input#y`) as the TUI inspect panel title instead of a static `inspect` label.
 - Document the full default TUI keymap, action names, and TOML overlay syntax in `README.md`.
 - Upgrade the MCP runtime to RMCP 2.2 and retain only the server, stdio, and streamable-HTTP transport features.
 - Refresh Rust 1.88-compatible dependencies, including `headless_chrome` 1.0.22.
@@ -29,7 +31,7 @@
 - Exit link-hint mode after a successful current-tab follow (`f`); new-tab hints (`F`) still chain until Esc.
 - Anchor the inspect panel under the selected block and refresh it as selection moves until Esc.
 - Add prose-only heading spacing (2 lines above h1/h2, 1 above h3+, 2 after h1 unless h2 follows); spacer rows are non-selectable and omitted in structure mode.
-- Collapse TUI chrome to a single browser-like header bar (history, location, title, status flags) using color only.
+- Collapse TUI chrome to a single browser-like header bar (history, location, title, lifecycle/mode) using color only; omit wrap/structure descriptors from the header.
 - Add `Ctrl-d` / `Ctrl-u` to move selection by half a page (`d`/`u` remain view-only pan).
 - Add `O` (`edit_url`) to open the location bar prefilled with the current URL for editing; `o` still starts empty.
 

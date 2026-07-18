@@ -225,7 +225,7 @@ Keyboard bindings are not shown in the terminal chrome. Defaults are Vimari-comp
 | `Space` | `collapse` | Collapse or expand the selected block. |
 | `zw` | `toggle_wrap` | Toggle soft word-wrap (off by default). When on, long lines wrap to the viewport and `h`/`l` horizontal pan is disabled. |
 | `zs` | `toggle_structure` | Toggle prose (default) vs structure projection. Prose hides landmark/list/group chrome and flattens indent; structure shows DOM-like containers. Collapse (`Space`) only works in structure mode. |
-| `i` | `inspect` | Open an inspect panel under the selected block; it follows j/k (and other selection moves) until Esc. |
+| `i` | `inspect` | Open a compact inspect panel under the selected block; title is the full DOM path (`main > … > tag#id`), body has action fields and ref/rev; follows selection until Esc. |
 | `y` | `copy_block` | Copy rendered block text (OSC 52). |
 | `Y` | `copy_ref` | Copy the opaque `semantic_ref` (OSC 52). |
 | `Tab` | `tab_next` | Move to the next focusable control. |
@@ -240,7 +240,7 @@ After navigation or a link follow settles, a URL fragment such as `#section` mov
 
 The content pane uses a terminal-native ANSI color theme (headings, links, landmarks, controls) with reverse-video selection applied last. Colors inherit the terminal light/dark theme.
 
-Default reading mode is **prose** (markdown-like): no `▾ [main]` / `ol` / group chrome, fully flat lines. Press `zs` for **structure** (DOM-like outline). Chrome shows `struct` while structure mode is active.
+Default reading mode is **prose** (markdown-like): no `▾ [main]` / `ol` / group chrome, fully flat lines. Press `zs` for **structure** (DOM-like outline). Wrap (`zw`) and structure (`zs`) are not shown in the header bar; toggle feedback appears in the status line.
 
 Search follows Vim semantics: a new `/pattern` starts after the current selection and wraps at the end; `n` repeats forward, `N` repeats backward, and submitting an empty `/` prompt repeats the previous pattern. Bracketed paste is accepted only in URL, search, and form input modes and is bounded to 4096 characters.
 
