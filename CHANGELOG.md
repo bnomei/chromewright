@@ -26,7 +26,7 @@
 - Show link-hint mode (`f` / `F` + typed keys) in the footer cmdline instead of the header.
 - Replace header lifecycle words (`ready`/`load`/`err`) with single glyphs (`●`/`◐`/`✕`); detail stays in the footer.
 - Add an Amp-style thin vertical scrollbar track on the right edge of the TUI content pane (`│` track, `▐` thumb).
-- Invert header and footer chrome bars (reverse video) so they read as solid strips separate from the content pane.
+- Style header/footer as white chrome bars with gray/black/green text; scrollbar uses a white gutter with a grey track.
 
 ### Fixed
 

@@ -137,7 +137,7 @@ fn draw_chrome(frame: &mut Frame, area: Rect, controller: &Controller, theme: &T
     let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
     let pad = width.saturating_sub(used + right_plain.chars().count());
     if pad > 0 {
-        // Spaces inherit the inverted bar fill so the header reads as a solid strip.
+        // Spaces keep the white bar fill so the header reads as a solid strip.
         spans.push(Span::styled(" ".repeat(pad), theme.chrome_bar()));
     } else if !right_parts.is_empty() {
         spans.push(Span::styled(" ", theme.chrome_bar()));
@@ -285,8 +285,8 @@ fn draw_content_scrollbar(
         .end_symbol(None)
         .track_symbol(Some("│"))
         .thumb_symbol("▐")
-        .track_style(theme.muted())
-        .thumb_style(theme.base().fg(ratatui::style::Color::Green));
+        .track_style(theme.scrollbar_track())
+        .thumb_style(theme.scrollbar_thumb());
 
     frame.render_stateful_widget(scrollbar, area, &mut sb_state);
 }
@@ -378,7 +378,7 @@ fn draw_status(frame: &mut Frame, area: Rect, controller: &Controller, theme: &T
         ));
     }
 
-    // Pad to full width so reverse video fills the footer as a solid bar.
+    // Pad to full width so the white fill covers the footer as a solid bar.
     let width = area.width as usize;
     let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
     if used < width {
