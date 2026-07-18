@@ -367,7 +367,11 @@ impl Dispatcher {
                 DispatchOutcome::Redraw
             }
             Action::Confirm => {
-                let _ = controller.activate_selection();
+                // On a text input/textarea/select: enter edit mode.
+                // On a button/link/checkbox: activate (click).
+                if !controller.edit_selection_if_form() {
+                    let _ = controller.activate_selection();
+                }
                 DispatchOutcome::Redraw
             }
         }

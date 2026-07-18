@@ -1242,6 +1242,27 @@ impl Controller {
         }
     }
 
+    /// Start editing the current selection when it is a text-like form control.
+    ///
+    /// Returns `true` when form-input mode was entered. Checkboxes, radios,
+    /// buttons, and non-controls return `false` so callers can activate instead.
+    pub fn edit_selection_if_form(&mut self) -> bool {
+        let Some(sel) = self.state.view.selection.clone() else {
+            return false;
+        };
+        let Some(doc) = self.state.document() else {
+            return false;
+        };
+        let Ok(component) = doc.resolve(&sel) else {
+            return false;
+        };
+        if !is_text_editable_control(component) {
+            return false;
+        }
+        self.begin_form_edit(sel);
+        true
+    }
+
     /// Cycle focusable controls (Tab / Shift-Tab); form fields enter edit mode.
     ///
     /// Leaving a form field stashes its buffer so multi-field values survive
@@ -1426,6 +1447,36 @@ impl Controller {
         {
             self.ensure_visible(idx, lines.len());
         }
+    }
+}
+
+/// Text-like controls that open form-input mode (not checkbox/radio/button).
+fn is_text_editable_control(component: &crate::semantic::SemanticComponent) -> bool {
+    use crate::semantic::SemanticKind;
+    match component.kind {
+        SemanticKind::Textarea | SemanticKind::Select => true,
+        SemanticKind::Input => {
+            let t = component
+                .attrs
+                .input_type
+                .as_deref()
+                .unwrap_or("text")
+                .to_ascii_lowercase();
+            !matches!(
+                t.as_str(),
+                "checkbox"
+                    | "radio"
+                    | "submit"
+                    | "button"
+                    | "reset"
+                    | "image"
+                    | "file"
+                    | "hidden"
+                    | "range"
+                    | "color"
+            )
+        }
+        _ => false,
     }
 }
 
@@ -2592,6 +2643,35 @@ mod tests {
             button_type: None,
             options: vec![],
             children: vec![],
+        }
+    }
+
+    #[test]
+    fn enter_on_selected_input_starts_form_edit() {
+        let document = normalize_fixture(
+            meta("1", "https://example.com/form"),
+            vec![form_input("email", "email", "pre")],
+        )
+        .expect("doc");
+        let email = document
+            .components()
+            .find(|c| c.attrs.element_id.as_deref() == Some("email"))
+            .unwrap()
+            .semantic_ref
+            .clone();
+        let mut ctl = Controller::new();
+        ctl.state.publish_page(document);
+        ctl.state.view.selection = Some(email.clone());
+        assert!(ctl.edit_selection_if_form());
+        match &ctl.state.mode {
+            InteractionMode::Input(InputKind::Form {
+                semantic_ref,
+                buffer,
+            }) => {
+                assert_eq!(semantic_ref, &email);
+                assert_eq!(buffer, "pre");
+            }
+            other => panic!("expected form edit, got {other:?}"),
         }
     }
 

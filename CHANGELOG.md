@@ -26,6 +26,7 @@
 - Show link-hint mode (`f` / `F` + typed keys) in the footer cmdline instead of the header.
 - Replace header lifecycle words (`ready`/`load`/`err`) with single glyphs (`●`/`◐`/`✕`); detail stays in the footer.
 - Multi-field TUI forms: Tab stashes field values; Enter writes all staged fields then submits (`requestSubmit`) and recaptures the resulting page like Chrome.
+- Enter on a selected text input starts form edit mode (header shows `IN …`); type freely, then Enter again to submit.
 
 ### Fixed
 
