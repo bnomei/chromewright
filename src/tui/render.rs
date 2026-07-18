@@ -52,6 +52,9 @@ fn draw_chrome(frame: &mut Frame, area: Rect, controller: &Controller, theme: &T
     if state.view.wrap {
         line1_spans.push(Span::styled(" wrap", theme.chrome_wrap()));
     }
+    if state.view.projection.is_structure() {
+        line1_spans.push(Span::styled(" struct", theme.chrome_wrap()));
+    }
     line1_spans.push(Span::raw(" "));
     line1_spans.push(Span::styled(
         if state.can_go_back { "←●" } else { "←○" },

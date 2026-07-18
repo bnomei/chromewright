@@ -12,6 +12,7 @@
 - Add TUI soft word-wrap toggled with `zw` (`toggle_wrap`), off by default; wrap reflows content lines to the viewport and disables horizontal pan while active.
 - Add terminal-native TUI color theme for headings, links, landmarks, controls, chrome lifecycle, and selection overlays.
 - Move TUI selection to in-page fragment targets (`#id`) after capture, including named anchors and `#top`.
+- Add prose (default) vs structure content projection toggled with `zs`; prose hides landmark/list/group chrome, flattens indent, disables collapse, and rebinds hidden container selection to the first visible descendant.
 
 ### Changed
 

@@ -6,6 +6,7 @@
 //! can claim Ready while the other still owns a page action.
 
 use crate::semantic::{SemanticDocument, SemanticRef};
+use crate::tui::content::ContentProjection;
 use std::collections::HashSet;
 
 /// Page lifecycle: Ready → Loading → Ready | Error (atomic publish on success).
@@ -123,6 +124,8 @@ pub struct ViewState {
     pub viewport_width: usize,
     /// Soft-wrap long content lines to the viewport width (off by default).
     pub wrap: bool,
+    /// Content projection: prose (default) hides structural chrome; structure shows it.
+    pub projection: ContentProjection,
     /// Currently selected addressable component (exact ref).
     pub selection: Option<SemanticRef>,
     /// Agent attention spotlight (exact ref), independent of human selection.

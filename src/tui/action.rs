@@ -62,6 +62,8 @@ pub enum Action {
     Collapse,
     /// `zw` — toggle soft word-wrap of content lines (off by default).
     ToggleWrap,
+    /// `zs` — toggle prose vs structure content projection (prose by default).
+    ToggleStructure,
     /// `i` — inspect selected component metadata.
     Inspect,
     /// `y` — copy rendered block text (OSC 52).
@@ -108,6 +110,7 @@ impl Action {
             Self::SearchPrevious => "search_previous",
             Self::Collapse => "collapse",
             Self::ToggleWrap => "toggle_wrap",
+            Self::ToggleStructure => "toggle_structure",
             Self::Inspect => "inspect",
             Self::CopyBlock => "copy_block",
             Self::CopyRef => "copy_ref",
@@ -146,6 +149,7 @@ impl Action {
             "search_previous" => Some(Self::SearchPrevious),
             "collapse" => Some(Self::Collapse),
             "toggle_wrap" => Some(Self::ToggleWrap),
+            "toggle_structure" => Some(Self::ToggleStructure),
             "inspect" => Some(Self::Inspect),
             "copy_block" => Some(Self::CopyBlock),
             "copy_ref" => Some(Self::CopyRef),
@@ -182,7 +186,7 @@ impl Action {
     }
 }
 
-const ALL_ACTIONS: [Action; 32] = [
+const ALL_ACTIONS: [Action; 33] = [
     Action::LinkHintsFollow,
     Action::LinkHintsNewTab,
     Action::ScrollDown,
@@ -207,6 +211,7 @@ const ALL_ACTIONS: [Action; 32] = [
     Action::SearchPrevious,
     Action::Collapse,
     Action::ToggleWrap,
+    Action::ToggleStructure,
     Action::Inspect,
     Action::CopyBlock,
     Action::CopyRef,

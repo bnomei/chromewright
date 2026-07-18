@@ -276,6 +276,10 @@ impl Dispatcher {
                 controller.toggle_wrap();
                 DispatchOutcome::Redraw
             }
+            Action::ToggleStructure => {
+                controller.toggle_structure();
+                DispatchOutcome::Redraw
+            }
             Action::Inspect => {
                 controller.inspect_selection();
                 DispatchOutcome::Redraw

@@ -40,8 +40,9 @@ Keyboard bindings are deliberately not shown in the terminal. Navigation default
 Vimari: `f`/`F` link hints, `j`/`k`/`h`/`l` scrolling, `u`/`d` half pages,
 `gg`/`G` document ends, `gi` first form field, `H`/`L` history, `r` reload,
 `w`/`q`/`x`/`t` tab actions, `o` URL entry, `/` forward search, `n` next
-match, `N` previous match, Space collapse, `zw` toggle soft word-wrap (off by
-default; Vim-style `z`-prefix view command), `i`
+match, `N` previous match, Space collapse (structure mode only), `zw` toggle soft
+word-wrap (off by default), `zs` toggle prose vs structure projection (prose by
+default; Vim-style `z`-prefix view commands), `i`
 inspection, `y` content copy, `Y` semantic-ref copy, Tab/Shift-Tab focus,
 Enter confirm, Escape cancel (and dismiss a failed page-action Error back to
 Ready while retaining the last good page), and Ctrl-C quit.
@@ -62,6 +63,12 @@ Content uses a terminal-native color theme (ANSI-16): headings, links,
 landmarks, and form controls are colored; selection is reverse+bold applied
 last so it stays visible over kind colors. Soft wrap (`zw`) is independent of
 theme.
+
+**Prose vs structure** (`zs`): prose (default) hides landmark/list/group header
+rows and uses fully flat indent so the pane reads closer to markdown. Structure
+shows DOM-like chrome (`▾ [main]`, `▾ ol`, labeled groups) and depth indent.
+Collapse (`Space`) is structure-only. Switching into prose rebinds selection to
+the first visible descendant when the current ref has no prose line.
 
 Search follows Vim semantics: a new `/pattern` starts after the current
 selection and wraps at the end; `n` repeats forward, `N` repeats backward, and

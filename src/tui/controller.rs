@@ -7,8 +7,8 @@
 
 use crate::semantic::{FragmentResolution, SemanticDocument, SemanticRef};
 use crate::tui::content::{
-    build_content_lines, focusable_refs, form_control_refs, line_index_of, rendered_block_text,
-    search_refs,
+    build_content_lines_with, first_visible_descendant_ref, focusable_refs, form_control_refs,
+    line_index_of, rendered_block_text, search_refs, ContentProjection,
 };
 use crate::tui::driver::PageDriver;
 use crate::tui::hints::{HintMatch, LinkHint, assign_hints, match_hint};
@@ -310,10 +310,15 @@ impl Controller {
                                 self.anchor_offset_in_viewport(&document, prev_sel.as_ref());
                             let collapsed = self.state.view.collapsed.clone();
                             let wrap = self.state.view.wrap;
+                            let projection = self.state.view.projection;
                             let width = self.state.view.viewport_width.max(1);
                             let content_line_of =
                                 move |document: &SemanticDocument, r: &SemanticRef| {
-                                    let lines = build_content_lines(document, &collapsed);
+                                    let lines = build_content_lines_with(
+                                        document,
+                                        &collapsed,
+                                        projection,
+                                    );
                                     let lines = if wrap {
                                         crate::tui::content::wrap_content_lines(&lines, width)
                                     } else {
@@ -484,9 +489,10 @@ impl Controller {
     ) {
         let collapsed = self.state.view.collapsed.clone();
         let wrap = self.state.view.wrap;
+        let projection = self.state.view.projection;
         let width = self.state.view.viewport_width.max(1);
         let content_line_of = move |document: &SemanticDocument, r: &SemanticRef| {
-            let lines = build_content_lines(document, &collapsed);
+            let lines = build_content_lines_with(document, &collapsed, projection);
             let lines = if wrap {
                 crate::tui::content::wrap_content_lines(&lines, width)
             } else {
@@ -506,12 +512,8 @@ impl Controller {
             self.apply_fragment_from_url(&document);
             let lines = self.lines_for_document(&document);
             self.state.clamp_scroll(lines.len());
-            // Ensure selection exists
-            if self.state.view.selection.is_none()
-                && let Some(first) = lines.iter().find_map(|l| l.semantic_ref.clone())
-            {
-                self.state.view.selection = Some(first);
-            }
+            // Ensure selection exists and is visible in the current projection.
+            self.ensure_selection_visible_in_lines(&document, &lines);
         }
         // Inspection text describes the prior capture and must never survive a
         // recapture unless explicitly regenerated for the new exact ref.
@@ -595,16 +597,43 @@ impl Controller {
         line.saturating_sub(self.state.view.scroll_y)
     }
 
-    /// Content lines for a document under the current collapse + wrap settings.
+    /// Content lines for a document under the current projection + collapse + wrap.
     fn lines_for_document(
         &self,
         document: &SemanticDocument,
     ) -> Vec<crate::tui::content::ContentLine> {
-        let lines = build_content_lines(document, &self.state.view.collapsed);
+        let lines = build_content_lines_with(
+            document,
+            &self.state.view.collapsed,
+            self.state.view.projection,
+        );
         if self.state.view.wrap {
             crate::tui::content::wrap_content_lines(&lines, self.state.view.viewport_width.max(1))
         } else {
             lines
+        }
+    }
+
+    /// If selection is missing or has no line in the current projection, pick a
+    /// visible ref (first descendant under the old selection, else first line).
+    fn ensure_selection_visible_in_lines(
+        &mut self,
+        document: &SemanticDocument,
+        lines: &[crate::tui::content::ContentLine],
+    ) {
+        if let Some(sel) = self.state.view.selection.clone() {
+            if line_index_of(lines, &sel).is_some() {
+                return;
+            }
+            if let Some(next) = first_visible_descendant_ref(document, &sel, lines) {
+                self.state.view.selection = Some(next);
+                return;
+            }
+        }
+        if self.state.view.selection.is_none()
+            && let Some(first) = lines.iter().find_map(|l| l.semantic_ref.clone())
+        {
+            self.state.view.selection = Some(first);
         }
     }
 }
@@ -640,14 +669,37 @@ impl Controller {
         } else {
             self.state.view.set_status("wrap: off");
         }
-        let len = self.content_lines().len();
-        self.state.clamp_scroll(len);
-        // Keep the current selection visible after the line grid changes.
-        if let Some(sel) = self.state.view.selection.clone() {
-            let lines = self.content_lines();
-            if let Some(idx) = line_index_of(&lines, &sel) {
-                self.ensure_visible(idx, lines.len());
-            }
+        self.after_projection_change();
+    }
+
+    /// Toggle prose (default) vs structure content projection.
+    ///
+    /// Prose hides landmark/list/group chrome and flattens indent. Structure is
+    /// the DOM-like outline. When leaving structure, selection jumps to the
+    /// first visible descendant if the current ref has no prose line.
+    pub fn toggle_structure(&mut self) {
+        self.state.view.projection = match self.state.view.projection {
+            ContentProjection::Prose => ContentProjection::Structure,
+            ContentProjection::Structure => ContentProjection::Prose,
+        };
+        match self.state.view.projection {
+            ContentProjection::Prose => self.state.view.set_status("mode: prose"),
+            ContentProjection::Structure => self.state.view.set_status("mode: structure"),
+        }
+        self.after_projection_change();
+    }
+
+    fn after_projection_change(&mut self) {
+        let Some(document) = self.state.document().cloned() else {
+            return;
+        };
+        let lines = self.lines_for_document(&document);
+        self.state.clamp_scroll(lines.len());
+        self.ensure_selection_visible_in_lines(&document, &lines);
+        if let Some(sel) = self.state.view.selection.clone()
+            && let Some(idx) = line_index_of(&lines, &sel)
+        {
+            self.ensure_visible(idx, lines.len());
         }
     }
 
@@ -778,7 +830,15 @@ impl Controller {
     }
 
     /// Collapse or expand the selected block by exact `semantic_ref` only (never rebind).
+    ///
+    /// Structure mode only: prose hides containers, so collapse is unavailable.
     pub fn toggle_collapse(&mut self) {
+        if self.state.view.projection.is_prose() {
+            self.state
+                .view
+                .set_status("collapse needs structure mode (zs)");
+            return;
+        }
         let Some(sel) = self.state.view.selection.clone() else {
             return;
         };
@@ -1504,7 +1564,11 @@ mod tests {
         // Simulate finish_capture body: reconcile then apply fragment.
         let collapsed = ctl.state.view.collapsed.clone();
         let content_line_of = move |document: &SemanticDocument, r: &SemanticRef| {
-            let lines = build_content_lines(document, &collapsed);
+            let lines = build_content_lines_with(
+                document,
+                &collapsed,
+                ContentProjection::Prose,
+            );
             line_index_of(&lines, r)
         };
         ctl.state.reconcile_after_capture(
@@ -1606,6 +1670,92 @@ mod tests {
         assert!(!ctl.state.view.wrap);
         assert_eq!(ctl.state.view.status_message.as_deref(), Some("wrap: off"));
         assert_eq!(ctl.content_lines().len(), unwrapped);
+    }
+
+    #[test]
+    fn zs_toggles_prose_and_rebinds_hidden_container_selection() {
+        let doc = normalize_fixture(
+            meta("1", "https://example.com/"),
+            vec![RawSemanticNode {
+                kind: "landmark".into(),
+                tag: Some("main".into()),
+                id: None,
+                unique_id: false,
+                selector: None,
+                text: None,
+                href: None,
+                landmark: Some("main".into()),
+                heading_level: None,
+                ordered: None,
+                label: None,
+                src: None,
+                alt: None,
+                name: None,
+                value: None,
+                input_type: None,
+                placeholder: None,
+                checked: None,
+                disabled: None,
+                required: None,
+                readonly: None,
+                multiple: None,
+                button_type: None,
+                options: vec![],
+                children: vec![RawSemanticNode {
+                    kind: "text".into(),
+                    tag: Some("p".into()),
+                    id: Some("p1".into()),
+                    unique_id: true,
+                    selector: None,
+                    text: Some("hello".into()),
+                    href: None,
+                    landmark: None,
+                    heading_level: None,
+                    ordered: None,
+                    label: None,
+                    src: None,
+                    alt: None,
+                    name: None,
+                    value: None,
+                    input_type: None,
+                    placeholder: None,
+                    checked: None,
+                    disabled: None,
+                    required: None,
+                    readonly: None,
+                    multiple: None,
+                    button_type: None,
+                    options: vec![],
+                    children: vec![],
+                }],
+            }],
+        )
+        .expect("doc");
+        let landmark = doc.semantic_refs()[0].clone();
+        let text_ref = doc.semantic_refs()[1].clone();
+        let mut ctl = Controller::new();
+        ctl.state.publish_page(doc);
+        ctl.set_viewport(80, 20);
+        // Enter structure and select the landmark container.
+        ctl.toggle_structure();
+        assert!(ctl.state.view.projection.is_structure());
+        ctl.state.view.selection = Some(landmark);
+        assert!(
+            ctl.content_lines()
+                .iter()
+                .any(|l| l.text.contains("[main]"))
+        );
+        // Back to prose: landmark chrome gone; selection jumps to child text.
+        ctl.toggle_structure();
+        assert!(ctl.state.view.projection.is_prose());
+        assert_eq!(ctl.state.view.selection.as_ref(), Some(&text_ref));
+        assert!(!ctl.content_lines().iter().any(|l| l.text.contains("[main]")));
+        // Collapse disabled in prose.
+        ctl.toggle_collapse();
+        assert_eq!(
+            ctl.state.view.status_message.as_deref(),
+            Some("collapse needs structure mode (zs)")
+        );
     }
 
     #[test]

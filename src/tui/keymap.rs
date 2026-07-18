@@ -233,8 +233,13 @@ impl TuiKeymap {
             Action::Collapse,
             KeySequence::single(KeyCode::Char(' ')),
         );
-        // Vim-style z-prefix view command: toggle soft wrap (off by default).
+        // Vim-style z-prefix view commands.
         insert(&mut map, Action::ToggleWrap, KeySequence::chars("zw"));
+        insert(
+            &mut map,
+            Action::ToggleStructure,
+            KeySequence::chars("zs"),
+        );
         insert(&mut map, Action::Inspect, KeySequence::chars("i"));
         insert(&mut map, Action::CopyBlock, KeySequence::chars("y"));
         insert(&mut map, Action::CopyRef, KeySequence::chars("Y"));
@@ -463,6 +468,10 @@ mod tests {
         assert_eq!(
             km.resolve_sequence(&KeySequence::chars("zw")),
             Some(Action::ToggleWrap)
+        );
+        assert_eq!(
+            km.resolve_sequence(&KeySequence::chars("zs")),
+            Some(Action::ToggleStructure)
         );
         assert_eq!(
             km.resolve_sequence(&KeySequence::chars("o")),

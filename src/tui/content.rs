@@ -24,14 +24,47 @@ pub struct ContentLine {
     pub block_start: bool,
 }
 
+/// How structural containers are projected into content lines.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ContentProjection {
+    /// Markdown-like: hide landmark/list/group chrome, fully flat indent.
+    /// Default reading mode.
+    #[default]
+    Prose,
+    /// DOM-like: show `▾ [main]`, `▾ ol`, group labels, and depth indent.
+    Structure,
+}
+
+impl ContentProjection {
+    pub fn is_prose(self) -> bool {
+        matches!(self, Self::Prose)
+    }
+
+    pub fn is_structure(self) -> bool {
+        matches!(self, Self::Structure)
+    }
+}
+
 /// Flatten a SemanticDocument into content lines, honoring collapsed exact refs.
+///
+/// Defaults to structure projection for callers/tests that want DOM chrome.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn build_content_lines(
     document: &SemanticDocument,
     collapsed: &HashSet<SemanticRef>,
 ) -> Vec<ContentLine> {
+    build_content_lines_with(document, collapsed, ContentProjection::Structure)
+}
+
+/// Flatten with an explicit projection (prose vs structure).
+pub fn build_content_lines_with(
+    document: &SemanticDocument,
+    collapsed: &HashSet<SemanticRef>,
+    projection: ContentProjection,
+) -> Vec<ContentLine> {
     let mut lines = Vec::new();
     for root in &document.roots {
-        push_component(root, 0, collapsed, &mut lines);
+        push_component(root, 0, collapsed, projection, &mut lines);
     }
     lines
 }
@@ -126,29 +159,45 @@ fn push_component(
     component: &SemanticComponent,
     depth: usize,
     collapsed: &HashSet<SemanticRef>,
+    projection: ContentProjection,
     lines: &mut Vec<ContentLine>,
 ) {
+    // Prose is fully flat; structure keeps DOM-like depth indent.
+    let depth = match projection {
+        ContentProjection::Prose => 0,
+        ContentProjection::Structure => depth,
+    };
     let indent = "  ".repeat(depth);
     let is_collapsed = collapsed.contains(&component.semantic_ref);
 
     match component.kind {
         SemanticKind::Landmark => {
-            let role = landmark_name(component);
-            let marker = if is_collapsed { "▸" } else { "▾" };
-            push_line(lines, format!("{indent}{marker} [{role}]"), component, true);
-            if !is_collapsed {
+            if projection.is_structure() {
+                let role = landmark_name(component);
+                let marker = if is_collapsed { "▸" } else { "▾" };
+                push_line(
+                    lines,
+                    format!("{indent}{marker} [{role}]"),
+                    component,
+                    true,
+                );
+            }
+            // Prose: omit landmark chrome; still walk children (collapse only in structure).
+            if projection.is_prose() || !is_collapsed {
                 for child in &component.children {
-                    push_component(child, depth + 1, collapsed, lines);
+                    push_component(child, depth + 1, collapsed, projection, lines);
                 }
             }
         }
         SemanticKind::Group => {
-            if let Some(label) = component.label.as_deref().filter(|s| !s.is_empty()) {
+            if projection.is_structure()
+                && let Some(label) = component.label.as_deref().filter(|s| !s.is_empty())
+            {
                 push_line(lines, format!("{indent}[{label}]"), component, true);
             }
-            if !is_collapsed {
+            if projection.is_prose() || !is_collapsed {
                 for child in &component.children {
-                    push_component(child, depth + 1, collapsed, lines);
+                    push_component(child, depth + 1, collapsed, projection, lines);
                 }
             }
         }
@@ -166,9 +215,19 @@ fn push_component(
         }
         SemanticKind::List => {
             let ordered = component.attrs.ordered.unwrap_or(false);
-            let marker = if is_collapsed { "▸" } else { "▾" };
-            push_line(lines, format!("{indent}{marker} {}", if ordered { "ol" } else { "ul" }), component, true);
-            if !is_collapsed {
+            if projection.is_structure() {
+                let marker = if is_collapsed { "▸" } else { "▾" };
+                push_line(
+                    lines,
+                    format!(
+                        "{indent}{marker} {}",
+                        if ordered { "ol" } else { "ul" }
+                    ),
+                    component,
+                    true,
+                );
+            }
+            if projection.is_prose() || !is_collapsed {
                 let mut index = 1usize;
                 for child in &component.children {
                     if child.kind == SemanticKind::ListItem {
@@ -177,24 +236,43 @@ fn push_component(
                         } else {
                             "-".into()
                         };
-                        push_line(lines, format!("{indent}  {bullet} {}", display_text(child)), child, true);
-                        if !collapsed.contains(&child.semantic_ref) {
+                        // Fully flat in prose (no nested list indent).
+                        push_line(
+                            lines,
+                            format!("{indent}{bullet} {}", display_text(child)),
+                            child,
+                            true,
+                        );
+                        let item_collapsed = collapsed.contains(&child.semantic_ref);
+                        if projection.is_prose() || !item_collapsed {
                             for nested in &child.children {
-                                push_component(nested, depth + 2, collapsed, lines);
+                                push_component(
+                                    nested,
+                                    depth + 1,
+                                    collapsed,
+                                    projection,
+                                    lines,
+                                );
                             }
                         }
                         index += 1;
                     } else {
-                        push_component(child, depth + 1, collapsed, lines);
+                        push_component(child, depth + 1, collapsed, projection, lines);
                     }
                 }
             }
         }
         SemanticKind::ListItem => {
-            push_line(lines, format!("{indent}- {}", display_text(component)), component, true);
-            if !is_collapsed {
+            // Reached when a list item is a root or nested outside List handling.
+            push_line(
+                lines,
+                format!("{indent}- {}", display_text(component)),
+                component,
+                true,
+            );
+            if projection.is_prose() || !is_collapsed {
                 for child in &component.children {
-                    push_component(child, depth + 1, collapsed, lines);
+                    push_component(child, depth + 1, collapsed, projection, lines);
                 }
             }
         }
@@ -217,23 +295,57 @@ fn push_component(
             let name = component.attrs.name.as_deref().unwrap_or("");
             let value = component.attrs.value.as_deref().unwrap_or("");
             let input_type = component.attrs.input_type.as_deref().unwrap_or("text");
-            push_line(lines, format!("{indent}[input {input_type} name={name} value={value}]"), component, true);
+            push_line(
+                lines,
+                format!("{indent}[input {input_type} name={name} value={value}]"),
+                component,
+                true,
+            );
         }
         SemanticKind::Textarea => {
             let name = component.attrs.name.as_deref().unwrap_or("");
             let value = component.attrs.value.as_deref().unwrap_or("");
-            push_line(lines, format!("{indent}[textarea name={name} value={value}]"), component, true);
+            push_line(
+                lines,
+                format!("{indent}[textarea name={name} value={value}]"),
+                component,
+                true,
+            );
         }
         SemanticKind::Select => {
             let name = component.attrs.name.as_deref().unwrap_or("");
             let value = component.attrs.value.as_deref().unwrap_or("");
-            push_line(lines, format!("{indent}[select name={name} value={value}]"), component, true);
+            push_line(
+                lines,
+                format!("{indent}[select name={name} value={value}]"),
+                component,
+                true,
+            );
         }
         SemanticKind::Button => {
             let label = display_text(component);
             push_line(lines, format!("{indent}[button {label}]"), component, true);
         }
     }
+}
+
+/// First visible descendant ref in document order under `root` that appears in `lines`.
+pub fn first_visible_descendant_ref(
+    document: &SemanticDocument,
+    root: &SemanticRef,
+    lines: &[ContentLine],
+) -> Option<SemanticRef> {
+    let component = document.resolve(root).ok()?;
+    let mut found = None;
+    component.walk(&mut |c| {
+        if found.is_some() {
+            return;
+        }
+        if line_index_of(lines, &c.semantic_ref).is_some() {
+            found = Some(c.semantic_ref.clone());
+        }
+    });
+    found
 }
 
 fn landmark_name(component: &SemanticComponent) -> String {
@@ -315,7 +427,14 @@ pub fn rendered_block_text(
     let component = document.resolve(semantic_ref).ok()?;
     let collapsed = HashSet::new();
     let mut lines = Vec::new();
-    push_component(component, 0, &collapsed, &mut lines);
+    // Copy uses structure projection so container labels remain available.
+    push_component(
+        component,
+        0,
+        &collapsed,
+        ContentProjection::Structure,
+        &mut lines,
+    );
     Some(
         lines
             .into_iter()
@@ -441,6 +560,145 @@ mod tests {
         }
         assert!(!wrapped[1].block_start);
         assert!(wrapped.iter().all(|r| r.text.chars().count() <= 10));
+    }
+
+    #[test]
+    fn prose_hides_landmark_and_list_chrome_structure_shows_them() {
+        let doc = normalize_fixture(
+            meta(),
+            vec![RawSemanticNode {
+                kind: "landmark".into(),
+                tag: Some("main".into()),
+                id: None,
+                unique_id: false,
+                selector: None,
+                text: None,
+                href: None,
+                landmark: Some("main".into()),
+                heading_level: None,
+                ordered: None,
+                label: None,
+                src: None,
+                alt: None,
+                name: None,
+                value: None,
+                input_type: None,
+                placeholder: None,
+                checked: None,
+                disabled: None,
+                required: None,
+                readonly: None,
+                multiple: None,
+                button_type: None,
+                options: vec![],
+                children: vec![
+                    RawSemanticNode {
+                        kind: "heading".into(),
+                        tag: Some("h1".into()),
+                        id: Some("t".into()),
+                        unique_id: true,
+                        selector: None,
+                        text: Some("Title".into()),
+                        href: None,
+                        landmark: None,
+                        heading_level: Some(1),
+                        ordered: None,
+                        label: Some("Title".into()),
+                        src: None,
+                        alt: None,
+                        name: None,
+                        value: None,
+                        input_type: None,
+                        placeholder: None,
+                        checked: None,
+                        disabled: None,
+                        required: None,
+                        readonly: None,
+                        multiple: None,
+                        button_type: None,
+                        options: vec![],
+                        children: vec![],
+                    },
+                    RawSemanticNode {
+                        kind: "list".into(),
+                        tag: Some("ul".into()),
+                        id: None,
+                        unique_id: false,
+                        selector: None,
+                        text: None,
+                        href: None,
+                        landmark: None,
+                        heading_level: None,
+                        ordered: Some(false),
+                        label: None,
+                        src: None,
+                        alt: None,
+                        name: None,
+                        value: None,
+                        input_type: None,
+                        placeholder: None,
+                        checked: None,
+                        disabled: None,
+                        required: None,
+                        readonly: None,
+                        multiple: None,
+                        button_type: None,
+                        options: vec![],
+                        children: vec![RawSemanticNode {
+                            kind: "list_item".into(),
+                            tag: Some("li".into()),
+                            id: None,
+                            unique_id: false,
+                            selector: None,
+                            text: Some("one".into()),
+                            href: None,
+                            landmark: None,
+                            heading_level: None,
+                            ordered: None,
+                            label: Some("one".into()),
+                            src: None,
+                            alt: None,
+                            name: None,
+                            value: None,
+                            input_type: None,
+                            placeholder: None,
+                            checked: None,
+                            disabled: None,
+                            required: None,
+                            readonly: None,
+                            multiple: None,
+                            button_type: None,
+                            options: vec![],
+                            children: vec![],
+                        }],
+                    },
+                ],
+            }],
+        )
+        .expect("doc");
+        let empty = HashSet::new();
+        let structure = build_content_lines_with(&doc, &empty, ContentProjection::Structure);
+        let prose = build_content_lines_with(&doc, &empty, ContentProjection::Prose);
+        assert!(
+            structure.iter().any(|l| l.text.contains("[main]")),
+            "structure shows landmark: {structure:?}"
+        );
+        assert!(
+            structure.iter().any(|l| l.text.contains("ul")),
+            "structure shows list chrome"
+        );
+        assert!(
+            !prose.iter().any(|l| l.text.contains("[main]")),
+            "prose hides landmark"
+        );
+        assert!(
+            !prose.iter().any(|l| l.text.contains("▾") || l.text == "ul"),
+            "prose hides list chrome"
+        );
+        assert!(prose.iter().any(|l| l.text.contains("# Title")));
+        assert!(prose.iter().any(|l| l.text.contains("- one") || l.text.contains("one")));
+        // Fully flat: no leading indent spaces on prose lines.
+        assert!(prose.iter().all(|l| !l.text.starts_with(' ')));
     }
 
     #[test]
