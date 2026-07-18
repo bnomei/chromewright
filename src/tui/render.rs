@@ -302,9 +302,8 @@ fn draw_inspect_under_selection(
     inspect: &str,
     theme: &TuiTheme,
 ) {
-    let state = &controller.state;
     let lines = controller.content_lines();
-    let scroll = state.view.scroll_y;
+    let scroll = controller.state.view.scroll_y;
     let vh = content_area.height as usize;
 
     let body_lines = inspect.lines().count().max(1);
@@ -316,7 +315,8 @@ fn draw_inspect_under_selection(
     let x = content_area.x.saturating_add(1);
 
     // Last content-line index of the selection (handles wrap continuations).
-    let last_abs = state
+    let last_abs = controller
+        .state
         .view
         .selection
         .as_ref()
@@ -358,14 +358,9 @@ fn draw_inspect_under_selection(
         width,
         height: panel_h,
     };
-    let title = if state.view.inspect_follow {
-        "inspect · j/k follows · Esc"
-    } else {
-        "inspect"
-    };
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(title)
+        .title("inspect")
         .border_style(theme.chrome_mode())
         .title_style(theme.chrome_mode());
     let inner = block.inner(rect);
