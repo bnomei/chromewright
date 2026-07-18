@@ -1068,8 +1068,9 @@ impl ToolSafetyAnnotations {
 
 fn explicit_tool_safety_annotations(name: &str) -> Option<ToolSafetyAnnotations> {
     match name {
-        "tui_render" | "tui_inspect" | "tui_query" | "tui_selection_read"
-        | "tui_attention_read" => Some(ToolSafetyAnnotations::read_only()),
+        "tui_render" | "tui_inspect" | "tui_selection_read" | "tui_attention_read" => {
+            Some(ToolSafetyAnnotations::read_only())
+        }
         "tui_refresh" | "tui_selection_update" | "tui_attention_set" | "tui_attention_clear" => {
             Some(ToolSafetyAnnotations::mutating(false, true))
         }

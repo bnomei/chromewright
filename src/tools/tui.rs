@@ -70,11 +70,10 @@ pub enum TuiData {
 }
 
 /// Frozen companion tool names; must stay out of default/operator MCP registries.
-pub const NAMES: [&str; 9] = [
+pub const NAMES: [&str; 8] = [
     "tui_render",
     "tui_refresh",
     "tui_inspect",
-    "tui_query",
     "tui_selection_read",
     "tui_selection_update",
     "tui_attention_read",
@@ -113,7 +112,7 @@ pub fn descriptors() -> Vec<ToolDescriptor> {
 /// current page into the semantic document. Unknown names return [`unavailable`].
 pub fn execute(name: &str, params: TuiParams, shared: &SharedTuiState) -> TuiResult {
     match name {
-        "tui_render" | "tui_query" => match shared.render(params.limit.unwrap_or(32_000)) {
+        "tui_render" => match shared.render(params.limit.unwrap_or(32_000)) {
             Ok(content) => success(TuiData::Content { content }),
             Err(error) => failure(error),
         },

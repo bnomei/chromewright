@@ -242,7 +242,7 @@ The RMCP gate in Phase 1 is mandatory. Resource serialization depends on Phase 3
 
 - Co-host an in-process loopback streamable-HTTP MCP endpoint with the TUI, with explicit port and HTTP-path options.
 - Keep the co-hosted endpoint distinct from the standard stdio MCP mode.
-- Add the frozen flat tool family in `src/tools/tui.rs`: `tui_render`, `tui_refresh`, `tui_inspect`, `tui_query`, `tui_selection_read`, `tui_selection_update`, `tui_attention_read`, `tui_attention_set`, and `tui_attention_clear`.
+- Add the frozen flat tool family in `src/tools/tui.rs`: `tui_render`, `tui_refresh`, `tui_inspect`, `tui_selection_read`, `tui_selection_update`, `tui_attention_read`, `tui_attention_set`, and `tui_attention_clear`.
 - Make tools consume the shared semantic model and state rather than introducing a second parser or document cache.
 - Expose the planned resource catalog through `src/mcp/resources.rs` and `src/mcp/handler.rs`:
   - `chromewright://active/semantic.md`;

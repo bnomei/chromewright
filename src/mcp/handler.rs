@@ -153,7 +153,6 @@ fn is_serialized_page_action(name: &str) -> bool {
     match name {
         // Independent collaboration and pure TUI reads stay available during Loading.
         "tui_render"
-        | "tui_query"
         | "tui_inspect"
         | "tui_selection_read"
         | "tui_selection_update"

@@ -394,11 +394,6 @@ mod tests {
             Some(true)
         );
 
-        let query = session
-            .execute_tool("tui_query", serde_json::json!({ "limit": 128 }))
-            .expect("tui_query");
-        assert!(query.success);
-
         let inspect = session
             .execute_tool("tui_inspect", serde_json::json!({}))
             .expect("tui_inspect");

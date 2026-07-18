@@ -132,7 +132,7 @@ retaining the last valid document. Concurrent mutations fail explicitly.
 
 ### `tui_*` tools
 
-`tui_render`, `tui_refresh`, `tui_inspect`, `tui_query`,
+`tui_render`, `tui_refresh`, `tui_inspect`,
 `tui_selection_read`, `tui_selection_update`,
 `tui_attention_read`, `tui_attention_set`, `tui_attention_clear`.
 

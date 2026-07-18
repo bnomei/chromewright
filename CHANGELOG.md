@@ -16,6 +16,7 @@
 
 ### Changed
 
+- Drop the redundant `tui_query` companion alias; use `tui_render` for semantic markdown.
 - Make the TUI inspect panel a compact CSS-selector-first developer view (identity, action fields, ref/rev) without Debug/`None` noise.
 - Show the full DOM path (`main > form#x > input#y`) as the TUI inspect panel title instead of a static `inspect` label.
 - Document the full default TUI keymap, action names, and TOML overlay syntax in `README.md`.
