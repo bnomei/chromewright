@@ -541,12 +541,21 @@ impl Controller {
             content_line_of,
         );
         if let Some(document) = self.state.document().cloned() {
-            // Prefer fragment target from the new URL when present.
-            self.apply_fragment_from_url(&document);
-            let lines = self.lines_for_document(&document);
-            self.state.clamp_scroll(lines.len());
-            // Ensure selection exists and is visible in the current projection.
-            self.ensure_selection_visible_in_lines(&document, &lines);
+            // Prefer fragment target from the new URL when present. This sets
+            // selection + scroll (top + margin). Do not call ensure_visible
+            // afterward — that would pin the target to the bottom of the pane.
+            if url_fragment(&document.document.url).is_some() {
+                self.apply_fragment_from_url(&document);
+            } else {
+                let lines = self.lines_for_document(&document);
+                self.state.clamp_scroll(lines.len());
+                self.ensure_selection_visible_in_lines(&document, &lines);
+                if let Some(sel) = self.state.view.selection.clone()
+                    && let Some(idx) = line_index_of(&lines, &sel)
+                {
+                    self.ensure_visible(idx, lines.len());
+                }
+            }
         }
         // Inspection text describes the prior capture and must never survive a
         // recapture unless explicitly regenerated for the new exact ref.
@@ -567,9 +576,10 @@ impl Controller {
 
     /// Expand collapsed ancestors, select the fragment target, and scroll it into view.
     ///
-    /// The target is placed near the upper third of the viewport with a fixed
-    /// top margin ([`FRAGMENT_VIEWPORT_TOP_MARGIN`] rows above) when content
-    /// allows; normal scroll clamping still applies at document ends.
+    /// The target line is pinned near the **top** of the content viewport with
+    /// [`FRAGMENT_VIEWPORT_TOP_MARGIN`] rows of prior context above it (not the
+    /// bottom). If the exact ref has no display line (e.g. hidden landmark in
+    /// prose mode), selection jumps to the first visible descendant line.
     fn select_fragment_target(&mut self, document: &SemanticDocument, fragment: &str) {
         match document.resolve_fragment(fragment) {
             FragmentResolution::Target(target) => {
@@ -578,15 +588,31 @@ impl Controller {
                 }
                 // Also expand the target itself if it was collapsed as a landmark/list.
                 self.state.view.collapsed.remove(&target);
-                self.state.view.selection = Some(target.clone());
+
                 let lines = self.lines_for_document(document);
-                if let Some(idx) = line_index_of(&lines, &target) {
-                    self.scroll_line_with_top_margin(
-                        idx,
-                        lines.len(),
-                        FRAGMENT_VIEWPORT_TOP_MARGIN,
-                    );
-                }
+                // Prefer the target's own line; otherwise the first visible
+                // descendant (prose hides pure containers).
+                let (select_ref, line_idx) =
+                    if let Some(idx) = line_index_of(&lines, &target) {
+                        (target, idx)
+                    } else if let Some(desc) =
+                        first_visible_descendant_ref(document, &target, &lines)
+                    {
+                        let idx = line_index_of(&lines, &desc).unwrap_or(0);
+                        (desc, idx)
+                    } else {
+                        self.state
+                            .view
+                            .set_status("fragment target not represented");
+                        return;
+                    };
+
+                self.state.view.selection = Some(select_ref);
+                self.scroll_line_with_top_margin(
+                    line_idx,
+                    lines.len(),
+                    FRAGMENT_VIEWPORT_TOP_MARGIN,
+                );
             }
             FragmentResolution::Top => {
                 self.state.view.scroll_y = 0;
@@ -847,18 +873,27 @@ impl Controller {
         self.state.clamp_scroll(content_len);
     }
 
-    /// Place `line_idx` approximately `margin` rows below the top of the viewport.
+    /// Place `line_idx` `margin` rows below the **top** of the viewport.
     ///
-    /// Used for in-page `#fragment` jumps so the target is not flush against the
-    /// chrome. Falls back to document start/end via [`TuiState::clamp_scroll`].
+    /// Used for `#fragment` jumps so the anchor sits near the top with a little
+    /// prior context above it. Near the document end, [`TuiState::clamp_scroll`]
+    /// may leave the target lower in the viewport; we never pin it to the bottom
+    /// via [`Self::ensure_visible`] (that path is for j/k only).
     fn scroll_line_with_top_margin(&mut self, line_idx: usize, content_len: usize, margin: usize) {
+        // Prefer: scroll_y + margin == line_idx  →  target at row `margin` from top.
         self.state.view.scroll_y = line_idx.saturating_sub(margin);
         self.state.clamp_scroll(content_len);
-        // If clamping pushed the target above the viewport (short docs / tiny
-        // height), fall back to the standard ensure-visible path.
+        // If the viewport is shorter than the margin, still keep the target in view
+        // by scrolling it to the top rather than the bottom.
         let vh = self.state.view.viewport_height.max(1);
-        if line_idx < self.state.view.scroll_y || line_idx >= self.state.view.scroll_y + vh {
-            self.ensure_visible(line_idx, content_len);
+        if line_idx < self.state.view.scroll_y {
+            self.state.view.scroll_y = line_idx;
+            self.state.clamp_scroll(content_len);
+        } else if line_idx >= self.state.view.scroll_y + vh {
+            // Target fell below the viewport after clamp (should be rare); pull
+            // it to the top of the viewport, not the bottom.
+            self.state.view.scroll_y = line_idx;
+            self.state.clamp_scroll(content_len);
         }
     }
 
@@ -1667,13 +1702,97 @@ mod tests {
         let lines = ctl.content_lines();
         let idx = line_index_of(&lines, &target).expect("line");
         assert!(idx >= FRAGMENT_VIEWPORT_TOP_MARGIN);
-        // Prefer ~5 rows of context above the target.
+        // Target sits `margin` rows below the top of the viewport.
         assert_eq!(
             ctl.state.view.scroll_y,
             idx.saturating_sub(FRAGMENT_VIEWPORT_TOP_MARGIN)
         );
-        assert!(idx >= ctl.state.view.scroll_y);
-        assert!(idx < ctl.state.view.scroll_y + ctl.state.view.viewport_height);
+        let offset_from_top = idx - ctl.state.view.scroll_y;
+        assert_eq!(offset_from_top, FRAGMENT_VIEWPORT_TOP_MARGIN);
+        // Must not be pinned to the bottom row of the viewport.
+        assert!(offset_from_top + 1 < ctl.state.view.viewport_height);
+    }
+
+    #[test]
+    fn fragment_on_hidden_container_selects_visible_descendant_near_top() {
+        let doc = normalize_fixture(
+            meta("1", "https://example.com/page#wrap"),
+            vec![RawSemanticNode {
+                kind: "landmark".into(),
+                tag: Some("main".into()),
+                id: Some("wrap".into()),
+                unique_id: true,
+                selector: None,
+                text: None,
+                href: None,
+                landmark: Some("main".into()),
+                heading_level: None,
+                ordered: None,
+                label: None,
+                src: None,
+                alt: None,
+                name: None,
+                value: None,
+                input_type: None,
+                placeholder: None,
+                checked: None,
+                disabled: None,
+                required: None,
+                readonly: None,
+                multiple: None,
+                button_type: None,
+                options: vec![],
+                children: {
+                    let mut kids = Vec::new();
+                    for i in 0..15 {
+                        kids.push(RawSemanticNode {
+                            kind: "text".into(),
+                            tag: Some("p".into()),
+                            id: Some(format!("p{i}")),
+                            unique_id: true,
+                            selector: None,
+                            text: Some(format!("para {i}")),
+                            href: None,
+                            landmark: None,
+                            heading_level: None,
+                            ordered: None,
+                            label: None,
+                            src: None,
+                            alt: None,
+                            name: None,
+                            value: None,
+                            input_type: None,
+                            placeholder: None,
+                            checked: None,
+                            disabled: None,
+                            required: None,
+                            readonly: None,
+                            multiple: None,
+                            button_type: None,
+                            options: vec![],
+                            children: vec![],
+                        });
+                    }
+                    kids
+                },
+            }],
+        )
+        .expect("doc");
+        let first_child = doc.semantic_refs()[1].clone();
+        let mut ctl = Controller::new();
+        ctl.set_viewport(80, 10);
+        // Default prose hides the landmark chrome.
+        assert!(ctl.state.view.projection.is_prose());
+        ctl.state.publish_page(doc.clone());
+        ctl.apply_fragment_from_url(&doc);
+        // Selection is the first visible descendant, not the hidden landmark.
+        assert_eq!(ctl.state.view.selection.as_ref(), Some(&first_child));
+        let lines = ctl.content_lines();
+        let idx = line_index_of(&lines, &first_child).expect("line");
+        assert_eq!(
+            ctl.state.view.scroll_y,
+            idx.saturating_sub(FRAGMENT_VIEWPORT_TOP_MARGIN)
+        );
     }
 
     #[test]
