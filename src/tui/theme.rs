@@ -21,89 +21,51 @@ impl TuiTheme {
         Style::default()
     }
 
-    /// Full-width inverted fill for header/footer chrome bars.
-    ///
-    /// Reverse video separates chrome from the content pane in both light and
-    /// dark terminals without hard-coding absolute bar colors.
-    pub fn chrome_bar(&self) -> Style {
-        Style::default().add_modifier(Modifier::REVERSED)
-    }
-
-    /// Content-pane style patched onto the inverted chrome bar.
-    pub fn on_bar(&self, style: Style) -> Style {
-        style.add_modifier(Modifier::REVERSED)
-    }
-
     pub fn chrome_mode(&self) -> Style {
-        self.on_bar(
-            self.base()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD),
-        )
+        self.base()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD)
     }
 
     pub fn chrome_ready(&self) -> Style {
-        self.on_bar(self.base().fg(Color::Green).add_modifier(Modifier::BOLD))
+        self.base().fg(Color::Green)
     }
 
     pub fn chrome_loading(&self) -> Style {
-        self.on_bar(self.base().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+        self.base().fg(Color::Yellow)
     }
 
     pub fn chrome_error(&self) -> Style {
-        self.on_bar(
-            self.base()
-                .fg(Color::Red)
-                .add_modifier(Modifier::BOLD),
-        )
-    }
-
-    pub fn chrome_wrap(&self) -> Style {
-        self.on_bar(self.base().fg(Color::Cyan))
-    }
-
-    pub fn chrome_hist_enabled(&self) -> Style {
-        self.on_bar(self.base().fg(Color::Green).add_modifier(Modifier::BOLD))
-    }
-
-    pub fn chrome_hist_disabled(&self) -> Style {
-        self.on_bar(self.base().add_modifier(Modifier::DIM))
-    }
-
-    /// Muted text in the content pane (not bar-inverted).
-    pub fn muted(&self) -> Style {
-        self.base().fg(Color::DarkGray)
-    }
-
-    /// Muted text on the inverted chrome bar.
-    pub fn bar_muted(&self) -> Style {
-        self.on_bar(self.base().add_modifier(Modifier::DIM))
-    }
-
-    /// Error text in the content pane (not bar-inverted).
-    pub fn status_error(&self) -> Style {
         self.base()
             .fg(Color::Red)
             .add_modifier(Modifier::BOLD)
     }
 
-    /// Loading text in the content pane (not bar-inverted).
-    pub fn status_loading(&self) -> Style {
-        self.base().fg(Color::Yellow)
+    pub fn chrome_wrap(&self) -> Style {
+        self.base().fg(Color::Cyan)
     }
 
-    /// Error text on the inverted chrome bar.
-    pub fn bar_status_error(&self) -> Style {
+    pub fn chrome_hist_enabled(&self) -> Style {
+        self.base().fg(Color::Green)
+    }
+
+    pub fn chrome_hist_disabled(&self) -> Style {
+        self.muted()
+    }
+
+    pub fn muted(&self) -> Style {
+        self.base().fg(Color::DarkGray)
+    }
+
+    pub fn status_error(&self) -> Style {
         self.chrome_error()
     }
 
-    /// Loading text on the inverted chrome bar.
-    pub fn bar_status_loading(&self) -> Style {
+    pub fn status_loading(&self) -> Style {
         self.chrome_loading()
     }
 
-    /// OK / positive text on the inverted chrome bar.
-    pub fn bar_status_ok(&self) -> Style {
+    pub fn status_ok(&self) -> Style {
         self.chrome_ready()
     }
 
@@ -196,24 +158,6 @@ mod tests {
         let style = theme.line_style(Some(SemanticKind::Link), None, true, true);
         assert!(style.add_modifier.contains(Modifier::REVERSED));
         assert!(style.add_modifier.contains(Modifier::BOLD));
-    }
-
-    #[test]
-    fn chrome_bar_is_reversed_content_is_not() {
-        let theme = TuiTheme::new();
-        assert!(theme.chrome_bar().add_modifier.contains(Modifier::REVERSED));
-        assert!(theme.chrome_mode().add_modifier.contains(Modifier::REVERSED));
-        assert!(theme.bar_muted().add_modifier.contains(Modifier::REVERSED));
-        // Content-pane styles must stay non-inverted so bars read as separate strips.
-        assert!(!theme.base().add_modifier.contains(Modifier::REVERSED));
-        assert!(!theme.muted().add_modifier.contains(Modifier::REVERSED));
-        assert!(!theme.status_loading().add_modifier.contains(Modifier::REVERSED));
-        assert!(
-            !theme
-                .content_style(Some(SemanticKind::Text), None)
-                .add_modifier
-                .contains(Modifier::REVERSED)
-        );
     }
 
     #[test]
