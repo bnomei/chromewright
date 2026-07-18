@@ -25,7 +25,6 @@
 - Show TUI search in the footer like Vim: `/{buffer}` while typing and `/{pattern}  n/m` while a search remains active (not in the header URL bar).
 - Show link-hint mode (`f` / `F` + typed keys) in the footer cmdline instead of the header.
 - Replace header lifecycle words (`ready`/`load`/`err`) with single glyphs (`●`/`◐`/`✕`); detail stays in the footer.
-- Add an Amp-style thin vertical scrollbar track on the right edge of the TUI content pane (`│` track, `▐` thumb).
 
 ### Fixed
 

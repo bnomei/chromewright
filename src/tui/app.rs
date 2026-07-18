@@ -275,10 +275,8 @@ fn run_loop(
         controller.synchronize_companion_state();
         let size = terminal.size().map_err(|e| e.to_string())?;
         // Content area is total height minus chrome (1) and status (1).
-        // Width reserves one column for the right-edge scrollbar track.
         let content_h = size.height.saturating_sub(2) as usize;
-        let content_w = (size.width as usize).saturating_sub(1).max(1);
-        controller.set_viewport(content_w, content_h.max(1));
+        controller.set_viewport(size.width as usize, content_h.max(1));
 
         terminal
             .draw(|frame| render::draw(frame, &controller))
