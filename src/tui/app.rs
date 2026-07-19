@@ -285,6 +285,13 @@ fn run_loop(
         terminal
             .draw(|frame| render::draw_with_theme(frame, &controller, &theme, layout))
             .map_err(|e| e.to_string())?;
+        // Keep the hardware cursor hidden; form edit uses an in-band soft caret.
+        // Some backends re-show or park a block at the last cell after draw.
+        let _ = crossterm::execute!(
+            terminal.backend_mut(),
+            crossterm::cursor::Hide,
+            crossterm::cursor::MoveTo(0, 0)
+        );
 
         // `Terminal::draw` succeeded while lifecycle is Loading, so browser
         // work may now start. No action is executed in the key dispatcher.

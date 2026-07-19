@@ -45,6 +45,7 @@
 
 ### Fixed
 
+- Form edit (`IN`) caret uses a reverse-filled ASCII space instead of U+2588 full block, and the hardware cursor stays hidden after each draw, so the value field no longer shows a hollow empty cell next to `]`.
 - Same-document button activates (e.g. clipboard copy on docs sites) recapture DOM updates (label flips) while pinning the topmost visible content line so the markdown view does not jump; selection is rebound without `ensure_visible`. Same-page `#fragment` links still jump to the target (detected from link `href` / post-click URL).
 - When no tabs are open, submitting a URL (`o` then Enter) opens a new tab at that address instead of failing to navigate a missing page; `o` remains available in Error for empty-session recovery.
 - Make TUI `y` copy the resolved URL for links and images instead of the full rendered element.

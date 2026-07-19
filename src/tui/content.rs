@@ -510,8 +510,10 @@ fn format_control_line(
         .trim();
     let captured = component.attrs.value.as_deref().unwrap_or("");
     let value = live_value.unwrap_or(captured);
-    // Block cursor only — no trailing pad (that caused a long reverse bar).
-    let cursor = if editing { "█" } else { "" };
+    // Soft caret: a single ASCII space. Under reverse-video selection it fills
+    // as a solid cell; U+2588 FULL BLOCK painted a hollow "no bg" hole and
+    // could mis-align next to `]`. No multi-space pad (that made a long bar).
+    let cursor = if editing { " " } else { "" };
     let name_bit = if name.is_empty() {
         String::new()
     } else {
@@ -1572,7 +1574,15 @@ mod tests {
         );
         let joined = lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join("\n");
         assert!(joined.contains("live@x"), "{joined}");
-        assert!(joined.contains('█'), "cursor while editing: {joined}");
+        // Soft caret is a trailing space inside the brackets while editing.
+        assert!(
+            joined.contains("live@x ]") || joined.contains("live@x]"),
+            "edit caret should sit in the value field: {joined}"
+        );
+        assert!(
+            joined.contains("live@x "),
+            "editing value should include soft space caret: {joined}"
+        );
     }
 
     #[test]

@@ -53,7 +53,7 @@ retaining the last good page), and Ctrl-C quit. See the README default keymap
 table for the full action map.
 
 Form controls render inline in the content pane. Text inputs show
-`[input name: value]` (live staged/`IN` buffer with a `█` cursor while editing).
+`[input name: value]` (live staged/`IN` buffer with a soft space caret while editing).
 Checkboxes/radios show `☑`/`☐`
 and `●`/`○` and toggle on Enter. Selects show the current option and cycle on
 Enter. Enter/Tab on a text field writes `input`/`change` into Chrome and
