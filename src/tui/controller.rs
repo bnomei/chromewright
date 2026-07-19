@@ -1204,29 +1204,30 @@ impl Controller {
         document: &SemanticDocument,
         lines: &[crate::tui::content::ContentLine],
         write_through: bool,
-    ) {
+    ) -> bool {
         if let Some(sel) = self.state.view.selection.clone() {
             if line_index_of(lines, &sel).is_some() {
-                return;
+                return true;
             }
             if let Some(next) = first_visible_descendant_ref(document, &sel, lines) {
                 if write_through {
-                    self.select_or_record_error(Some(next));
+                    return self.select_or_record_error(Some(next));
                 } else {
                     self.state.view.selection = Some(next);
                 }
-                return;
+                return true;
             }
         }
         if self.state.view.selection.is_none()
             && let Some(first) = lines.iter().find_map(|l| l.semantic_ref.clone())
         {
             if write_through {
-                self.select_or_record_error(Some(first));
+                return self.select_or_record_error(Some(first));
             } else {
                 self.state.view.selection = Some(first);
             }
         }
+        true
     }
 }
 
@@ -1364,6 +1365,7 @@ impl Controller {
     /// the DOM-like outline. When leaving structure, selection jumps to the
     /// first visible descendant if the current ref has no prose line.
     pub fn toggle_structure(&mut self) {
+        let previous_view = self.state.view.clone();
         self.state.view.projection = match self.state.view.projection {
             ContentProjection::Prose => ContentProjection::Structure,
             ContentProjection::Structure => ContentProjection::Prose,
@@ -1372,22 +1374,29 @@ impl Controller {
             ContentProjection::Prose => self.state.view.set_status("mode: prose"),
             ContentProjection::Structure => self.state.view.set_status("mode: structure"),
         }
-        self.after_projection_change();
+        if !self.after_projection_change() {
+            let error = self.state.view.status_message.clone();
+            self.state.view = previous_view;
+            self.state.view.status_message = error;
+        }
     }
 
-    fn after_projection_change(&mut self) {
+    fn after_projection_change(&mut self) -> bool {
         let Some(document) = self.state.document().cloned() else {
-            return;
+            return true;
         };
         let lines = self.lines_for_document(&document);
         self.state.clamp_scroll(lines.len());
-        self.ensure_selection_visible_in_lines(&document, &lines, true);
+        if !self.ensure_selection_visible_in_lines(&document, &lines, true) {
+            return false;
+        }
         if let Some(sel) = self.state.view.selection.clone()
             && let Some(idx) = line_index_of(&lines, &sel)
         {
             self.ensure_visible(idx, lines.len());
         }
         self.refresh_inspect_panel();
+        true
     }
 
     /// Move selection to the next addressable content line (and keep it visible).
@@ -1474,21 +1483,28 @@ impl Controller {
 
     /// Jump to the first content line and select its `semantic_ref` when present.
     pub fn go_top(&mut self) {
-        self.state.view.scroll_y = 0;
         let lines = self.content_lines();
-        if let Some(r) = lines.iter().find_map(|l| l.semantic_ref.clone()) {
-            self.select_or_record_error(Some(r));
+        if let Some(reference) = lines.iter().find_map(|line| line.semantic_ref.clone())
+            && !self.select_or_record_error(Some(reference))
+        {
+            return;
         }
+        self.state.view.scroll_y = 0;
     }
 
     /// Jump to the last content line and select its `semantic_ref` when present.
     pub fn go_bottom(&mut self) {
         let lines = self.content_lines();
         let len = lines.len();
-        self.state.view.scroll_y = len.saturating_sub(self.state.view.viewport_height.max(1));
-        if let Some(r) = lines.iter().rev().find_map(|l| l.semantic_ref.clone()) {
-            self.select_or_record_error(Some(r));
+        if let Some(reference) = lines
+            .iter()
+            .rev()
+            .find_map(|line| line.semantic_ref.clone())
+            && !self.select_or_record_error(Some(reference))
+        {
+            return;
         }
+        self.state.view.scroll_y = len.saturating_sub(self.state.view.viewport_height.max(1));
     }
 
     /// Horizontal pan left when a content line overflows the viewport width.
@@ -1704,7 +1720,6 @@ impl Controller {
     /// New matches start after the current selection and wrap.
     pub fn apply_search(&mut self, query: &str) {
         if query.is_empty() && !self.state.view.search_query.is_empty() {
-            self.state.mode = InteractionMode::Normal;
             self.repeat_search(true);
             return;
         }
@@ -1716,24 +1731,23 @@ impl Controller {
             .selection
             .as_ref()
             .and_then(|selection| line_index_of(&lines, selection));
-        self.state.view.search_query = query.to_string();
-        self.state.view.search_matches = matches;
-        self.state.view.search_index = current_line
+        let search_index = current_line
             .and_then(|line| {
-                self.state
-                    .view
-                    .search_matches
-                    .iter()
-                    .position(|semantic_ref| {
-                        line_index_of(&lines, semantic_ref)
-                            .is_some_and(|match_line| match_line > line)
-                    })
+                matches.iter().position(|semantic_ref| {
+                    line_index_of(&lines, semantic_ref).is_some_and(|match_line| match_line > line)
+                })
             })
             .unwrap_or(0);
+        if let Some(selected) = matches.get(search_index).cloned()
+            && !self.select_search_ref(selected, &lines)
+        {
+            return;
+        }
+        self.state.view.search_query = query.to_string();
+        self.state.view.search_matches = matches;
+        self.state.view.search_index = search_index;
         if self.state.view.search_matches.is_empty() {
             self.state.view.set_status("pattern not found");
-        } else {
-            self.select_search_match(&lines);
         }
         self.state.mode = InteractionMode::Normal;
     }
@@ -1750,27 +1764,26 @@ impl Controller {
         }
 
         let count = self.state.view.search_matches.len();
-        self.state.view.search_index = if forward {
+        let search_index = if forward {
             (self.state.view.search_index + 1) % count
         } else {
             (self.state.view.search_index + count - 1) % count
         };
         let lines = self.content_lines();
-        self.select_search_match(&lines);
+        let selected = self.state.view.search_matches[search_index].clone();
+        if self.select_search_ref(selected, &lines) {
+            self.state.view.search_index = search_index;
+            self.state.mode = InteractionMode::Normal;
+        }
     }
 
-    fn select_search_match(&mut self, lines: &[crate::tui::content::ContentLine]) {
-        let Some(selected) = self
-            .state
-            .view
-            .search_matches
-            .get(self.state.view.search_index)
-            .cloned()
-        else {
-            return;
-        };
+    fn select_search_ref(
+        &mut self,
+        selected: SemanticRef,
+        lines: &[crate::tui::content::ContentLine],
+    ) -> bool {
         if !self.select_or_record_error(Some(selected.clone())) {
-            return;
+            return false;
         }
         if let Some(line) = line_index_of(lines, &selected) {
             self.ensure_visible(line, lines.len());
@@ -1786,6 +1799,7 @@ impl Controller {
             self.state.view.clear_status();
         }
         self.refresh_inspect_panel();
+        true
     }
 
     /// Focus the first form control (`gi`) and enter form-input mode.
@@ -2070,27 +2084,27 @@ impl Controller {
             SemanticKind::Link => self.follow_link(&activation.semantic_ref, activation.new_tab),
             SemanticKind::Input | SemanticKind::Textarea => {
                 // Leave hint mode, select, and start editing when text-like.
-                self.state.mode = InteractionMode::Normal;
-                self.hints.clear();
                 self.set_human_selection(Some(activation.semantic_ref.clone()))
                     .map_err(|error| error.to_string())?;
+                self.state.mode = InteractionMode::Normal;
+                self.hints.clear();
                 self.scroll_selection_into_view();
                 self.edit_selection_if_form();
                 Ok(())
             }
             SemanticKind::Select | SemanticKind::Button => {
-                self.state.mode = InteractionMode::Normal;
-                self.hints.clear();
                 self.set_human_selection(Some(activation.semantic_ref.clone()))
                     .map_err(|error| error.to_string())?;
+                self.state.mode = InteractionMode::Normal;
+                self.hints.clear();
                 self.scroll_selection_into_view();
                 Ok(())
             }
             _ => {
-                self.state.mode = InteractionMode::Normal;
-                self.hints.clear();
                 self.set_human_selection(Some(activation.semantic_ref))
                     .map_err(|error| error.to_string())?;
+                self.state.mode = InteractionMode::Normal;
+                self.hints.clear();
                 self.scroll_selection_into_view();
                 Ok(())
             }
@@ -2512,6 +2526,68 @@ mod tests {
             ctl.coordinator.shared().attention().semantic_ref.as_ref(),
             Some(&current_ref)
         );
+    }
+
+    #[test]
+    fn stale_selection_write_preserves_dependent_view_state() {
+        let current = text_doc("2", "current", "current");
+        let current_ref = current.semantic_refs()[0].clone();
+
+        let stale = text_doc("1", "stale", "needle");
+        let stale_ref = stale.semantic_refs()[0].clone();
+        let mut top = Controller::new();
+        top.coordinator
+            .shared()
+            .publish_with_selection(current.clone(), Some(current_ref.clone()));
+        top.state.publish_page(stale.clone());
+        top.state.view.selection = Some(stale_ref.clone());
+        top.state.view.scroll_y = 7;
+        top.go_top();
+        assert_eq!(top.state.view.scroll_y, 7);
+
+        let mut search = Controller::new();
+        search
+            .coordinator
+            .shared()
+            .publish_with_selection(current.clone(), Some(current_ref.clone()));
+        search.state.publish_page(stale.clone());
+        search.state.view.selection = Some(stale_ref.clone());
+        search.state.view.search_query = "old".into();
+        search.state.view.search_matches = vec![stale_ref.clone()];
+        search.state.view.search_index = 0;
+        search.state.mode = InteractionMode::Input(InputKind::Search {
+            buffer: "needle".into(),
+        });
+        search.repeat_search(true);
+        assert_eq!(search.state.view.search_query, "old");
+        assert_eq!(search.state.view.search_index, 0);
+        assert!(matches!(
+            search.state.mode,
+            InteractionMode::Input(InputKind::Search { .. })
+        ));
+
+        let mut hint = Controller::new();
+        hint.coordinator
+            .shared()
+            .publish_with_selection(current, Some(current_ref));
+        hint.state.publish_page(stale);
+        hint.state.view.selection = Some(stale_ref.clone());
+        hint.state.mode = InteractionMode::Hint(HintMode::Follow);
+        hint.hints = vec![LinkHint {
+            label: "aa".into(),
+            semantic_ref: stale_ref.clone(),
+        }];
+        let result = hint.activate_hint(HintActivation {
+            semantic_ref: stale_ref,
+            new_tab: false,
+            kind: crate::semantic::SemanticKind::Button,
+        });
+        assert!(result.is_err());
+        assert!(matches!(
+            hint.state.mode,
+            InteractionMode::Hint(HintMode::Follow)
+        ));
+        assert_eq!(hint.hints.len(), 1);
     }
 
     #[test]
