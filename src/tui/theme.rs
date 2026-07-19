@@ -84,9 +84,19 @@ impl TuiTheme {
         Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD)
     }
 
+    /// Jump-label chrome (`[aa]`) in hint mode — distinct from form field content.
     pub fn hint_label(&self) -> Style {
         self.base()
             .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
+    }
+
+    /// Form controls (input/textarea/select/button) in the content pane.
+    ///
+    /// Uses cyan so they stay readable next to yellow `f`/`F` hint labels.
+    pub fn form_control(&self) -> Style {
+        self.base()
+            .fg(Color::LightCyan)
             .add_modifier(Modifier::BOLD)
     }
 
@@ -109,10 +119,7 @@ impl TuiTheme {
             Some(SemanticKind::Input)
             | Some(SemanticKind::Textarea)
             | Some(SemanticKind::Select)
-            | Some(SemanticKind::Button) => self
-                .base()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
+            | Some(SemanticKind::Button) => self.form_control(),
             Some(SemanticKind::Text) | None => self.base(),
         }
     }
@@ -179,5 +186,17 @@ mod tests {
         let h1 = theme.content_style(Some(SemanticKind::Heading), Some(1));
         let h6 = theme.content_style(Some(SemanticKind::Heading), Some(6));
         assert_ne!(h1.fg, h6.fg);
+    }
+
+    #[test]
+    fn hint_labels_differ_from_form_controls() {
+        let theme = TuiTheme::new();
+        let hint = theme.hint_label();
+        let input = theme.content_style(Some(SemanticKind::Input), None);
+        let button = theme.content_style(Some(SemanticKind::Button), None);
+        assert_eq!(hint.fg, Some(Color::Yellow));
+        assert_eq!(input.fg, Some(Color::LightCyan));
+        assert_eq!(button.fg, Some(Color::LightCyan));
+        assert_ne!(hint.fg, input.fg);
     }
 }
