@@ -69,24 +69,43 @@ pub fn start(
     }
     listener.set_nonblocking(true).map_err(|e| e.to_string())?;
     let (shutdown, shutdown_rx) = tokio::sync::oneshot::channel();
+    let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
     let service_coordinator = coordinator.clone();
     let service_path = path.clone();
     let thread = std::thread::Builder::new()
         .name("chromewright-tui-companion".into())
         .spawn(move || {
-            let runtime = tokio::runtime::Builder::new_multi_thread()
+            let runtime = match tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
-                .expect("build TUI companion runtime");
+            {
+                Ok(runtime) => runtime,
+                Err(error) => {
+                    let _ = ready_tx.send(Err(format!(
+                        "failed to build TUI MCP companion runtime: {error}"
+                    )));
+                    return;
+                }
+            };
             runtime.block_on(async move {
-                let listener = tokio::net::TcpListener::from_std(listener)
-                    .expect("convert TUI companion listener");
+                let listener = match tokio::net::TcpListener::from_std(listener) {
+                    Ok(listener) => listener,
+                    Err(error) => {
+                        let _ = ready_tx.send(Err(format!(
+                            "failed to initialize TUI MCP companion listener: {error}"
+                        )));
+                        return;
+                    }
+                };
                 let service = StreamableHttpService::new(
                     move || Ok(BrowserServer::from_companion(service_coordinator.clone())),
                     LocalSessionManager::default().into(),
                     Default::default(),
                 );
                 let router = Router::new().nest_service(&service_path, service);
+                if ready_tx.send(Ok(())).is_err() {
+                    return;
+                }
                 tokio::select! {
                     _ = axum::serve(listener, router) => {}
                     _ = shutdown_rx => {}
@@ -94,6 +113,19 @@ pub fn start(
             });
         })
         .map_err(|e| format!("failed to start TUI MCP companion runtime: {e}"))?;
+    match ready_rx.recv() {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            let _ = thread.join();
+            return Err(error);
+        }
+        Err(error) => {
+            let _ = thread.join();
+            return Err(format!(
+                "TUI MCP companion runtime exited during startup: {error}"
+            ));
+        }
+    }
     Ok(Companion {
         shutdown: Some(shutdown),
         thread: Some(thread),
