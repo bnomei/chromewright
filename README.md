@@ -199,8 +199,8 @@ Browser-first (Vimari) defaults, with [md-tui](https://github.com/henriklovhaug/
 
 | Key | Action name | Behavior |
 | --- | --- | --- |
-| `f` / `s` | `link_hints_follow` | Enter link-hint mode; follow the chosen link in the current tab, then return to Normal. (`s` = md-tui select-link.) |
-| `F` / `S` | `link_hints_new_tab` | Enter link-hint mode; open the chosen link in a new tab (hint mode stays open for chaining until Esc). (`S` = md-tui select-link alt.) |
+| `f` / `s` | `link_hints_follow` | Enter hint mode over viewport-visible **links and form controls**; type the two-key label. Links follow in the current tab; text inputs start edit mode; other controls are selected. One label per target (first line only if wrapped). (`s` = md-tui select-link.) |
+| `F` / `S` | `link_hints_new_tab` | Same targets as `f`; links open in a new tab (hint mode stays open for chaining until Esc). Form targets still select/edit in the current tab. (`S` = md-tui select-link alt.) |
 | `j` / `↓` | `scroll_down` | Scroll or move selection down one block. |
 | `k` / `↑` | `scroll_up` | Scroll or move selection up one block. |
 | `h` | `scroll_left` | Horizontal scroll left when content overflows. (Not md-tui half-page; browser tables/code need pan.) |
@@ -236,7 +236,7 @@ Browser-first (Vimari) defaults, with [md-tui](https://github.com/henriklovhaug/
 | `Esc` | `escape` | Leave prompt, hint, or inspect mode. After a failed page action, dismiss Error back to Ready (retained page stays) so keys work again. |
 | `Ctrl-c` | `quit` | Quit the TUI. |
 
-Link hints use deterministic two-key labels from the alphabet `asdfgqwertzxcvb` (for example `aa`, `as`), assigned only to viewport-visible links.
+Hints use deterministic two-key labels from the alphabet `asdfgqwertzxcvb` (for example `aa`, `as`), assigned to viewport-visible links and form controls (one label per target; painted on the first line only when a target wraps).
 
 After navigation or a link follow settles, a URL fragment such as `#section` moves the TUI selection to the matching component (`id`, then named anchor), expands collapsed ancestors, and scrolls it into view. Unmatched fragments keep the prior selection.
 

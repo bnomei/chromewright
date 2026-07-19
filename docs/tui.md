@@ -38,7 +38,7 @@ private to the managed session.
 
 Keyboard bindings are deliberately not shown in the terminal. Navigation defaults follow
 Vimari plus non-conflicting [md-tui](https://github.com/henriklovhaug/md-tui) aliases:
-`f`/`F` (and `s`/`S`) link hints (footer cmdline while active), `j`/`k` or arrows for
+`f`/`F` (and `s`/`S`) hints for links and form controls (footer cmdline while active; one label per target), `j`/`k` or arrows for
 selection, `h`/`l` horizontal pan, `u`/`d` or left/right arrows half-page view pan,
 `Ctrl-u`/`Ctrl-d` selection by half page, `gg`/`G` document ends, `gi` first form field
 (edit mode), `H`/`b`/`L` history, `r` reload, `w`/`q`/`x`/`t` tab actions, `o`/`O` URL

@@ -14,9 +14,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Action {
-    /// `f` / `s` — enter link-hint mode; follow in current tab.
+    /// `f` / `s` — enter hint mode (links + form controls); links follow in current tab.
     LinkHintsFollow,
-    /// `F` / `S` — enter link-hint mode; open target in a new tab.
+    /// `F` / `S` — enter hint mode; links open in a new tab (forms still select/edit).
     LinkHintsNewTab,
     /// `j` / `↓` — scroll / move selection down one block.
     ScrollDown,

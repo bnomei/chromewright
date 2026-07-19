@@ -162,11 +162,11 @@ impl Dispatcher {
         let KeyCode::Char(ch) = chord.code else {
             return DispatchOutcome::Continue;
         };
-        if let Some((r, new_tab)) = controller.hint_type_char(ch) {
-            match controller.follow_link(&r, new_tab) {
+        if let Some(activation) = controller.hint_type_char(ch) {
+            match controller.activate_hint(activation) {
                 Ok(()) => {
-                    // `F` may restore Hint mode after settle for chaining;
-                    // `f` returns to Normal (see follow_link hint_after).
+                    // Links: `F` may restore Hint mode after settle for chaining;
+                    // `f` returns to Normal. Form targets leave Hint immediately.
                 }
                 Err(_) => {
                     // Error lifecycle already set; leave hint mode via enter_error.

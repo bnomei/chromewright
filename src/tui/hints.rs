@@ -1,36 +1,64 @@
-//! Deterministic two-key link hints (Vimari-style Hint mode).
+//! Deterministic two-key hints (Vimari-style Hint mode).
 //!
-//! Assigns unique labels only to viewport-visible links, each bound to an exact
-//! `semantic_ref`. Matching fails closed on ambiguity; partial prefixes keep
-//! collecting keys until Exact or None.
+//! Assigns unique labels to viewport-visible links **and** form controls, each
+//! bound to an exact `semantic_ref`. Multi-line/wrapped targets still get one
+//! label (painted only on the block-start row). Matching fails closed on
+//! ambiguity; partial prefixes keep collecting keys until Exact or None.
 
-use crate::semantic::{SemanticComponent, SemanticRef};
+use crate::semantic::{SemanticComponent, SemanticKind, SemanticRef};
 use crate::tui::content::ContentLine;
 use std::collections::HashMap;
 
 /// Hint alphabet for two-key labels (home-row friendly, deterministic).
 const HINT_CHARS: &[u8] = b"asdfgqwertzxcvb";
 
-/// One assigned two-key hint over a viewport-visible link.
+/// One assigned two-key hint over a viewport-visible target.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinkHint {
     /// Deterministic two-character label (e.g. `aa`, `as`).
     pub label: String,
-    /// Exact `semantic_ref` of the link to follow or open in a new tab.
+    /// Exact `semantic_ref` of the link or form control.
     pub semantic_ref: SemanticRef,
 }
 
-/// Assign two-key labels to links currently visible in the viewport.
+/// Whether a component can receive a hint label (`f` / `F`).
+pub fn is_hintable_component(component: &SemanticComponent) -> bool {
+    if component.attrs.disabled.unwrap_or(false) {
+        return false;
+    }
+    match component.kind {
+        SemanticKind::Link | SemanticKind::Textarea | SemanticKind::Select | SemanticKind::Button => {
+            true
+        }
+        SemanticKind::Input => {
+            let t = component
+                .attrs
+                .input_type
+                .as_deref()
+                .unwrap_or("text")
+                .to_ascii_lowercase();
+            // Skip non-interactive / non-visible control types.
+            !matches!(t.as_str(), "hidden" | "file")
+        }
+        _ => false,
+    }
+}
+
+/// Assign two-key labels to hintable targets currently visible in the viewport.
 ///
-/// Labels are deterministic for a given ordered set of links (document order
-/// among visible lines). Maximum `HINT_CHARS.len()^2` simultaneous hints.
+/// Only the first visible row of each target participates (wrapped multi-line
+/// links/controls still get a single label). Labels are deterministic for a
+/// given ordered set of targets. Maximum `HINT_CHARS.len()^2` simultaneous hints.
 pub fn assign_hints(
     lines: &[ContentLine],
     scroll_y: usize,
     viewport_height: usize,
-    links: &[SemanticComponent],
+    targets: &[SemanticComponent],
 ) -> Vec<LinkHint> {
     let visible_end = scroll_y.saturating_add(viewport_height.max(1));
+    // First encounter of each ref in the viewport = block-start / first visible
+    // row. Continuation wrap rows share the same ref but must not add duplicates
+    // (and render only paints on block_start).
     let mut visible_refs = Vec::new();
     for line in lines
         .iter()
@@ -44,21 +72,23 @@ pub fn assign_hints(
         }
     }
 
-    let mut link_by_ref: HashMap<&SemanticRef, &SemanticComponent> = HashMap::new();
-    for link in links {
-        link_by_ref.insert(&link.semantic_ref, link);
+    let mut target_by_ref: HashMap<&SemanticRef, &SemanticComponent> = HashMap::new();
+    for target in targets {
+        if is_hintable_component(target) {
+            target_by_ref.insert(&target.semantic_ref, target);
+        }
     }
 
     let mut ordered: Vec<SemanticRef> = visible_refs
         .into_iter()
-        .filter(|r| link_by_ref.contains_key(r))
+        .filter(|r| target_by_ref.contains_key(r))
         .collect();
 
-    // Preserve document order of links, not raw line encounter order of other nodes.
+    // Preserve document order of targets, not raw line encounter order.
     ordered.sort_by_key(|r| {
-        links
+        targets
             .iter()
-            .position(|l| &l.semantic_ref == r)
+            .position(|t| &t.semantic_ref == r)
             .unwrap_or(usize::MAX)
     });
 
@@ -170,6 +200,36 @@ mod tests {
         );
     }
 
+    fn input_node(id: &str, name: &str) -> RawSemanticNode {
+        RawSemanticNode {
+            kind: "input".into(),
+            tag: Some("input".into()),
+            id: Some(id.into()),
+            unique_id: true,
+            selector: None,
+            text: None,
+            href: None,
+            landmark: None,
+            heading_level: None,
+            ordered: None,
+            label: None,
+            src: None,
+            alt: None,
+            name: Some(name.into()),
+            value: None,
+            input_type: Some("text".into()),
+            placeholder: None,
+            checked: None,
+            disabled: None,
+            required: None,
+            readonly: None,
+            multiple: None,
+            button_type: None,
+            options: vec![],
+            children: vec![],
+        }
+    }
+
     #[test]
     fn assign_and_match_exact_ref() {
         let doc = normalize_fixture(
@@ -185,12 +245,12 @@ mod tests {
         )
         .expect("doc");
         let lines = build_content_lines(&doc, &HashSet::new());
-        let links: Vec<_> = doc
+        let targets: Vec<_> = doc
             .components()
-            .filter(|c| c.kind == crate::semantic::SemanticKind::Link)
+            .filter(|c| is_hintable_component(c))
             .cloned()
             .collect();
-        let hints = assign_hints(&lines, 0, 50, &links);
+        let hints = assign_hints(&lines, 0, 50, &targets);
         assert_eq!(hints.len(), 2);
         assert_eq!(hints[0].label, "aa");
         assert_eq!(hints[1].label, "as");
@@ -203,5 +263,55 @@ mod tests {
         }
         assert_eq!(match_hint(&hints, "a"), HintMatch::Partial);
         assert_eq!(match_hint(&hints, "zz"), HintMatch::None);
+    }
+
+    #[test]
+    fn assign_includes_form_controls_once_per_target() {
+        let doc = normalize_fixture(
+            DocumentMetadata {
+                document_id: "d".into(),
+                revision: "1".into(),
+                url: "https://example.com/".into(),
+                title: "T".into(),
+                ready_state: "complete".into(),
+                frames: vec![],
+            },
+            vec![
+                link_node("a", "/a", "A very long link label that will wrap"),
+                input_node("email", "email"),
+            ],
+        )
+        .expect("doc");
+        let lines = build_content_lines(&doc, &HashSet::new());
+        let wrapped = crate::tui::content::wrap_content_lines(&lines, 12);
+        let link_ref = doc
+            .components()
+            .find(|c| c.attrs.element_id.as_deref() == Some("a"))
+            .unwrap()
+            .semantic_ref
+            .clone();
+        let link_rows = wrapped
+            .iter()
+            .filter(|l| l.semantic_ref.as_ref() == Some(&link_ref))
+            .count();
+        assert!(
+            link_rows >= 2,
+            "expected wrapped multi-line link, got {link_rows} rows"
+        );
+        let targets: Vec<_> = doc
+            .components()
+            .filter(|c| is_hintable_component(c))
+            .cloned()
+            .collect();
+        let hints = assign_hints(&wrapped, 0, 50, &targets);
+        assert_eq!(hints.len(), 2, "link + input, not one hint per wrap row");
+        assert_eq!(
+            hints
+                .iter()
+                .filter(|h| h.semantic_ref == link_ref)
+                .count(),
+            1,
+            "multi-line link must get a single hint"
+        );
     }
 }

@@ -19,6 +19,15 @@ use crate::tui::state::{HintMode, InputKind, InteractionMode, Lifecycle, TuiStat
 /// Rows kept above a `#fragment` target when scrolling it into view.
 const FRAGMENT_VIEWPORT_TOP_MARGIN: usize = 5;
 
+/// Completed two-key hint target ready to activate.
+#[derive(Debug, Clone)]
+pub struct HintActivation {
+    pub semantic_ref: SemanticRef,
+    /// Only meaningful for links (`F` opens in a new tab).
+    pub new_tab: bool,
+    pub kind: crate::semantic::SemanticKind,
+}
+
 /// Orchestrates page-changing actions and pure view updates against [`TuiState`].
 ///
 /// Page mutations go through a deferred queue: claim Loading on
@@ -1673,11 +1682,13 @@ impl Controller {
         self.refresh_inspect_panel();
     }
 
-    /// Enter two-key hint mode over viewport-visible links (`f` / `F`).
+    /// Enter two-key hint mode over viewport-visible links and form controls (`f` / `F`).
     ///
-    /// Labels are deterministic for the current scroll window. After a
-    /// successful current-tab follow (`f`), mode returns to Normal. New-tab
-    /// follows (`F`) may re-enter Hint mode for chaining until Escape.
+    /// Labels are deterministic for the current scroll window. Multi-line targets
+    /// get a single label (shown on the first row only). After a successful
+    /// current-tab link follow (`f`), mode returns to Normal. New-tab follows
+    /// (`F`) may re-enter Hint mode for chaining until Escape. Form targets
+    /// always leave Hint mode after selection/edit.
     pub fn enter_hint_mode(&mut self, mode: HintMode) {
         if self.state.lifecycle.is_loading() {
             return;
@@ -1685,9 +1696,9 @@ impl Controller {
         let Some(doc) = self.state.document() else {
             return;
         };
-        let links: Vec<_> = doc
+        let targets: Vec<_> = doc
             .components()
-            .filter(|c| c.kind == crate::semantic::SemanticKind::Link)
+            .filter(|c| crate::tui::hints::is_hintable_component(c))
             .cloned()
             .collect();
         let lines = self.content_lines();
@@ -1695,21 +1706,21 @@ impl Controller {
             &lines,
             self.state.view.scroll_y,
             self.state.view.viewport_height.max(1),
-            &links,
+            &targets,
         );
         self.state.view.hint_buffer.clear();
         self.state.mode = InteractionMode::Hint(mode);
         if self.hints.is_empty() {
-            self.state.view.set_status("no visible links");
+            self.state.view.set_status("no visible targets");
             self.state.mode = InteractionMode::Normal;
         }
     }
 
     /// Feed a character while in hint mode.
     ///
-    /// Returns `(semantic_ref, new_tab)` when a two-key label completes exactly;
+    /// Returns [`HintActivation`] when a two-key label completes exactly;
     /// partial prefixes wait; ambiguous/unknown labels fail closed and clear the buffer.
-    pub fn hint_type_char(&mut self, ch: char) -> Option<(SemanticRef, bool)> {
+    pub fn hint_type_char(&mut self, ch: char) -> Option<HintActivation> {
         if !matches!(self.state.mode, InteractionMode::Hint(_)) {
             return None;
         }
@@ -1718,9 +1729,18 @@ impl Controller {
             HintMatch::Exact(r) => {
                 let new_tab = matches!(self.state.mode, InteractionMode::Hint(HintMode::NewTab));
                 let target = r.clone();
-                // Chained follow: stay in hint mode until Escape (recompute after navigation).
                 self.state.view.hint_buffer.clear();
-                Some((target, new_tab))
+                let kind = self
+                    .state
+                    .document()
+                    .and_then(|d| d.resolve(&target).ok())
+                    .map(|c| c.kind)
+                    .unwrap_or(crate::semantic::SemanticKind::Link);
+                Some(HintActivation {
+                    semantic_ref: target,
+                    new_tab,
+                    kind,
+                })
             }
             HintMatch::Partial => None,
             HintMatch::None => {
@@ -1728,6 +1748,53 @@ impl Controller {
                 self.state.view.set_status("no matching hint");
                 None
             }
+        }
+    }
+
+    /// Apply a completed hint: follow links, or jump selection to form controls.
+    pub fn activate_hint(&mut self, activation: HintActivation) -> Result<(), String> {
+        use crate::semantic::SemanticKind;
+        match activation.kind {
+            SemanticKind::Link => self.follow_link(&activation.semantic_ref, activation.new_tab),
+            SemanticKind::Input | SemanticKind::Textarea => {
+                // Leave hint mode, select, and start editing when text-like.
+                self.state.mode = InteractionMode::Normal;
+                self.hints.clear();
+                self.state.view.selection = Some(activation.semantic_ref.clone());
+                self.scroll_selection_into_view();
+                if !self.edit_selection_if_form() {
+                    // checkbox/radio/etc. fall through — select only.
+                    self.publish_selection();
+                }
+                Ok(())
+            }
+            SemanticKind::Select | SemanticKind::Button => {
+                self.state.mode = InteractionMode::Normal;
+                self.hints.clear();
+                self.state.view.selection = Some(activation.semantic_ref.clone());
+                self.scroll_selection_into_view();
+                self.publish_selection();
+                Ok(())
+            }
+            _ => {
+                self.state.mode = InteractionMode::Normal;
+                self.hints.clear();
+                self.state.view.selection = Some(activation.semantic_ref);
+                self.scroll_selection_into_view();
+                self.publish_selection();
+                Ok(())
+            }
+        }
+    }
+
+    /// Scroll so the current selection's first content line is in the viewport.
+    fn scroll_selection_into_view(&mut self) {
+        let Some(sel) = self.state.view.selection.clone() else {
+            return;
+        };
+        let lines = self.content_lines();
+        if let Some(idx) = line_index_of(&lines, &sel) {
+            self.ensure_visible(idx, lines.len());
         }
     }
 

@@ -199,7 +199,10 @@ fn draw_content(frame: &mut Frame, area: Rect, controller: &Controller, theme: &
         });
 
         let mut spans = Vec::new();
-        if let Some(ref_r) = &line.semantic_ref
+        // One label per target: only the block-start row (first line of a
+        // multi-line / wrapped link or control), never wrap continuations.
+        if line.block_start
+            && let Some(ref_r) = &line.semantic_ref
             && let Some(hint) = controller.hints.iter().find(|h| &h.semantic_ref == ref_r)
         {
             let label = format!("[{}] ", hint.label);
