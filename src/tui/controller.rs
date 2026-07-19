@@ -20,9 +20,6 @@ use crate::tui::url_history::UrlHistory;
 /// Rows kept above a `#fragment` target when scrolling it into view.
 const FRAGMENT_VIEWPORT_TOP_MARGIN: usize = 5;
 
-/// Extra settle time after applying a field so filter JS can mutate the DOM.
-const APPLY_FIELD_SETTLE_PAD: std::time::Duration = std::time::Duration::from_millis(120);
-
 /// Completed two-key hint target ready to activate.
 #[derive(Debug, Clone)]
 pub struct HintActivation {
@@ -682,11 +679,9 @@ impl Controller {
                     driver
                         .set_control_value(&document, &semantic_ref, &value)
                         .map_err(|e| e.to_string())?;
-                    // Settle twice with a short pad so filter/search JS can
-                    // mutate after input/change (builtwithkirby-style UIs).
+                    // wait_settle is readyState + DOM-quiet (revision/url stable)
+                    // so SPA/filter mutations after input/change are in the capture.
                     driver.wait_settle().map_err(|e| e.to_string())?;
-                    std::thread::sleep(APPLY_FIELD_SETTLE_PAD);
-                    let _ = driver.wait_settle();
                     let doc = Self::capture_with_metadata_barrier(driver)?;
                     let same_document = doc.document.document_id == before_id
                         && urls_match_for_activate(&doc.document.url, &before_url);

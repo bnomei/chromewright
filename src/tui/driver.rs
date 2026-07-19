@@ -84,6 +84,11 @@ impl PageDriver for SessionPageDriver<'_> {
     fn navigate(&mut self, url: &str) -> Result<()> {
         let normalized = validate_navigation_url(url, false)?;
         self.session.navigate(&normalized)?;
+        // Match the MCP navigate tool: do not return until the tab has left the
+        // previous document and reached readyState=complete. Without this,
+        // wait_settle can succeed on the *old* complete page and capture stale DOM
+        // while the address bar already shows the new URL.
+        self.session.wait_for_navigation()?;
         Ok(())
     }
 
@@ -97,18 +102,21 @@ impl PageDriver for SessionPageDriver<'_> {
 
     fn reload(&mut self) -> Result<()> {
         self.session.evaluate("location.reload()", false)?;
-        // Invalidate caches via navigate-equivalent path.
-        let _ = self.session.document_metadata();
+        // Same barrier as navigate: reload is asynchronous.
+        let _ = self.session.wait_for_navigation();
         Ok(())
     }
 
     fn wait_settle(&mut self) -> Result<()> {
-        // Some valid actions (focus, same-document controls, and form edits)
-        // intentionally do not create a navigation event. Settling therefore
-        // uses the active document's readiness barrier rather than issuing a
-        // navigation wait and silently discarding its failure.
+        // 1) Document must be complete (covers mid-navigation / reload).
+        // 2) Then wait until identity+revision+url stay quiet so SPA/filter
+        //    mutations after input/change finish before semantic capture.
+        //    readyState alone returns immediately on already-complete pages and
+        //    used to publish URL-updated but body-stale snapshots.
         self.session
             .wait_for_document_ready_with_timeout(Duration::from_secs(15))?;
+        self.session
+            .wait_for_dom_quiet(Duration::from_secs(4), Duration::from_millis(250))?;
         Ok(())
     }
 
@@ -123,6 +131,8 @@ impl PageDriver for SessionPageDriver<'_> {
     fn open_tab(&mut self, url: &str) -> Result<()> {
         let normalized = validate_navigation_url(url, false)?;
         self.session.open_tab(&normalized)?;
+        // New tab navigation is async; wait so the first capture is not blank/stale.
+        let _ = self.session.wait_for_navigation();
         Ok(())
     }
 

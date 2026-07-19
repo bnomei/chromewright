@@ -161,6 +161,47 @@ impl BrowserSession {
         self.backend.wait_for_document_ready_with_timeout(timeout)
     }
 
+    /// Poll until main-frame document identity, revision, and URL stay unchanged
+    /// for `quiet_for`, or until `timeout` elapses.
+    ///
+    /// Used after form field writes and SPA mutations: `readyState` alone is
+    /// already `complete` on live pages, so capture must wait for the DOM
+    /// MutationObserver revision counter to stop moving. On timeout returns
+    /// `Ok(())` (fail-open) so callers still publish the latest complete snapshot.
+    pub fn wait_for_dom_quiet(&self, timeout: Duration, quiet_for: Duration) -> Result<()> {
+        use std::time::Instant;
+        let start = Instant::now();
+        let mut last_key: Option<(String, String, String)> = None;
+        let mut stable_since: Option<Instant> = None;
+        let poll = Duration::from_millis(50);
+
+        loop {
+            let meta = self.document_metadata()?;
+            let main_rev = meta
+                .revision
+                .split('|')
+                .next()
+                .unwrap_or(meta.revision.as_str())
+                .to_string();
+            let key = (meta.document_id.clone(), main_rev, meta.url.clone());
+
+            if last_key.as_ref() == Some(&key) {
+                let since = stable_since.get_or_insert_with(Instant::now);
+                if since.elapsed() >= quiet_for {
+                    return Ok(());
+                }
+            } else {
+                last_key = Some(key);
+                stable_since = Some(Instant::now());
+            }
+
+            if start.elapsed() >= timeout {
+                return Ok(());
+            }
+            std::thread::sleep(poll);
+        }
+    }
+
     /// Extract the actionability/ARIA DOM tree from the active tab.
     pub fn extract_dom(&self) -> Result<DomTree> {
         self.backend.extract_dom()

@@ -596,6 +596,11 @@ impl SharedTuiState {
             session
                 .wait_for_document_ready_with_timeout(Duration::from_secs(15))
                 .map_err(|_| CoordinationError::RefreshFailed)?;
+            // Match TUI settle: wait for main-frame revision/url to go quiet so
+            // SPA body updates land before capture (readyState alone is too early).
+            session
+                .wait_for_dom_quiet(Duration::from_secs(4), Duration::from_millis(250))
+                .map_err(|_| CoordinationError::RefreshFailed)?;
             // Capture before sampling the freshness barrier. Hydration may
             // legitimately change the document after settling but before the
             // semantic snapshot begins; only a change *after* that capture
