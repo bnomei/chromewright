@@ -472,7 +472,16 @@ impl Controller {
         let result = (|| -> Result<Option<SemanticDocument>, String> {
             match pending.operation {
                 PageOperation::Bootstrap => {}
-                PageOperation::Navigate(url) => driver.navigate(&url).map_err(|e| e.to_string())?,
+                PageOperation::Navigate(url) => {
+                    // Empty session (no open tabs): open a tab at the URL instead
+                    // of navigating a missing active page. Matches "o → type URL"
+                    // recovery after the last tab was closed.
+                    if !driver.has_open_tabs().map_err(|e| e.to_string())? {
+                        driver.open_tab(&url).map_err(|e| e.to_string())?;
+                    } else {
+                        driver.navigate(&url).map_err(|e| e.to_string())?;
+                    }
+                }
                 PageOperation::HistoryBack => driver.go_back().map_err(|e| e.to_string())?,
                 PageOperation::HistoryForward => driver.go_forward().map_err(|e| e.to_string())?,
                 PageOperation::Reload => driver.reload().map_err(|e| e.to_string())?,
@@ -586,7 +595,7 @@ impl Controller {
     }
 
     /// Browser has zero tabs: drop retained page so chrome/content clear and
-    /// lifecycle stays Ready for recovery via `t` / new tab.
+    /// lifecycle stays Ready for recovery via `t` (blank tab) or `o` (URL → new tab).
     fn clear_empty_session(&mut self) {
         self.pending_page_action = None;
         self.hints.clear();
@@ -2202,7 +2211,7 @@ mod tests {
         assert!(ctl.state.tab_position.is_none());
         assert_eq!(
             ctl.state.view.status_message.as_deref(),
-            Some("no open tabs — press t for a new tab")
+            Some("no open tabs — press t or o to continue")
         );
         assert!(driver.tab_ops.contains(&"close"));
 
@@ -2226,6 +2235,33 @@ mod tests {
         ctl.reload();
         render_loading_and_run(&mut ctl, &mut driver).expect("reload");
         assert_eq!(ctl.state.tab_position, Some((2, 5)));
+    }
+
+    #[test]
+    fn navigate_with_no_tabs_opens_tab_at_url() {
+        let target = SemanticDocument::empty(meta("2", "https://example.com/recover")).unwrap();
+        let mut driver = FakePageDriver::new(vec![target]);
+        driver.open_tab_count = 0;
+        driver.active_tab_index = 0;
+        let mut ctl = Controller::new();
+        // Empty session UI (last tab closed).
+        ctl.state.clear_session();
+        assert!(ctl.state.page.is_none());
+
+        ctl.navigate_to("https://example.com/recover");
+        render_loading_and_run(&mut ctl, &mut driver).expect("navigate empty");
+        assert!(ctl.state.lifecycle.is_ready());
+        assert_eq!(ctl.state.url(), "https://example.com/recover");
+        assert_eq!(driver.open_tab_count, 1);
+        assert_eq!(
+            driver.open_tabs.last().map(String::as_str),
+            Some("https://example.com/recover")
+        );
+        assert!(
+            driver.navigate_calls.is_empty(),
+            "should open_tab, not navigate on missing active page"
+        );
+        assert_eq!(ctl.state.tab_position, Some((1, 1)));
     }
 
     #[test]

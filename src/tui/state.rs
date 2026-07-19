@@ -311,7 +311,8 @@ impl TuiState {
         self.can_go_forward = false;
         self.tab_position = None;
         self.clipboard_fallback = None;
-        self.view.set_status("no open tabs — press t for a new tab");
+        self.view
+            .set_status("no open tabs — press t or o to continue");
     }
 
     /// Dismiss Error back to Ready while retaining the last published page.

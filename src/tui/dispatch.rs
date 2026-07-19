@@ -207,12 +207,14 @@ impl Dispatcher {
 
     fn dispatch_action(&mut self, controller: &mut Controller, action: Action) -> DispatchOutcome {
         // Double-check mode boundary for normal actions.
-        // Escape/Quit/NewTab remain available in Error so recovery is possible
-        // after a failed page action or empty tab set.
+        // Escape/Quit/NewTab/OpenUrl remain available in Error so recovery is
+        // possible after a failed page action or empty tab set (URL entry will
+        // open a tab when none exist).
         if !controller.state.allows_normal_commands()
             && action != Action::Escape
             && action != Action::Quit
             && action != Action::NewTab
+            && action != Action::OpenUrl
         {
             return DispatchOutcome::Continue;
         }
@@ -684,6 +686,22 @@ mod tests {
             DispatchOutcome::Redraw
         );
         assert!(ctl.has_pending_page_action());
+    }
+
+    #[test]
+    fn error_state_still_allows_open_url_recovery() {
+        let mut ctl = Controller::new();
+        ctl.state.clear_session();
+        ctl.state.enter_error("close_tab", "no tabs");
+        let mut dispatcher = Dispatcher::new(TuiKeymap::defaults());
+        assert_eq!(
+            dispatcher.dispatch_action(&mut ctl, Action::OpenUrl),
+            DispatchOutcome::Redraw
+        );
+        assert!(matches!(
+            ctl.state.mode,
+            InteractionMode::Input(InputKind::Url { .. })
+        ));
     }
 
     #[test]

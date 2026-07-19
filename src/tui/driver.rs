@@ -573,7 +573,11 @@ impl PageDriver for FakePageDriver {
             return Err(BrowserError::NavigationFailed(msg));
         }
         self.navigate_calls.push(url.to_string());
-        if self.page_index + 1 < self.pages.len() {
+        // Prefer matching a scripted page by URL when present; otherwise keep
+        // the current fixture page (index advance) for multi-step nav tests.
+        if let Some(idx) = self.pages.iter().position(|p| p.document.url == url) {
+            self.page_index = idx;
+        } else if self.page_index + 1 < self.pages.len() {
             self.page_index += 1;
         }
         Ok(())
@@ -649,8 +653,12 @@ impl PageDriver for FakePageDriver {
         self.open_tabs.push(url.to_string());
         self.open_tab_count = self.open_tab_count.saturating_add(1);
         self.active_tab_index = self.open_tab_count.max(1);
-        // Always provide a captureable blank page for the new tab so empty
-        // sessions and multi-tab tests can settle after `t`.
+        // Prefer an existing scripted page for this URL (empty-session navigate
+        // recovery). Otherwise provide a captureable blank/page for the new tab.
+        if let Some(idx) = self.pages.iter().position(|p| p.document.url == url) {
+            self.page_index = idx;
+            return Ok(());
+        }
         let blank = SemanticDocument::empty(DocumentMetadata {
             document_id: format!("blank-{}", self.open_tabs.len()),
             revision: "main:1".into(),
