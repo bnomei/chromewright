@@ -25,7 +25,7 @@ use std::io::{self, Stdout};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
-use std::thread;
+use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 /// Entry options for `chromewright tui`: keymap overlay and companion bind settings.
@@ -294,35 +294,15 @@ fn run_loop(
     let mut dispatcher = Dispatcher::new(config.keymap);
     let theme = config.theme;
     let layout = config.layout;
-    let mut in_flight: Option<(
-        Receiver<PreparedPageAction>,
-        crate::tui::shared::PageActionTicket,
-        String,
-    )> = None;
+    let mut in_flight = None;
     let mut quit_requested = false;
 
     // Bootstrap follows the same draw-before-browser-work lifecycle as every
     // later page transition.
     controller.bootstrap();
 
-    loop {
-        if let Some((receiver, ticket, action)) = &in_flight {
-            match receiver.try_recv() {
-                Ok(prepared) => {
-                    let _ = controller.complete_page_action(prepared);
-                    in_flight = None;
-                }
-                Err(TryRecvError::Disconnected) => {
-                    controller.fail_abandoned_page_action(
-                        *ticket,
-                        action.clone(),
-                        "browser worker disconnected".into(),
-                    );
-                    in_flight = None;
-                }
-                Err(TryRecvError::Empty) => {}
-            }
-        }
+    let result = (|| loop {
+        poll_worker(&mut in_flight, &mut controller);
         controller.synchronize_companion_state();
         {
             let terminal = terminal_guard.terminal_mut();
@@ -355,23 +335,19 @@ fn run_loop(
             let job = controller
                 .take_page_action_job()
                 .expect("just acknowledged");
-            let (ticket, action) = job.failure_context();
             let session = coordinator.session().clone();
-            let (sender, receiver) = mpsc::sync_channel(1);
-            thread::spawn(move || {
+            in_flight = Some(spawn_worker(job, move |job| {
                 let mut driver = SessionPageDriver::new(&session);
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    Controller::execute_page_action_job(job, &mut driver)
-                }));
-                if let Ok(prepared) = result {
-                    let _ = sender.send(prepared);
-                }
-            });
-            in_flight = Some((receiver, ticket, action));
+                Controller::execute_page_action_job(job, &mut driver)
+            }));
             continue;
         }
 
-        if in_flight.is_none() && controller.take_edit_external() {
+        if can_open_editor(
+            in_flight.is_some(),
+            coordinator.shared().page_action_in_progress(),
+        ) && controller.take_edit_external()
+        {
             run_edit_external(terminal_guard, &mut controller);
             continue;
         }
@@ -380,7 +356,7 @@ fn run_loop(
             quit_requested || controller.state.should_quit,
             in_flight.is_some() || coordinator.shared().page_action_in_progress(),
         ) {
-            break;
+            break Ok(());
         }
 
         // While Loading (e.g. companion-driven), wake often enough to advance
@@ -409,9 +385,86 @@ fn run_loop(
                 _ => {}
             }
         }
-    }
+    })();
 
-    Ok(())
+    // No return path may let terminal restoration race a browser worker. Finish
+    // and reconcile the transaction first, while retaining the primary error.
+    let cleanup = finish_worker_blocking(&mut in_flight, &mut controller);
+    match result {
+        Err(error) => Err(error),
+        Ok(()) => cleanup,
+    }
+}
+
+struct InFlightPageAction {
+    receiver: Receiver<PreparedPageAction>,
+    join: JoinHandle<()>,
+    ticket: crate::tui::shared::PageActionTicket,
+    action: String,
+}
+
+fn spawn_worker(
+    job: crate::tui::controller::PageActionJob,
+    worker: impl FnOnce(crate::tui::controller::PageActionJob) -> PreparedPageAction + Send + 'static,
+) -> InFlightPageAction {
+    let (ticket, action) = job.failure_context();
+    let (sender, receiver) = mpsc::sync_channel(1);
+    let join = thread::spawn(move || {
+        let prepared = worker(job);
+        let _ = sender.send(prepared);
+    });
+    InFlightPageAction {
+        receiver,
+        join,
+        ticket,
+        action,
+    }
+}
+
+fn finish_received(
+    worker: InFlightPageAction,
+    received: Result<PreparedPageAction, ()>,
+    controller: &mut Controller,
+) -> Result<(), String> {
+    let joined = worker.join.join();
+    match (received, joined) {
+        (Ok(prepared), Ok(())) => controller.complete_page_action(prepared),
+        _ => {
+            controller.fail_abandoned_page_action(
+                worker.ticket,
+                worker.action,
+                "browser worker disconnected or panicked".into(),
+            );
+            Err("browser worker disconnected or panicked".into())
+        }
+    }
+}
+
+fn poll_worker(in_flight: &mut Option<InFlightPageAction>, controller: &mut Controller) {
+    let received = match in_flight.as_ref().map(|worker| worker.receiver.try_recv()) {
+        Some(Ok(prepared)) => Some(Ok(prepared)),
+        Some(Err(TryRecvError::Disconnected)) => Some(Err(())),
+        _ => None,
+    };
+    if let Some(received) = received {
+        let worker = in_flight.take().expect("worker exists");
+        let _ = finish_received(worker, received, controller);
+    }
+}
+
+fn finish_worker_blocking(
+    in_flight: &mut Option<InFlightPageAction>,
+    controller: &mut Controller,
+) -> Result<(), String> {
+    let Some(worker) = in_flight.take() else {
+        return Ok(());
+    };
+    let received = worker.receiver.recv().map_err(|_| ());
+    finish_received(worker, received, controller)
+}
+
+fn can_open_editor(terminal_worker: bool, shared_loading: bool) -> bool {
+    !terminal_worker && !shared_loading
 }
 
 fn should_exit(quit_requested: bool, work_in_flight: bool) -> bool {
@@ -442,6 +495,101 @@ fn run_edit_external(terminal_guard: &mut TerminalGuard, controller: &mut Contro
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::browser::backend::FakeSessionBackend;
+    use crate::tui::state::Lifecycle;
+
+    fn worker_fixture() -> (Controller, Arc<BrowserSession>) {
+        let session = Arc::new(BrowserSession::with_test_backend(FakeSessionBackend::new()));
+        let coordinator = Arc::new(PageCoordinator::new(session.clone(), SharedTuiState::new()));
+        (Controller::with_coordinator(coordinator), session)
+    }
+
+    fn acknowledged_bootstrap(
+        controller: &mut Controller,
+    ) -> crate::tui::controller::PageActionJob {
+        controller.bootstrap();
+        controller.acknowledge_loading_frame();
+        controller.take_page_action_job().expect("acknowledged job")
+    }
+
+    #[test]
+    fn acknowledged_job_runs_on_worker_and_completes_ready() {
+        let (mut controller, session) = worker_fixture();
+        let job = acknowledged_bootstrap(&mut controller);
+        let mut worker = Some(spawn_worker(job, move |job| {
+            let mut driver = SessionPageDriver::new(&session);
+            Controller::execute_page_action_job(job, &mut driver)
+        }));
+
+        finish_worker_blocking(&mut worker, &mut controller).expect("worker completion");
+        assert!(worker.is_none());
+        assert!(matches!(controller.state.lifecycle, Lifecycle::Ready));
+    }
+
+    #[test]
+    fn panicked_worker_is_joined_and_retains_previous_document() {
+        let (mut controller, session) = worker_fixture();
+        let initial = acknowledged_bootstrap(&mut controller);
+        let mut initial_worker = Some(spawn_worker(initial, move |job| {
+            let mut driver = SessionPageDriver::new(&session);
+            Controller::execute_page_action_job(job, &mut driver)
+        }));
+        finish_worker_blocking(&mut initial_worker, &mut controller).expect("bootstrap");
+        let revision = controller
+            .state
+            .document()
+            .expect("document")
+            .document
+            .revision
+            .clone();
+
+        controller.reload();
+        controller.acknowledge_loading_frame();
+        let job = controller.take_page_action_job().expect("reload job");
+        let mut worker = Some(spawn_worker(job, |_| panic!("injected worker panic")));
+        assert!(finish_worker_blocking(&mut worker, &mut controller).is_err());
+        assert!(worker.is_none());
+        assert!(matches!(
+            controller.state.lifecycle,
+            Lifecycle::Error { .. }
+        ));
+        assert_eq!(
+            controller.state.document().unwrap().document.revision,
+            revision
+        );
+    }
+
+    #[test]
+    fn blocking_cleanup_waits_for_worker_signal() {
+        let (mut controller, session) = worker_fixture();
+        let job = acknowledged_bootstrap(&mut controller);
+        let (release_tx, release_rx) = mpsc::channel();
+        let worker = spawn_worker(job, move |job| {
+            release_rx.recv().expect("release");
+            let mut driver = SessionPageDriver::new(&session);
+            Controller::execute_page_action_job(job, &mut driver)
+        });
+        let (done_tx, done_rx) = mpsc::channel();
+        let cleanup = thread::spawn(move || {
+            let mut worker = Some(worker);
+            let result = finish_worker_blocking(&mut worker, &mut controller);
+            done_tx.send((result, controller)).unwrap();
+        });
+        assert!(matches!(done_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        release_tx.send(()).unwrap();
+        let (result, controller) = done_rx.recv().unwrap();
+        cleanup.join().unwrap();
+        result.expect("cleanup completion");
+        assert!(matches!(controller.state.lifecycle, Lifecycle::Ready));
+    }
+
+    #[test]
+    fn editor_requires_both_worker_and_shared_lifecycle_idle() {
+        assert!(!can_open_editor(true, false));
+        assert!(!can_open_editor(false, true));
+        assert!(!can_open_editor(true, true));
+        assert!(can_open_editor(false, false));
+    }
 
     #[test]
     fn quit_waits_for_in_flight_browser_work() {

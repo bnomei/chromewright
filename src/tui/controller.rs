@@ -140,8 +140,7 @@ impl PageActionJob {
 pub(crate) struct PreparedPageAction {
     pending: PendingPageAction,
     result: Result<Option<PageActionOutcome>, String>,
-    history: (bool, bool),
-    tab_position: Option<(usize, usize)>,
+    metadata: Option<((bool, bool), Option<(usize, usize)>)>,
 }
 
 /// Compare URLs for same-document activate short-circuit (ignore trailing slash / fragment).
@@ -767,13 +766,20 @@ impl Controller {
                 PageCoordinator::capture_with_metadata_barrier(driver)?,
             ))))
         })();
-        let history = driver.history_availability().unwrap_or((false, false));
-        let tab_position = driver.tab_position().unwrap_or(None);
+        let metadata = matches!(
+            &result,
+            Ok(Some(PageActionOutcome::Captured(_))) | Ok(Some(PageActionOutcome::Patched { .. }))
+        )
+        .then(|| {
+            (
+                driver.history_availability().unwrap_or((false, false)),
+                driver.tab_position().unwrap_or(None),
+            )
+        });
         PreparedPageAction {
             pending,
             result,
-            history,
-            tab_position,
+            metadata,
         }
     }
 
@@ -785,11 +791,12 @@ impl Controller {
         let PreparedPageAction {
             pending,
             result,
-            history,
-            tab_position,
+            metadata,
         } = prepared;
-        self.state.set_history_availability(history.0, history.1);
-        self.state.set_tab_position(tab_position);
+        if let Some((history, tab_position)) = metadata {
+            self.state.set_history_availability(history.0, history.1);
+            self.state.set_tab_position(tab_position);
+        }
         match result {
             Ok(Some(PageActionOutcome::Captured(doc))) => {
                 let saved_state = self.state.clone();
