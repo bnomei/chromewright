@@ -315,6 +315,10 @@ impl Dispatcher {
                 controller.toggle_structure();
                 DispatchOutcome::Redraw
             }
+            Action::ToggleFullWidth => {
+                controller.toggle_full_width();
+                DispatchOutcome::Redraw
+            }
             Action::Inspect => {
                 controller.inspect_selection();
                 DispatchOutcome::Redraw

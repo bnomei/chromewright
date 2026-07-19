@@ -13,39 +13,88 @@ use std::path::{Path, PathBuf};
 /// Maximum accepted content padding on either axis (cols or rows per side).
 pub const MAX_CONTENT_PADDING: u16 = 32;
 
-/// Content-pane padding (header/footer chrome stay full width).
+/// Maximum accepted `content_max_width` (columns).
+pub const MAX_CONTENT_MAX_WIDTH: u16 = 10_000;
+
+/// Default readable content column width when not in full-width mode.
+pub const DEFAULT_CONTENT_MAX_WIDTH: u16 = 100;
+
+/// Content-pane padding and optional column width (header/footer stay full width).
 ///
 /// `content_padding_x` is applied left and right; `content_padding_y` top and
 /// bottom. Defaults are 1 column horizontal and 0 rows vertical.
+///
+/// `content_max_width` caps the markdown column when full-width is off (default
+/// 100). `0` disables the cap (always full width). Toggle with `w`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TuiLayout {
     pub content_padding_x: u16,
     pub content_padding_y: u16,
+    /// Max content columns when capped (`0` = never cap).
+    pub content_max_width: u16,
 }
 
 impl TuiLayout {
-    /// Built-in defaults: 1 col left/right, 0 row top/bottom.
+    /// Built-in defaults: 1 col left/right, 0 row top/bottom, 100-col cap.
     pub const fn defaults() -> Self {
         Self {
             content_padding_x: 1,
             content_padding_y: 0,
+            content_max_width: DEFAULT_CONTENT_MAX_WIDTH,
         }
     }
 
-    /// Inner content size after applying symmetric padding to a terminal content
-    /// region of `outer_width` × `outer_height` (chrome already excluded).
+    /// Whether a max-width column is configured (toggle can switch modes).
+    pub fn has_width_cap(self) -> bool {
+        self.content_max_width > 0
+    }
+
+    /// Inner content size after padding and optional max-width cap.
     ///
-    /// Returns at least 1×1 so wrap/selection math never sees a zero viewport.
-    pub fn content_viewport_size(self, outer_width: u16, outer_height: u16) -> (usize, usize) {
+    /// `full_width` ignores `content_max_width` when true. Returns at least 1×1
+    /// so wrap/selection math never sees a zero viewport.
+    pub fn content_viewport_size(
+        self,
+        outer_width: u16,
+        outer_height: u16,
+        full_width: bool,
+    ) -> (usize, usize) {
         let pad_x = self.content_padding_x.saturating_mul(2);
         let pad_y = self.content_padding_y.saturating_mul(2);
-        let width = outer_width.saturating_sub(pad_x).max(1) as usize;
+        let mut width = outer_width.saturating_sub(pad_x).max(1) as usize;
         let height = outer_height.saturating_sub(pad_y).max(1) as usize;
+        if !full_width && self.has_width_cap() {
+            width = width.min(self.content_max_width as usize).max(1);
+        }
         (width, height)
     }
 
-    /// Inset `outer` by the configured padding. Saturates safely when padding
-    /// consumes the whole area (returns a 0×0 rect at the inner origin).
+    /// Inset `outer` by padding, then optionally center a capped content column.
+    ///
+    /// Saturates safely when padding consumes the whole area (0×0 rect).
+    pub fn content_rect(
+        self,
+        outer: ratatui::layout::Rect,
+        full_width: bool,
+    ) -> ratatui::layout::Rect {
+        let padded = self.inset_content_rect(outer);
+        if padded.width == 0 || padded.height == 0 {
+            return padded;
+        }
+        if full_width || !self.has_width_cap() {
+            return padded;
+        }
+        let col_w = padded.width.min(self.content_max_width).max(1);
+        let x_off = padded.width.saturating_sub(col_w) / 2;
+        ratatui::layout::Rect {
+            x: padded.x.saturating_add(x_off),
+            y: padded.y,
+            width: col_w,
+            height: padded.height,
+        }
+    }
+
+    /// Inset `outer` by the configured padding only (no max-width column).
     pub fn inset_content_rect(self, outer: ratatui::layout::Rect) -> ratatui::layout::Rect {
         let pad_x = self.content_padding_x;
         let pad_y = self.content_padding_y;
@@ -170,22 +219,23 @@ fn parse_layout(raw: Option<&LayoutFile>) -> Result<TuiLayout, String> {
 
     let mut layout = TuiLayout::defaults();
     if let Some(x) = raw.content_padding_x {
-        layout.content_padding_x = validate_padding("content_padding_x", x)?;
+        layout.content_padding_x = validate_u16("content_padding_x", x, MAX_CONTENT_PADDING)?;
     }
     if let Some(y) = raw.content_padding_y {
-        layout.content_padding_y = validate_padding("content_padding_y", y)?;
+        layout.content_padding_y = validate_u16("content_padding_y", y, MAX_CONTENT_PADDING)?;
+    }
+    if let Some(w) = raw.content_max_width {
+        layout.content_max_width = validate_u16("content_max_width", w, MAX_CONTENT_MAX_WIDTH)?;
     }
     Ok(layout)
 }
 
-fn validate_padding(name: &str, value: i64) -> Result<u16, String> {
+fn validate_u16(name: &str, value: i64, max: u16) -> Result<u16, String> {
     if value < 0 {
         return Err(format!("{name} must be >= 0, got {value}"));
     }
-    if value > i64::from(MAX_CONTENT_PADDING) {
-        return Err(format!(
-            "{name} must be <= {MAX_CONTENT_PADDING}, got {value}"
-        ));
+    if value > i64::from(max) {
+        return Err(format!("{name} must be <= {max}, got {value}"));
     }
     Ok(value as u16)
 }
@@ -206,6 +256,8 @@ struct LayoutFile {
     content_padding_x: Option<i64>,
     #[serde(default)]
     content_padding_y: Option<i64>,
+    #[serde(default)]
+    content_max_width: Option<i64>,
 }
 
 /// Configuration load failures.
@@ -270,11 +322,13 @@ pub fn example_config_toml() -> &'static str {
 # open_url = "O"
 # quit = "ctrl-q"
 
-# Optional content-pane padding (header/footer stay full width).
-# Defaults: 1 column left/right, 0 rows top/bottom. Max 32 per side.
+# Optional content-pane padding + column width (header/footer stay full width).
+# Defaults: 1 col L/R, 0 row T/B, content_max_width = 100 (0 = always full).
+# Press w in the TUI to toggle full width vs the capped column.
 [layout]
 # content_padding_x = 1
 # content_padding_y = 0
+# content_max_width = 100
 
 # Optional color roles (ANSI names, reset, or #rrggbb). Defaults already
 # use a clear heading ladder within the terminal 16-color palette.
@@ -309,6 +363,7 @@ mod tests {
         assert_eq!(cfg.layout, TuiLayout::defaults());
         assert_eq!(cfg.layout.content_padding_x, 1);
         assert_eq!(cfg.layout.content_padding_y, 0);
+        assert_eq!(cfg.layout.content_max_width, DEFAULT_CONTENT_MAX_WIDTH);
         assert_eq!(
             cfg.keymap.resolve_sequence(&KeySequence::chars("j")),
             Some(Action::ScrollDown)
@@ -367,7 +422,7 @@ mod tests {
         let path = dir.path().join("tui.toml");
         fs::write(
             &path,
-            "[layout]\ncontent_padding_x = 2\ncontent_padding_y = 1\n",
+            "[layout]\ncontent_padding_x = 2\ncontent_padding_y = 1\ncontent_max_width = 80\n",
         )
         .expect("write");
         let cfg = load_tui_config(Some(&path)).expect("load");
@@ -376,6 +431,7 @@ mod tests {
             TuiLayout {
                 content_padding_x: 2,
                 content_padding_y: 1,
+                content_max_width: 80,
             }
         );
     }
@@ -388,6 +444,19 @@ mod tests {
         let cfg = load_tui_config(Some(&path)).expect("load");
         assert_eq!(cfg.layout.content_padding_x, 0);
         assert_eq!(cfg.layout.content_padding_y, 0);
+        assert_eq!(cfg.layout.content_max_width, DEFAULT_CONTENT_MAX_WIDTH);
+    }
+
+    #[test]
+    fn layout_max_width_zero_disables_cap() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("tui.toml");
+        fs::write(&path, "[layout]\ncontent_max_width = 0\n").expect("write");
+        let cfg = load_tui_config(Some(&path)).expect("load");
+        assert_eq!(cfg.layout.content_max_width, 0);
+        assert!(!cfg.layout.has_width_cap());
+        let (w, _) = cfg.layout.content_viewport_size(200, 40, false);
+        assert_eq!(w, 198); // 200 - 2*padding_x(1)
     }
 
     #[test]
@@ -440,6 +509,7 @@ mod tests {
         let layout = TuiLayout {
             content_padding_x: 1,
             content_padding_y: 0,
+            content_max_width: 100,
         };
         let outer = Rect {
             x: 0,
@@ -457,7 +527,38 @@ mod tests {
                 height: 20,
             }
         );
-        assert_eq!(layout.content_viewport_size(80, 20), (78, 20));
+        // Terminal narrower than cap: full padded width.
+        assert_eq!(layout.content_viewport_size(80, 20, false), (78, 20));
+        assert_eq!(layout.content_viewport_size(80, 20, true), (78, 20));
+    }
+
+    #[test]
+    fn content_rect_centers_capped_column() {
+        let layout = TuiLayout {
+            content_padding_x: 0,
+            content_padding_y: 0,
+            content_max_width: 40,
+        };
+        let outer = Rect {
+            x: 0,
+            y: 1,
+            width: 100,
+            height: 20,
+        };
+        let capped = layout.content_rect(outer, false);
+        assert_eq!(
+            capped,
+            Rect {
+                x: 30,
+                y: 1,
+                width: 40,
+                height: 20,
+            }
+        );
+        let full = layout.content_rect(outer, true);
+        assert_eq!(full.width, 100);
+        assert_eq!(layout.content_viewport_size(100, 20, false), (40, 20));
+        assert_eq!(layout.content_viewport_size(100, 20, true), (100, 20));
     }
 
     #[test]
@@ -465,6 +566,7 @@ mod tests {
         let layout = TuiLayout {
             content_padding_x: 10,
             content_padding_y: 5,
+            content_max_width: 100,
         };
         let outer = Rect {
             x: 2,
@@ -483,6 +585,6 @@ mod tests {
             }
         );
         // Viewport size never reports zero (wrap/selection need a positive box).
-        assert_eq!(layout.content_viewport_size(8, 4), (1, 1));
+        assert_eq!(layout.content_viewport_size(8, 4, false), (1, 1));
     }
 }

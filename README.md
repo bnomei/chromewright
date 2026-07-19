@@ -234,13 +234,14 @@ Browser-first (Vimari) defaults, with [md-tui](https://github.com/henriklovhaug/
 | `Shift-Tab` | `tab_prev` | Previous focusable control; same write-on-leave behavior as Tab. |
 | `Enter` | `confirm` | Text input: apply value to the live DOM + same-doc patch (no submit needed; live search works). Checkbox/radio: toggle. Select: cycle options. **Submit button**: write staged fields + click + recapture. Link/other: activate. |
 | `Esc` | `escape` | Leave prompt, hint, or inspect mode. In Normal mode, also clears sticky `/search` footer (`/{query}  n/m`). After a failed page action, dismiss Error back to Ready (retained page stays) so keys work again. |
-| `q` / `Ctrl-c` | `quit` | Quit the TUI. (`w` is unbound.) |
+| `w` | `toggle_full_width` | Toggle full-width content vs the configured `content_max_width` column (default 100, capped by default). |
+| `q` / `Ctrl-c` | `quit` | Quit the TUI. |
 
 Hints use deterministic two-key labels from the alphabet `asdfgqwertzxcvb` (for example `aa`, `as`), assigned to viewport-visible links and form controls (one label per target; painted on the first line only when a target wraps).
 
 After navigation or a link follow settles, a URL fragment such as `#section` moves the TUI selection to the matching component (`id`, then named anchor), expands collapsed ancestors, and scrolls it into view. Unmatched fragments keep the prior selection.
 
-The content pane uses a terminal-native ANSI-16 role palette (clearer heading ladder H1–H6, blue links, light-cyan forms, yellow hints) with reverse-video selection applied last. Colors inherit the terminal light/dark theme; override individual roles under `[theme]` in `tui.toml`. By default the markdown/content area has 1 column of left/right padding (header and footer stay full width); override under `[layout]` in `tui.toml`.
+The content pane uses a terminal-native ANSI-16 role palette (clearer heading ladder H1–H6, blue links, light-cyan forms, yellow hints) with reverse-video selection applied last. Colors inherit the terminal light/dark theme; override individual roles under `[theme]` in `tui.toml`. By default the markdown/content area has 1 column of left/right padding and is capped at 100 columns (centered; header and footer stay full width); press `w` for full width. Override under `[layout]` in `tui.toml`.
 
 Default reading mode is **prose** (markdown-like): no `▾ [main]` / `ol` / group chrome, fully flat lines. Press `zs` for **structure** (DOM-like outline). Wrap (`zw`) and structure (`zs`) are not shown in the header bar; toggle feedback appears in the status line.
 
@@ -258,11 +259,13 @@ reload = "ctrl-r"
 quit = "ctrl-q"
 tab_prev = "shift-tab"
 
-# Optional content-pane padding (header/footer stay full width).
-# Defaults: 1 column left/right, 0 rows top/bottom. Max 32 per side.
+# Optional content-pane padding + column width (header/footer stay full width).
+# Defaults: 1 col L/R, 0 row T/B, content_max_width = 100 (0 = always full).
+# Press w to toggle full width vs the capped column.
 [layout]
 # content_padding_x = 1
 # content_padding_y = 0
+# content_max_width = 100
 
 [theme]
 # Optional ANSI names, reset, or #rrggbb — defaults already use a clear ladder.
@@ -281,7 +284,7 @@ Binding specs accept single keys (`r`, `space`, `esc`, `enter`, `tab`), multi-ke
 
 Theme roles: `link`, `h1`–`h6`, `landmark`, `group`, `list`, `image`, `form_control`, `hint_label`, `muted`, `chrome_ready`, `chrome_loading`, `chrome_error`, `chrome_mode`, `attention_fg`, `attention_bg`.
 
-Layout keys: `content_padding_x`, `content_padding_y` (symmetric inset around the markdown/content pane only).
+Layout keys: `content_padding_x`, `content_padding_y` (symmetric inset around the markdown/content pane only), `content_max_width` (default 100; `0` disables the cap; `w` toggles full vs capped).
 
 More detail on managed headless sessions, logging, and the co-hosted `tui_*` companion lives in [docs/tui.md](docs/tui.md). Source of truth for defaults: [src/tui/keymap.rs](src/tui/keymap.rs) and [src/tui/action.rs](src/tui/action.rs).
 

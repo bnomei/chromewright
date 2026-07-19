@@ -264,9 +264,11 @@ impl TuiKeymap {
         insert_alias(&mut map, Action::HistoryBack, KeySequence::chars("b"));
         insert(&mut map, Action::HistoryForward, KeySequence::chars("L"));
         insert(&mut map, Action::Reload, KeySequence::chars("r"));
-        // Browser tabs: `[` / `]` (vim-buffer style). `w` is unbound.
+        // Browser tabs: `[` / `]` (vim-buffer style).
         insert(&mut map, Action::NextTab, KeySequence::chars("]"));
         insert(&mut map, Action::PrevTab, KeySequence::chars("["));
+        // Full width vs content_max_width column.
+        insert(&mut map, Action::ToggleFullWidth, KeySequence::chars("w"));
         insert(&mut map, Action::CloseTab, KeySequence::chars("x"));
         insert(&mut map, Action::NewTab, KeySequence::chars("t"));
         insert(&mut map, Action::OpenUrl, KeySequence::chars("o"));
@@ -658,8 +660,7 @@ mod tests {
         );
         assert_eq!(
             km.resolve_sequence(&KeySequence::chars("w")),
-            None,
-            "w is unbound (not next_tab)"
+            Some(Action::ToggleFullWidth)
         );
         // zs multi-key still works alongside single-s alias
         assert_eq!(

@@ -70,6 +70,8 @@ pub enum Action {
     ToggleWrap,
     /// `zs` — toggle prose vs structure content projection (prose by default).
     ToggleStructure,
+    /// `w` — toggle full-width content vs configured `content_max_width` column.
+    ToggleFullWidth,
     /// `i` — inspect selected component metadata.
     Inspect,
     /// `y` — copy rendered block text (OSC 52).
@@ -120,6 +122,7 @@ impl Action {
             Self::Collapse => "collapse",
             Self::ToggleWrap => "toggle_wrap",
             Self::ToggleStructure => "toggle_structure",
+            Self::ToggleFullWidth => "toggle_full_width",
             Self::Inspect => "inspect",
             Self::CopyBlock => "copy_block",
             Self::CopyRef => "copy_ref",
@@ -162,6 +165,7 @@ impl Action {
             "collapse" => Some(Self::Collapse),
             "toggle_wrap" => Some(Self::ToggleWrap),
             "toggle_structure" => Some(Self::ToggleStructure),
+            "toggle_full_width" => Some(Self::ToggleFullWidth),
             "inspect" => Some(Self::Inspect),
             "copy_block" => Some(Self::CopyBlock),
             "copy_ref" => Some(Self::CopyRef),
@@ -197,7 +201,7 @@ impl Action {
     }
 }
 
-const ALL_ACTIONS: [Action; 36] = [
+const ALL_ACTIONS: [Action; 37] = [
     Action::LinkHintsFollow,
     Action::LinkHintsNewTab,
     Action::ScrollDown,
@@ -226,6 +230,7 @@ const ALL_ACTIONS: [Action; 36] = [
     Action::Collapse,
     Action::ToggleWrap,
     Action::ToggleStructure,
+    Action::ToggleFullWidth,
     Action::Inspect,
     Action::CopyBlock,
     Action::CopyRef,

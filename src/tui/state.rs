@@ -124,6 +124,9 @@ pub struct ViewState {
     pub viewport_width: usize,
     /// Soft-wrap long content lines to the viewport width (on by default).
     pub wrap: bool,
+    /// When true, ignore `content_max_width` and use the full padded content pane.
+    /// Default false (use the configured column cap, default 100). Toggle with `w`.
+    pub full_width: bool,
     /// Content projection: prose (default) hides structural chrome; structure shows it.
     pub projection: ContentProjection,
     /// Currently selected addressable component (exact ref).
@@ -167,6 +170,7 @@ impl Default for ViewState {
             viewport_height: 0,
             viewport_width: 0,
             wrap: true,
+            full_width: false,
             projection: ContentProjection::default(),
             selection: None,
             attention: None,
@@ -351,6 +355,7 @@ impl TuiState {
             viewport_height: self.view.viewport_height,
             viewport_width: self.view.viewport_width,
             wrap: self.view.wrap,
+            full_width: self.view.full_width,
             projection: self.view.projection,
             inspect_follow: false,
             ..ViewState::default()

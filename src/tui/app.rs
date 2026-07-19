@@ -277,9 +277,13 @@ fn run_loop(
         controller.synchronize_companion_state();
         let size = terminal.size().map_err(|e| e.to_string())?;
         // Content outer box is total height minus chrome (1) and status (1).
-        // Viewport matches the padded inner content area used by render.
+        // Viewport matches the padded (+ optional max-width) content area used by render.
         let outer_h = size.height.saturating_sub(2);
-        let (vw, vh) = layout.content_viewport_size(size.width, outer_h);
+        let (vw, vh) = layout.content_viewport_size(
+            size.width,
+            outer_h,
+            controller.state.view.full_width,
+        );
         controller.set_viewport(vw, vh);
 
         terminal

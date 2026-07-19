@@ -45,7 +45,8 @@
 
 ### Changed
 
-- TUI browser tabs: `[` previous / `]` next; `q` quits (Ctrl-c still works); `w` is unbound (was next tab).
+- TUI browser tabs: `[` previous / `]` next; `q` quits (Ctrl-c still works).
+- TUI content defaults to a centered `content_max_width = 100` column (`[layout]` in `tui.toml`; `0` disables). Press `w` (`toggle_full_width`) to switch full width ↔ capped.
 
 ### Fixed
 

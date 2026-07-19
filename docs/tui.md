@@ -107,11 +107,12 @@ reload = "ctrl-r"
 quit = "ctrl-q"
 tab_prev = "shift-tab"
 
-# Content-pane padding only (header/footer remain full width).
-# Defaults: content_padding_x = 1, content_padding_y = 0 (max 32 per side).
+# Content-pane padding + column width (header/footer remain full width).
+# Defaults: padding 1/0, content_max_width = 100 (0 = always full; w toggles).
 [layout]
 # content_padding_x = 1
 # content_padding_y = 0
+# content_max_width = 100
 
 [theme]
 # h2 = "yellow"

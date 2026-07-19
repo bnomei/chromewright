@@ -1222,6 +1222,21 @@ impl Controller {
         self.after_projection_change();
     }
 
+    /// Toggle full-width content vs the configured `content_max_width` column.
+    ///
+    /// Default is capped (readable column). Status notes when the cap is 0
+    /// (always full). Actual geometry is applied on the next draw via layout.
+    pub fn toggle_full_width(&mut self) {
+        self.state.view.full_width = !self.state.view.full_width;
+        if self.state.view.full_width {
+            self.state.view.set_status("width: full");
+        } else {
+            self.state.view.set_status("width: capped");
+        }
+        // Viewport width changes on the next frame; reflow selection if wrap on.
+        self.after_projection_change();
+    }
+
     /// Toggle prose (default) vs structure content projection.
     ///
     /// Prose hides landmark/list/group chrome and flattens indent. Structure is

@@ -40,7 +40,7 @@ pub fn draw_with_theme(
         ])
         .split(area);
 
-    let content_area = layout.inset_content_rect(chunks[1]);
+    let content_area = layout.content_rect(chunks[1], controller.state.view.full_width);
 
     draw_chrome(frame, chunks[0], controller, theme);
     if content_area.width > 0 && content_area.height > 0 {
