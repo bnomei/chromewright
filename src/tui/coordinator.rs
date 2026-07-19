@@ -48,11 +48,8 @@ impl CompanionPageTransaction {
 
 impl Drop for CompanionPageTransaction {
     fn drop(&mut self) {
-        let _ = self.shared.fail_page_action(
-            self.ticket,
-            &self.action,
-            "companion page action aborted",
-        );
+        self.shared
+            .abandon_page_action(self.ticket, &self.action, "companion page action aborted");
     }
 }
 
@@ -309,6 +306,28 @@ mod tests {
             shared.lifecycle(),
             crate::tui::state::Lifecycle::Error { action, message }
                 if action == "panic-test" && message == "companion page action aborted"
+        ));
+    }
+
+    #[test]
+    fn companion_transaction_guard_does_not_double_panic_on_poisoned_state() {
+        let shared = SharedTuiState::new();
+        shared.activate_runtime();
+        let coordinator = PageCoordinator::new(
+            Arc::new(BrowserSession::with_test_backend(FakeSessionBackend::new())),
+            shared.clone(),
+        );
+
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _transaction = coordinator.begin_companion("poison-test").unwrap();
+            shared.poison_for_test();
+        }));
+
+        assert!(unwind.is_err());
+        assert!(matches!(
+            shared.lifecycle_after_poison_for_test(),
+            crate::tui::state::Lifecycle::Error { action, message }
+                if action == "poison-test" && message == "companion page action aborted"
         ));
     }
 }

@@ -342,6 +342,46 @@ impl SharedTuiState {
         Ok(())
     }
 
+    /// Destructor-safe failure for an unwinding companion transaction.
+    ///
+    /// Poison recovery is intentionally limited to abandonment: ordinary
+    /// coordination methods remain strict, while a guard must never panic a
+    /// second time during unwinding. A stale guard cannot affect a newer ticket.
+    pub(crate) fn abandon_page_action(
+        &self,
+        ticket: PageActionTicket,
+        action: impl Into<String>,
+        message: impl Into<String>,
+    ) {
+        let mut state = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if Self::validate_ticket(&state, ticket).is_err() {
+            return;
+        }
+        state.active_ticket = None;
+        state.lifecycle = Lifecycle::Error {
+            action: action.into(),
+            message: message.into(),
+        };
+    }
+
+    #[cfg(test)]
+    pub(crate) fn poison_for_test(&self) {
+        let _state = self.inner.lock().unwrap();
+        panic!("poison shared TUI state");
+    }
+
+    #[cfg(test)]
+    pub(crate) fn lifecycle_after_poison_for_test(&self) -> Lifecycle {
+        self.inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .lifecycle
+            .clone()
+    }
+
     /// End a Loading page action without publishing a new document.
     ///
     /// Used when an in-page activation (clipboard copy, toggle that does not
