@@ -17,6 +17,7 @@
 ### Added
 
 - URL bar Tab autocomplete from local TUI history (URLs successfully opened): ghost suffix while typing, Tab accepts/cycles, Shift-Tab cycles backward. Stored under `$XDG_DATA_HOME/chromewright/url_history` (not Chrome profile omnibox data).
+- Configurable TUI content-pane padding via `[layout]` in `tui.toml` (`content_padding_x` / `content_padding_y`, default 1 col left/right and 0 row top/bottom). Header and footer stay full width; wrap/selection viewport uses the padded inner area.
 
 ### Changed
 

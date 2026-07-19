@@ -4,6 +4,7 @@
 //! human selection vs agent attention styles), and status. Never renders key
 //! binding legends in the UI. Colors come from [`crate::tui::theme::TuiTheme`].
 
+use crate::tui::config::TuiLayout;
 use crate::tui::controller::Controller;
 use crate::tui::state::{InputKind, InteractionMode, Lifecycle};
 use crate::tui::theme::TuiTheme;
@@ -13,14 +14,22 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
-/// Draw one frame of the terminal browser using built-in theme defaults.
+/// Draw one frame of the terminal browser using built-in theme/layout defaults.
 #[allow(dead_code)] // Convenience for callers/tests that do not load a config theme.
 pub fn draw(frame: &mut Frame, controller: &Controller) {
-    draw_with_theme(frame, controller, &TuiTheme::new());
+    draw_with_theme(frame, controller, &TuiTheme::new(), TuiLayout::defaults());
 }
 
-/// Draw one frame with an explicit theme (from `tui.toml` `[theme]` overlay).
-pub fn draw_with_theme(frame: &mut Frame, controller: &Controller, theme: &TuiTheme) {
+/// Draw one frame with an explicit theme (from `tui.toml` `[theme]` overlay)
+/// and content-pane layout padding (from `[layout]`).
+///
+/// Header and footer stay full terminal width; only the content region is inset.
+pub fn draw_with_theme(
+    frame: &mut Frame,
+    controller: &Controller,
+    theme: &TuiTheme,
+    layout: TuiLayout,
+) {
     let area = frame.area();
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -31,18 +40,20 @@ pub fn draw_with_theme(frame: &mut Frame, controller: &Controller, theme: &TuiTh
         ])
         .split(area);
 
+    let content_area = layout.inset_content_rect(chunks[1]);
+
     draw_chrome(frame, chunks[0], controller, theme);
-    draw_content(frame, chunks[1], controller, theme);
+    if content_area.width > 0 && content_area.height > 0 {
+        draw_content(frame, content_area, controller, theme);
+    }
     draw_status(frame, chunks[2], controller, theme);
 
-    if let Some(inspect) = &controller.state.view.inspect_text {
-        let title = controller
-            .state
-            .view
-            .inspect_title
-            .as_deref()
-            .unwrap_or("");
-        draw_inspect_under_selection(frame, chunks[1], controller, inspect, title, theme);
+    if let Some(inspect) = &controller.state.view.inspect_text
+        && content_area.width > 0
+        && content_area.height > 0
+    {
+        let title = controller.state.view.inspect_title.as_deref().unwrap_or("");
+        draw_inspect_under_selection(frame, content_area, controller, inspect, title, theme);
     }
 }
 
@@ -133,11 +144,9 @@ fn draw_chrome(frame: &mut Frame, area: Rect, controller: &Controller, theme: &T
     // URL mode may show a dim ghost suffix from local history (Tab accepts).
     let url_ghost = controller.url_completion_ghost();
     let (location, location_style, ghost_suffix) = match &state.mode {
-        InteractionMode::Input(InputKind::Url { buffer }) => (
-            format!("URL {buffer}"),
-            theme.chrome_mode(),
-            url_ghost,
-        ),
+        InteractionMode::Input(InputKind::Url { buffer }) => {
+            (format!("URL {buffer}"), theme.chrome_mode(), url_ghost)
+        }
         InteractionMode::Input(InputKind::Form { buffer, .. }) => {
             (format!("IN {buffer}"), theme.chrome_mode(), None)
         }
@@ -296,9 +305,7 @@ fn draw_content(frame: &mut Frame, area: Rect, controller: &Controller, theme: &
 
     if text_lines.is_empty() {
         let (empty, style) = match &state.lifecycle {
-            Lifecycle::Loading { action } => {
-                (format!("Loading {action}…"), theme.status_loading())
-            }
+            Lifecycle::Loading { action } => (format!("Loading {action}…"), theme.status_loading()),
             Lifecycle::Error { message, .. } => (
                 format!("(error retained prior page) {message}"),
                 theme.status_error(),
@@ -519,7 +526,9 @@ fn draw_inspect_under_selection(
                     .y
                     .saturating_add(content_area.height.saturating_sub(panel_h))
             } else {
-                let below = content_area.y.saturating_add((row_in_view as u16).saturating_add(1));
+                let below = content_area
+                    .y
+                    .saturating_add((row_in_view as u16).saturating_add(1));
                 let max_y = content_area
                     .y
                     .saturating_add(content_area.height.saturating_sub(panel_h));
@@ -729,7 +738,8 @@ mod tests {
 
     #[test]
     fn split_markdown_link_url_isolates_href() {
-        let (pre, url, suf) = split_markdown_link_url("  [Click here](https://example.com/x)").unwrap();
+        let (pre, url, suf) =
+            split_markdown_link_url("  [Click here](https://example.com/x)").unwrap();
         assert_eq!(pre, "  [Click here](");
         assert_eq!(url, "https://example.com/x");
         assert_eq!(suf, ")");

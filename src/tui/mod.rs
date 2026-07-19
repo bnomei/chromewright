@@ -29,8 +29,7 @@ mod url_history;
 
 pub use action::Action;
 pub use app::{TuiOptions, run_tui, run_tui_with_config};
-pub use config::{TuiConfig, default_config_path, example_config_toml, load_tui_config};
-pub use theme::{ThemePalette, ThemeRole, TuiTheme};
+pub use config::{TuiConfig, TuiLayout, default_config_path, example_config_toml, load_tui_config};
 pub use controller::Controller;
 pub use driver::{FakePageDriver, PageDriver, SessionPageDriver};
 pub use keymap::{KeyChord, KeyCode, KeyModifiers, KeySequence, TuiKeymap};
@@ -40,3 +39,4 @@ pub use shared::{
     MAX_ATTENTION_MESSAGE_CHARS, SharedTuiState,
 };
 pub use state::{HintMode, InputKind, InteractionMode, Lifecycle, PublishedPage, TuiState};
+pub use theme::{ThemePalette, ThemeRole, TuiTheme};

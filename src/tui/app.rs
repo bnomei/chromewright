@@ -266,6 +266,7 @@ fn run_loop(
     let mut controller = Controller::with_shared(shared);
     let mut dispatcher = Dispatcher::new(config.keymap);
     let theme = config.theme;
+    let layout = config.layout;
     let mut driver = SessionPageDriver::new(session);
 
     // Bootstrap follows the same draw-before-browser-work lifecycle as every
@@ -275,12 +276,14 @@ fn run_loop(
     loop {
         controller.synchronize_companion_state();
         let size = terminal.size().map_err(|e| e.to_string())?;
-        // Content area is total height minus chrome (1) and status (1).
-        let content_h = size.height.saturating_sub(2) as usize;
-        controller.set_viewport(size.width as usize, content_h.max(1));
+        // Content outer box is total height minus chrome (1) and status (1).
+        // Viewport matches the padded inner content area used by render.
+        let outer_h = size.height.saturating_sub(2);
+        let (vw, vh) = layout.content_viewport_size(size.width, outer_h);
+        controller.set_viewport(vw, vh);
 
         terminal
-            .draw(|frame| render::draw_with_theme(frame, &controller, &theme))
+            .draw(|frame| render::draw_with_theme(frame, &controller, &theme, layout))
             .map_err(|e| e.to_string())?;
 
         // `Terminal::draw` succeeded while lifecycle is Loading, so browser

@@ -105,14 +105,21 @@ reload = "ctrl-r"
 quit = "ctrl-q"
 tab_prev = "shift-tab"
 
+# Content-pane padding only (header/footer remain full width).
+# Defaults: content_padding_x = 1, content_padding_y = 0 (max 32 per side).
+[layout]
+# content_padding_x = 1
+# content_padding_y = 0
+
 [theme]
 # h2 = "yellow"
 # form_control = "lightcyan"
 ```
 
-Only the listed keymap actions and theme roles are replaced. Invalid or
-conflicting entries prevent startup rather than silently changing terminal
-behavior.
+Only the listed keymap actions, layout keys, and theme roles are replaced.
+Invalid or conflicting entries prevent startup rather than silently changing
+terminal behavior. The content viewport used for wrap, selection, and scroll
+matches the padded inner pane.
 
 The TUI is part of the default binary but remains isolated behind the `tui`
 Cargo feature. A server-only build can omit terminal code and dependencies with

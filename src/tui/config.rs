@@ -1,8 +1,8 @@
-//! TOML configuration: keymap + theme overlays.
+//! TOML configuration: keymap + theme + layout overlays.
 //!
-//! Loads Action-name keymap bindings and optional `[theme]` color roles onto
-//! built-in defaults. Explicit paths must exist and parse; a missing XDG
-//! default file is valid and keeps built-ins.
+//! Loads Action-name keymap bindings, optional `[theme]` color roles, and
+//! optional `[layout]` content padding onto built-in defaults. Explicit paths
+//! must exist and parse; a missing XDG default file is valid and keeps built-ins.
 
 use crate::tui::keymap::{KeymapError, TuiKeymap};
 use crate::tui::theme::{ThemeError, ThemePalette, TuiTheme};
@@ -10,11 +10,70 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Loaded TUI configuration (keymap + theme overlays).
+/// Maximum accepted content padding on either axis (cols or rows per side).
+pub const MAX_CONTENT_PADDING: u16 = 32;
+
+/// Content-pane padding (header/footer chrome stay full width).
+///
+/// `content_padding_x` is applied left and right; `content_padding_y` top and
+/// bottom. Defaults are 1 column horizontal and 0 rows vertical.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TuiLayout {
+    pub content_padding_x: u16,
+    pub content_padding_y: u16,
+}
+
+impl TuiLayout {
+    /// Built-in defaults: 1 col left/right, 0 row top/bottom.
+    pub const fn defaults() -> Self {
+        Self {
+            content_padding_x: 1,
+            content_padding_y: 0,
+        }
+    }
+
+    /// Inner content size after applying symmetric padding to a terminal content
+    /// region of `outer_width` × `outer_height` (chrome already excluded).
+    ///
+    /// Returns at least 1×1 so wrap/selection math never sees a zero viewport.
+    pub fn content_viewport_size(self, outer_width: u16, outer_height: u16) -> (usize, usize) {
+        let pad_x = self.content_padding_x.saturating_mul(2);
+        let pad_y = self.content_padding_y.saturating_mul(2);
+        let width = outer_width.saturating_sub(pad_x).max(1) as usize;
+        let height = outer_height.saturating_sub(pad_y).max(1) as usize;
+        (width, height)
+    }
+
+    /// Inset `outer` by the configured padding. Saturates safely when padding
+    /// consumes the whole area (returns a 0×0 rect at the inner origin).
+    pub fn inset_content_rect(self, outer: ratatui::layout::Rect) -> ratatui::layout::Rect {
+        let pad_x = self.content_padding_x;
+        let pad_y = self.content_padding_y;
+        let x = outer.x.saturating_add(pad_x);
+        let y = outer.y.saturating_add(pad_y);
+        let width = outer.width.saturating_sub(pad_x.saturating_mul(2));
+        let height = outer.height.saturating_sub(pad_y.saturating_mul(2));
+        ratatui::layout::Rect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+}
+
+impl Default for TuiLayout {
+    fn default() -> Self {
+        Self::defaults()
+    }
+}
+
+/// Loaded TUI configuration (keymap + theme + layout overlays).
 #[derive(Debug, Clone)]
 pub struct TuiConfig {
     pub keymap: TuiKeymap,
     pub theme: TuiTheme,
+    pub layout: TuiLayout,
     /// Path that was loaded, if any file was read.
     pub loaded_from: Option<PathBuf>,
 }
@@ -25,6 +84,7 @@ impl TuiConfig {
         Self {
             keymap: TuiKeymap::defaults(),
             theme: TuiTheme::new(),
+            layout: TuiLayout::defaults(),
             loaded_from: None,
         }
     }
@@ -90,11 +150,44 @@ fn load_from_path(path: &Path, required: bool) -> Result<TuiConfig, ConfigError>
             message: err.to_string(),
         })?;
 
+    let layout = parse_layout(file.layout.as_ref()).map_err(|message| ConfigError::Layout {
+        path: path.to_path_buf(),
+        message,
+    })?;
+
     Ok(TuiConfig {
         keymap,
         theme: TuiTheme::with_palette(palette),
+        layout,
         loaded_from: Some(path.to_path_buf()),
     })
+}
+
+fn parse_layout(raw: Option<&LayoutFile>) -> Result<TuiLayout, String> {
+    let Some(raw) = raw else {
+        return Ok(TuiLayout::defaults());
+    };
+
+    let mut layout = TuiLayout::defaults();
+    if let Some(x) = raw.content_padding_x {
+        layout.content_padding_x = validate_padding("content_padding_x", x)?;
+    }
+    if let Some(y) = raw.content_padding_y {
+        layout.content_padding_y = validate_padding("content_padding_y", y)?;
+    }
+    Ok(layout)
+}
+
+fn validate_padding(name: &str, value: i64) -> Result<u16, String> {
+    if value < 0 {
+        return Err(format!("{name} must be >= 0, got {value}"));
+    }
+    if value > i64::from(MAX_CONTENT_PADDING) {
+        return Err(format!(
+            "{name} must be <= {MAX_CONTENT_PADDING}, got {value}"
+        ));
+    }
+    Ok(value as u16)
 }
 
 #[derive(Debug, Clone, serde::Deserialize, Default)]
@@ -103,6 +196,16 @@ struct ConfigFile {
     keymap: Option<HashMap<String, String>>,
     #[serde(default)]
     theme: Option<HashMap<String, String>>,
+    #[serde(default)]
+    layout: Option<LayoutFile>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, Default)]
+struct LayoutFile {
+    #[serde(default)]
+    content_padding_x: Option<i64>,
+    #[serde(default)]
+    content_padding_y: Option<i64>,
 }
 
 /// Configuration load failures.
@@ -112,6 +215,7 @@ pub enum ConfigError {
     Parse { path: PathBuf, message: String },
     Keymap { path: PathBuf, message: String },
     Theme { path: PathBuf, message: String },
+    Layout { path: PathBuf, message: String },
 }
 
 impl std::fmt::Display for ConfigError {
@@ -128,6 +232,9 @@ impl std::fmt::Display for ConfigError {
             }
             Self::Theme { path, message } => {
                 write!(f, "invalid theme in config {}: {message}", path.display())
+            }
+            Self::Layout { path, message } => {
+                write!(f, "invalid layout in config {}: {message}", path.display())
             }
         }
     }
@@ -163,6 +270,12 @@ pub fn example_config_toml() -> &'static str {
 # open_url = "O"
 # quit = "ctrl-q"
 
+# Optional content-pane padding (header/footer stay full width).
+# Defaults: 1 column left/right, 0 rows top/bottom. Max 32 per side.
+[layout]
+# content_padding_x = 1
+# content_padding_y = 0
+
 # Optional color roles (ANSI names, reset, or #rrggbb). Defaults already
 # use a clear heading ladder within the terminal 16-color palette.
 [theme]
@@ -184,6 +297,7 @@ mod tests {
     use super::*;
     use crate::tui::action::Action;
     use crate::tui::keymap::KeySequence;
+    use ratatui::layout::Rect;
     use ratatui::style::Color;
     use std::io::Write;
 
@@ -192,6 +306,9 @@ mod tests {
         let path = PathBuf::from("/tmp/chromewright-tui-config-does-not-exist-xyz.toml");
         let cfg = load_from_path(&path, false).expect("missing optional");
         assert!(cfg.loaded_from.is_none());
+        assert_eq!(cfg.layout, TuiLayout::defaults());
+        assert_eq!(cfg.layout.content_padding_x, 1);
+        assert_eq!(cfg.layout.content_padding_y, 0);
         assert_eq!(
             cfg.keymap.resolve_sequence(&KeySequence::chars("j")),
             Some(Action::ScrollDown)
@@ -221,17 +338,14 @@ mod tests {
             Some(Action::Reload)
         );
         assert_eq!(cfg.keymap.resolve_sequence(&KeySequence::chars("r")), None);
+        assert_eq!(cfg.layout, TuiLayout::defaults());
     }
 
     #[test]
     fn theme_overlay_from_toml() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("tui.toml");
-        fs::write(
-            &path,
-            "[theme]\nh2 = \"yellow\"\nlink = \"lightblue\"\n",
-        )
-        .expect("write");
+        fs::write(&path, "[theme]\nh2 = \"yellow\"\nlink = \"lightblue\"\n").expect("write");
         let cfg = load_tui_config(Some(&path)).expect("load");
         assert_eq!(
             cfg.theme
@@ -245,6 +359,53 @@ mod tests {
                 .fg,
             Some(Color::LightBlue)
         );
+    }
+
+    #[test]
+    fn layout_overlay_from_toml() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("tui.toml");
+        fs::write(
+            &path,
+            "[layout]\ncontent_padding_x = 2\ncontent_padding_y = 1\n",
+        )
+        .expect("write");
+        let cfg = load_tui_config(Some(&path)).expect("load");
+        assert_eq!(
+            cfg.layout,
+            TuiLayout {
+                content_padding_x: 2,
+                content_padding_y: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn layout_partial_keeps_other_default() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("tui.toml");
+        fs::write(&path, "[layout]\ncontent_padding_x = 0\n").expect("write");
+        let cfg = load_tui_config(Some(&path)).expect("load");
+        assert_eq!(cfg.layout.content_padding_x, 0);
+        assert_eq!(cfg.layout.content_padding_y, 0);
+    }
+
+    #[test]
+    fn layout_negative_fails() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("tui.toml");
+        fs::write(&path, "[layout]\ncontent_padding_x = -1\n").expect("write");
+        let err = load_tui_config(Some(&path)).expect_err("layout");
+        assert!(matches!(err, ConfigError::Layout { .. }));
+    }
+
+    #[test]
+    fn layout_excessive_fails() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("tui.toml");
+        fs::write(&path, "[layout]\ncontent_padding_y = 33\n").expect("write");
+        let err = load_tui_config(Some(&path)).expect_err("layout");
+        assert!(matches!(err, ConfigError::Layout { .. }));
     }
 
     #[test]
@@ -272,5 +433,56 @@ mod tests {
         fs::write(&path, "[keymap]\nfrobnicate = \"z\"\n").expect("write");
         let err = load_tui_config(Some(&path)).expect_err("keymap");
         assert!(matches!(err, ConfigError::Keymap { .. }));
+    }
+
+    #[test]
+    fn inset_content_rect_applies_symmetric_padding() {
+        let layout = TuiLayout {
+            content_padding_x: 1,
+            content_padding_y: 0,
+        };
+        let outer = Rect {
+            x: 0,
+            y: 1,
+            width: 80,
+            height: 20,
+        };
+        let inner = layout.inset_content_rect(outer);
+        assert_eq!(
+            inner,
+            Rect {
+                x: 1,
+                y: 1,
+                width: 78,
+                height: 20,
+            }
+        );
+        assert_eq!(layout.content_viewport_size(80, 20), (78, 20));
+    }
+
+    #[test]
+    fn inset_content_rect_saturates_when_padding_exceeds_area() {
+        let layout = TuiLayout {
+            content_padding_x: 10,
+            content_padding_y: 5,
+        };
+        let outer = Rect {
+            x: 2,
+            y: 3,
+            width: 8,
+            height: 4,
+        };
+        let inner = layout.inset_content_rect(outer);
+        assert_eq!(
+            inner,
+            Rect {
+                x: 12,
+                y: 8,
+                width: 0,
+                height: 0,
+            }
+        );
+        // Viewport size never reports zero (wrap/selection need a positive box).
+        assert_eq!(layout.content_viewport_size(8, 4), (1, 1));
     }
 }
