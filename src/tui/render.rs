@@ -40,11 +40,26 @@ pub fn draw_with_theme(
         ])
         .split(area);
 
-    let content_area = layout.content_rect(chunks[1], controller.state.view.full_width);
+    // Reserve one right-edge column for an Amp-style block scrollbar on the
+    // full content band (outside padding / max-width column).
+    let band = chunks[1];
+    let (content_outer, scrollbar_col) = split_scrollbar_column(band);
+    let content_area = layout.content_rect(content_outer, controller.state.view.full_width);
 
     draw_chrome(frame, chunks[0], controller, theme);
     if content_area.width > 0 && content_area.height > 0 {
         draw_content(frame, content_area, controller, theme);
+    }
+    if let Some(sb) = scrollbar_col {
+        let lines = controller.content_lines();
+        draw_content_scrollbar(
+            frame,
+            sb,
+            lines.len(),
+            controller.state.view.scroll_y,
+            controller.state.view.viewport_height.max(1),
+            theme,
+        );
     }
     draw_status(frame, chunks[2], controller, theme);
 
@@ -55,6 +70,80 @@ pub fn draw_with_theme(
         let title = controller.state.view.inspect_title.as_deref().unwrap_or("");
         draw_inspect_under_selection(frame, content_area, controller, inspect, title, theme);
     }
+}
+
+/// Split a 1-col scrollbar track off the right edge of the content band.
+fn split_scrollbar_column(band: Rect) -> (Rect, Option<Rect>) {
+    if band.width < 2 {
+        return (band, None);
+    }
+    let content = Rect {
+        x: band.x,
+        y: band.y,
+        width: band.width.saturating_sub(1),
+        height: band.height,
+    };
+    let bar = Rect {
+        x: band.x.saturating_add(band.width.saturating_sub(1)),
+        y: band.y,
+        width: 1,
+        height: band.height,
+    };
+    (content, Some(bar))
+}
+
+/// Amp-like vertical scrollbar: solid colored block cells only (no │/▐ glyphs).
+///
+/// Track is a dim background strip; thumb is a brighter block segment sized by
+/// the visible fraction of content. When content fits, the thumb fills the track.
+fn draw_content_scrollbar(
+    frame: &mut Frame,
+    area: Rect,
+    content_len: usize,
+    scroll_y: usize,
+    viewport_height: usize,
+    theme: &TuiTheme,
+) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let track_h = area.height as usize;
+    let vh = viewport_height.max(1);
+    let (thumb_start, thumb_len) = scrollbar_thumb(content_len, scroll_y, vh, track_h);
+
+    let track_style = theme.scrollbar_track();
+    let thumb_style = theme.scrollbar_thumb();
+    let mut rows = Vec::with_capacity(track_h);
+    for row in 0..track_h {
+        let on_thumb = row >= thumb_start && row < thumb_start.saturating_add(thumb_len);
+        let style = if on_thumb { thumb_style } else { track_style };
+        // Space + background only — solid blocks, no line art.
+        rows.push(Line::from(Span::styled(" ", style)));
+    }
+    frame.render_widget(Paragraph::new(rows), area);
+}
+
+/// Thumb start row and height within a track of `track_h` rows.
+fn scrollbar_thumb(
+    content_len: usize,
+    scroll_y: usize,
+    viewport_height: usize,
+    track_h: usize,
+) -> (usize, usize) {
+    if track_h == 0 {
+        return (0, 0);
+    }
+    if content_len <= viewport_height {
+        return (0, track_h);
+    }
+    // Thumb height ~ visible fraction; at least 1 cell.
+    let thumb_len = ((viewport_height * track_h) / content_len.max(1)).clamp(1, track_h);
+    let max_scroll = content_len.saturating_sub(viewport_height);
+    let max_start = track_h.saturating_sub(thumb_len);
+    let thumb_start = (scroll_y.min(max_scroll).saturating_mul(max_start))
+        .checked_div(max_scroll)
+        .unwrap_or(0);
+    (thumb_start, thumb_len)
 }
 
 /// Split a markdown-style link line so only the URL is underlined.
@@ -812,5 +901,38 @@ mod tests {
     #[test]
     fn horizontal_scroll_is_character_aligned() {
         assert_eq!(truncate("éclair", 3), "éc…");
+    }
+
+    #[test]
+    fn scrollbar_thumb_fills_when_content_fits() {
+        assert_eq!(scrollbar_thumb(10, 0, 20, 15), (0, 15));
+    }
+
+    #[test]
+    fn scrollbar_thumb_moves_with_scroll() {
+        // 100 lines, 10 visible, 20-row track → thumb height 2, max_start 18
+        let (start0, len) = scrollbar_thumb(100, 0, 10, 20);
+        assert_eq!(len, 2);
+        assert_eq!(start0, 0);
+        let (start_mid, _) = scrollbar_thumb(100, 45, 10, 20);
+        assert!(start_mid > 0 && start_mid < 18);
+        let (start_end, _) = scrollbar_thumb(100, 90, 10, 20);
+        assert_eq!(start_end, 18);
+    }
+
+    #[test]
+    fn split_scrollbar_column_reserves_right_edge() {
+        let band = Rect {
+            x: 0,
+            y: 1,
+            width: 80,
+            height: 20,
+        };
+        let (content, sb) = split_scrollbar_column(band);
+        assert_eq!(content.width, 79);
+        let sb = sb.expect("scrollbar");
+        assert_eq!(sb.x, 79);
+        assert_eq!(sb.width, 1);
+        assert_eq!(sb.height, 20);
     }
 }

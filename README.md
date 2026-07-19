@@ -241,7 +241,7 @@ Hints use deterministic two-key labels from the alphabet `asdfgqwertzxcvb` (for 
 
 After navigation or a link follow settles, a URL fragment such as `#section` moves the TUI selection to the matching component (`id`, then named anchor), expands collapsed ancestors, and scrolls it into view. Unmatched fragments keep the prior selection.
 
-The content pane uses a terminal-native ANSI-16 role palette (clearer heading ladder H1–H6, blue links, light-cyan forms, yellow hints) with reverse-video selection applied last. Colors inherit the terminal light/dark theme; override individual roles under `[theme]` in `tui.toml`. By default the markdown/content area has 1 column of left/right padding and is capped at 100 columns (centered; header and footer stay full width); press `w` for full width. Override under `[layout]` in `tui.toml`.
+The content pane uses a terminal-native ANSI-16 role palette (clearer heading ladder H1–H6, blue links, light-cyan forms, yellow hints) with reverse-video selection applied last. Colors inherit the terminal light/dark theme; override individual roles under `[theme]` in `tui.toml`. By default the markdown/content area has 1 column of left/right padding and is capped at 100 columns (centered; header and footer stay full width); press `w` for full width. A one-column Amp-style block scrollbar sits on the far right of the content band. Override layout under `[layout]` in `tui.toml`.
 
 Default reading mode is **prose** (markdown-like): no `▾ [main]` / `ol` / group chrome, fully flat lines. Press `zs` for **structure** (DOM-like outline). Wrap (`zw`) and structure (`zs`) are not shown in the header bar; toggle feedback appears in the status line.
 

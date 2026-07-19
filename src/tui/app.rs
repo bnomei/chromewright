@@ -277,10 +277,12 @@ fn run_loop(
         controller.synchronize_companion_state();
         let size = terminal.size().map_err(|e| e.to_string())?;
         // Content outer box is total height minus chrome (1) and status (1).
-        // Viewport matches the padded (+ optional max-width) content area used by render.
+        // Reserve 1 col for the right-edge scrollbar (matches render), then
+        // padding + optional max-width for the markdown viewport.
         let outer_h = size.height.saturating_sub(2);
+        let band_w = size.width.saturating_sub(1).max(1); // scrollbar column
         let (vw, vh) = layout.content_viewport_size(
-            size.width,
+            band_w,
             outer_h,
             controller.state.view.full_width,
         );

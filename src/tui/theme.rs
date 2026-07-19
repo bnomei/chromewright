@@ -254,6 +254,17 @@ impl TuiTheme {
         self.fg(ThemeRole::Muted)
     }
 
+    /// Scrollbar track: solid dim block (background fill, no glyphs).
+    pub fn scrollbar_track(&self) -> Style {
+        // DarkGray bg reads as a quiet rail on both light and dark terminals.
+        Style::default().bg(Color::DarkGray).fg(Color::DarkGray)
+    }
+
+    /// Scrollbar thumb: brighter solid block (Amp-style, no │/▐ line art).
+    pub fn scrollbar_thumb(&self) -> Style {
+        Style::default().bg(Color::Gray).fg(Color::Gray)
+    }
+
     pub fn status_error(&self) -> Style {
         self.chrome_error()
     }

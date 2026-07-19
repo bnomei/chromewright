@@ -43,6 +43,10 @@
 - Enter on a selected text input starts form edit mode (header shows `IN …`); Enter again commits the field without sending the form.
 - Render form controls inline with live values (staged Tab edits + active `IN` buffer with cursor); checkbox/radio toggle on Enter, select cycles options.
 
+### Added
+
+- Amp-style right-edge content scrollbar: solid block track/thumb (no line glyphs), outside the padded/capped markdown column.
+
 ### Changed
 
 - TUI browser tabs: `[` previous / `]` next; `q` quits (Ctrl-c still works).
