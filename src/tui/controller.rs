@@ -1349,6 +1349,7 @@ impl Controller {
 
     /// Toggle soft word-wrap. On by default; enabling clears horizontal pan.
     pub fn toggle_wrap(&mut self) {
+        let previous_view = self.state.view.clone();
         self.state.view.wrap = !self.state.view.wrap;
         if self.state.view.wrap {
             self.state.view.scroll_x = 0;
@@ -1356,7 +1357,11 @@ impl Controller {
         } else {
             self.state.view.set_status("wrap: off");
         }
-        self.after_projection_change();
+        if !self.after_projection_change() {
+            let error = self.state.view.status_message.clone();
+            self.state.view = previous_view;
+            self.state.view.status_message = error;
+        }
     }
 
     /// Toggle full-width content vs the configured `content_max_width` column.
@@ -1364,6 +1369,7 @@ impl Controller {
     /// Default is capped (readable column). Status notes when the cap is 0
     /// (always full). Actual geometry is applied on the next draw via layout.
     pub fn toggle_full_width(&mut self) {
+        let previous_view = self.state.view.clone();
         self.state.view.full_width = !self.state.view.full_width;
         if self.state.view.full_width {
             self.state.view.set_status("width: full");
@@ -1371,7 +1377,11 @@ impl Controller {
             self.state.view.set_status("width: capped");
         }
         // Viewport width changes on the next frame; reflow selection if wrap on.
-        self.after_projection_change();
+        if !self.after_projection_change() {
+            let error = self.state.view.status_message.clone();
+            self.state.view = previous_view;
+            self.state.view.status_message = error;
+        }
     }
 
     /// Queue opening the current page markdown in `$VISUAL` / `$EDITOR` / `vi`.
@@ -2669,6 +2679,43 @@ mod tests {
             InteractionMode::Hint(HintMode::Follow)
         ));
         assert_eq!(hint.hints.len(), 1);
+    }
+
+    #[test]
+    fn stale_selection_write_rolls_back_projection_toggles() {
+        let current = text_doc("2", "current", "current");
+        let current_ref = current.semantic_refs()[0].clone();
+        let stale = text_doc("1", "stale", "a long stale line that wraps");
+
+        for toggle in [
+            Controller::toggle_wrap as fn(&mut Controller),
+            Controller::toggle_full_width,
+        ] {
+            let mut ctl = Controller::new();
+            ctl.coordinator
+                .shared()
+                .publish_with_selection(current.clone(), Some(current_ref.clone()));
+            ctl.state.publish_page(stale.clone());
+            // Projection repair tries to select the local document's first ref;
+            // canonical state has already advanced to a different revision.
+            ctl.state.view.selection = None;
+            ctl.state.view.scroll_y = 4;
+            ctl.state.view.scroll_x = 3;
+            let wrap = ctl.state.view.wrap;
+            let full_width = ctl.state.view.full_width;
+
+            toggle(&mut ctl);
+
+            assert_eq!(ctl.state.view.wrap, wrap);
+            assert_eq!(ctl.state.view.full_width, full_width);
+            assert_eq!(ctl.state.view.scroll_y, 4);
+            assert_eq!(ctl.state.view.scroll_x, 3);
+            assert!(ctl.state.view.selection.is_none());
+            assert!(
+                ctl.state.view.status_message.is_some(),
+                "validation error remains visible"
+            );
+        }
     }
 
     #[test]
