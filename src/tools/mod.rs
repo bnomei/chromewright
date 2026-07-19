@@ -77,9 +77,9 @@ pub use core::{
 #[allow(unused_imports)]
 pub(crate) use core::{
     DocumentEnvelopeOptions, OPERATION_METRICS_METADATA_KEY, OperationMetrics, ResolvedTarget,
-    StaleCursorPolicy, TargetResolution, actionable_cursor_for_selector, build_document_envelope,
-    duration_micros, normalize_tool_outcome, resolve_target_with_cursor,
-    tool_result_from_browser_error, ToolEffect,
+    StaleCursorPolicy, TargetResolution, ToolEffect, actionable_cursor_for_selector,
+    build_document_envelope, duration_micros, normalize_tool_outcome, resolve_target_with_cursor,
+    tool_result_from_browser_error,
 };
 
 #[cfg(test)]

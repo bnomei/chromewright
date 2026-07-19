@@ -1101,9 +1101,9 @@ pub(crate) enum ToolEffect {
 
 fn explicit_tool_effect(name: &str) -> Option<ToolEffect> {
     match name {
-        "tui_render" | "tui_inspect" | "tui_selection_read" | "tui_attention_read"
-        | "extract" | "get_markdown" | "inspect_node" | "read_links" | "screenshot"
-        | "snapshot" | "tab_list" | "wait" => Some(ToolEffect::ReadOnly),
+        "tui_render" | "tui_inspect" | "tui_selection_read" | "tui_attention_read" | "extract"
+        | "get_markdown" | "inspect_node" | "read_links" | "screenshot" | "snapshot"
+        | "tab_list" | "wait" => Some(ToolEffect::ReadOnly),
         "tui_selection_update" | "tui_attention_set" | "tui_attention_clear" => {
             Some(ToolEffect::CoordinationOnly)
         }
@@ -1318,24 +1318,52 @@ mod tests {
     fn registered_core_and_tui_tools_have_explicit_effects() {
         let mut names = ToolRegistry::with_all_tools().list_names();
         #[cfg(feature = "tui")]
-        names.extend(crate::tools::tui::NAMES.iter().map(|name| (*name).to_string()));
+        names.extend(
+            crate::tools::tui::NAMES
+                .iter()
+                .map(|name| (*name).to_string()),
+        );
         let missing: Vec<_> = names
             .into_iter()
             .filter(|name| explicit_tool_effect(name).is_none())
             .collect();
-        assert!(missing.is_empty(), "tools missing explicit effects: {missing:?}");
+        assert!(
+            missing.is_empty(),
+            "tools missing explicit effects: {missing:?}"
+        );
     }
 
     #[test]
     fn tool_effect_classification_preserves_serialization_policy() {
         let registry = ToolRegistry::new();
-        for name in ["tui_selection_update", "tui_attention_set", "tui_attention_clear"] {
-            assert_eq!(registry.effect(name), ToolEffect::CoordinationOnly, "{name}");
+        for name in [
+            "tui_selection_update",
+            "tui_attention_set",
+            "tui_attention_clear",
+        ] {
+            assert_eq!(
+                registry.effect(name),
+                ToolEffect::CoordinationOnly,
+                "{name}"
+            );
         }
         for name in [
-            "tui_refresh", "set_viewport", "switch_tab", "go_back", "go_forward", "hover",
-            "input", "navigate", "new_tab", "scroll", "select", "click", "close",
-            "close_tab", "evaluate", "press_key",
+            "tui_refresh",
+            "set_viewport",
+            "switch_tab",
+            "go_back",
+            "go_forward",
+            "hover",
+            "input",
+            "navigate",
+            "new_tab",
+            "scroll",
+            "select",
+            "click",
+            "close",
+            "close_tab",
+            "evaluate",
+            "press_key",
         ] {
             assert_eq!(registry.effect(name), ToolEffect::BrowserMutation, "{name}");
         }
