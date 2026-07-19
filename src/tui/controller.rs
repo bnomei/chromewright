@@ -723,6 +723,8 @@ impl Controller {
     fn refresh_history_availability<D: PageDriver>(&mut self, driver: &mut D) {
         let (back, forward) = driver.history_availability().unwrap_or((false, false));
         self.state.set_history_availability(back, forward);
+        let tab_position = driver.tab_position().unwrap_or(None);
+        self.state.set_tab_position(tab_position);
     }
 
     fn anchor_offset_in_viewport(
@@ -2197,6 +2199,7 @@ mod tests {
         render_loading_and_run(&mut ctl, &mut driver).expect("close last");
         assert!(ctl.state.page.is_none());
         assert!(ctl.state.lifecycle.is_ready());
+        assert!(ctl.state.tab_position.is_none());
         assert_eq!(
             ctl.state.view.status_message.as_deref(),
             Some("no open tabs — press t for a new tab")
@@ -2209,6 +2212,20 @@ mod tests {
         assert!(ctl.state.page.is_some());
         assert_eq!(ctl.state.url(), "about:blank");
         assert!(!driver.open_tabs.is_empty());
+        assert_eq!(ctl.state.tab_position, Some((1, 1)));
+    }
+
+    #[test]
+    fn capture_refreshes_tab_position_for_chrome() {
+        let d1 = text_doc("1", "a", "first");
+        let mut driver = FakePageDriver::new(vec![d1.clone()]);
+        driver.open_tab_count = 5;
+        driver.active_tab_index = 2;
+        let mut ctl = Controller::new();
+        ctl.state.publish_page(d1);
+        ctl.reload();
+        render_loading_and_run(&mut ctl, &mut driver).expect("reload");
+        assert_eq!(ctl.state.tab_position, Some((2, 5)));
     }
 
     #[test]

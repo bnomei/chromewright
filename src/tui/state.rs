@@ -188,6 +188,9 @@ pub struct TuiState {
     pub view: ViewState,
     pub can_go_back: bool,
     pub can_go_forward: bool,
+    /// Active tab ordinal among open tabs as `(index_1based, count)`, when known.
+    /// Shown in chrome as `2/5` left of the history arrows.
+    pub tab_position: Option<(usize, usize)>,
     pub should_quit: bool,
     /// Clipboard fallback text when OSC 52 is unavailable.
     pub clipboard_fallback: Option<String>,
@@ -202,6 +205,7 @@ impl Default for TuiState {
             view: ViewState::default(),
             can_go_back: false,
             can_go_forward: false,
+            tab_position: None,
             should_quit: false,
             clipboard_fallback: None,
         }
@@ -305,6 +309,7 @@ impl TuiState {
         };
         self.can_go_back = false;
         self.can_go_forward = false;
+        self.tab_position = None;
         self.clipboard_fallback = None;
         self.view.set_status("no open tabs — press t for a new tab");
     }
@@ -337,6 +342,19 @@ impl TuiState {
     pub fn set_history_availability(&mut self, can_go_back: bool, can_go_forward: bool) {
         self.can_go_back = can_go_back;
         self.can_go_forward = can_go_forward;
+    }
+
+    /// Set the chrome tab ordinal (`2/5`) from the live browser tab list.
+    ///
+    /// `index` is 1-based. Pass `None` when there are no open tabs or the
+    /// driver cannot determine position.
+    pub fn set_tab_position(&mut self, position: Option<(usize, usize)>) {
+        self.tab_position = match position {
+            Some((index, count)) if count > 0 && index >= 1 && index <= count => {
+                Some((index, count))
+            }
+            _ => None,
+        };
     }
 
     /// Reconcile selection/collapse/search by exact identity after recapture.

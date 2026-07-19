@@ -60,6 +60,13 @@ pub trait PageDriver {
     fn history_availability(&mut self) -> Result<(bool, bool)> {
         Ok((false, false))
     }
+
+    /// Active tab ordinal among open tabs as `(index_1based, count)`.
+    ///
+    /// Return `None` when there are no tabs or position cannot be determined.
+    fn tab_position(&mut self) -> Result<Option<(usize, usize)>> {
+        Ok(None)
+    }
 }
 
 /// Production driver over a shared [`BrowserSession`].
@@ -242,6 +249,19 @@ impl PageDriver for SessionPageDriver<'_> {
                 )
             })
             .unwrap_or((false, false)))
+    }
+
+    fn tab_position(&mut self) -> Result<Option<(usize, usize)>> {
+        let tabs = self.session.list_tabs()?;
+        if tabs.is_empty() {
+            return Ok(None);
+        }
+        let index = tabs
+            .iter()
+            .position(|t| t.active)
+            .map(|i| i + 1)
+            .unwrap_or(1);
+        Ok(Some((index, tabs.len())))
     }
 }
 
@@ -501,6 +521,8 @@ pub struct FakePageDriver {
     pub tab_ops: Vec<&'static str>,
     /// Simulated open-tab count for empty-session close tests.
     pub open_tab_count: usize,
+    /// 1-based active tab index for chrome `2/5` (clamped to `open_tab_count`).
+    pub active_tab_index: usize,
     pub history: (bool, bool),
 }
 
@@ -523,6 +545,7 @@ impl Default for FakePageDriver {
             open_tabs: Vec::new(),
             tab_ops: Vec::new(),
             open_tab_count: 1,
+            active_tab_index: 1,
             history: (false, false),
         }
     }
@@ -625,6 +648,7 @@ impl PageDriver for FakePageDriver {
     fn open_tab(&mut self, url: &str) -> Result<()> {
         self.open_tabs.push(url.to_string());
         self.open_tab_count = self.open_tab_count.saturating_add(1);
+        self.active_tab_index = self.open_tab_count.max(1);
         // Always provide a captureable blank page for the new tab so empty
         // sessions and multi-tab tests can settle after `t`.
         let blank = SemanticDocument::empty(DocumentMetadata {
@@ -647,6 +671,9 @@ impl PageDriver for FakePageDriver {
         if self.open_tab_count == 0 {
             self.pages.clear();
             self.page_index = 0;
+            self.active_tab_index = 0;
+        } else {
+            self.active_tab_index = self.active_tab_index.min(self.open_tab_count).max(1);
         }
         Ok(())
     }
@@ -657,11 +684,25 @@ impl PageDriver for FakePageDriver {
 
     fn next_tab(&mut self) -> Result<()> {
         self.tab_ops.push("next");
+        if self.open_tab_count > 0 {
+            self.active_tab_index = if self.active_tab_index >= self.open_tab_count {
+                1
+            } else {
+                self.active_tab_index + 1
+            };
+        }
         Ok(())
     }
 
     fn prev_tab(&mut self) -> Result<()> {
         self.tab_ops.push("prev");
+        if self.open_tab_count > 0 {
+            self.active_tab_index = if self.active_tab_index <= 1 {
+                self.open_tab_count
+            } else {
+                self.active_tab_index - 1
+            };
+        }
         Ok(())
     }
 
@@ -709,5 +750,13 @@ impl PageDriver for FakePageDriver {
 
     fn history_availability(&mut self) -> Result<(bool, bool)> {
         Ok(self.history)
+    }
+
+    fn tab_position(&mut self) -> Result<Option<(usize, usize)>> {
+        if self.open_tab_count == 0 {
+            return Ok(None);
+        }
+        let index = self.active_tab_index.clamp(1, self.open_tab_count);
+        Ok(Some((index, self.open_tab_count)))
     }
 }

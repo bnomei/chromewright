@@ -191,7 +191,7 @@ chromewright tui
 chromewright --headless tui
 ```
 
-Keyboard bindings are not shown in the terminal chrome. Defaults are Vimari-compatible. Multi-key sequences such as `gg` and `gi` wait for the full chord; an unbound prefix is rejected rather than re-firing the last key.
+The header is a single browser-like bar: tab ordinal (`2/5`) left of the history arrows, then location/title, with a lifecycle glyph on the right. Keyboard bindings are not shown in the terminal chrome. Defaults are Vimari-compatible. Multi-key sequences such as `gg` and `gi` wait for the full chord; an unbound prefix is rejected rather than re-firing the last key.
 
 ### Default keymap
 

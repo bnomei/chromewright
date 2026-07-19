@@ -41,7 +41,7 @@ pub fn draw(frame: &mut Frame, controller: &Controller) {
     }
 }
 
-/// Single-line browser chrome: history · location · title · lifecycle/mode (color only).
+/// Single-line browser chrome: tabs · history · location · title · lifecycle/mode (color only).
 fn draw_chrome(frame: &mut Frame, area: Rect, controller: &Controller, theme: &TuiTheme) {
     let state = &controller.state;
     let width = area.width as usize;
@@ -55,8 +55,15 @@ fn draw_chrome(frame: &mut Frame, area: Rect, controller: &Controller, theme: &T
         Lifecycle::Error { .. } => theme.chrome_error(),
     };
 
-    // Left: back/forward + location (or active prompt).
+    // Left: tab ordinal · back/forward + location (or active prompt).
     let mut spans: Vec<Span> = Vec::new();
+    let tab_label = state
+        .tab_position
+        .map(|(index, count)| format!("{index}/{count}"));
+    if let Some(ref label) = tab_label {
+        spans.push(Span::styled(label.clone(), theme.muted()));
+        spans.push(Span::raw(" "));
+    }
     spans.push(Span::styled(
         if state.can_go_back { "◀" } else { "◁" },
         if state.can_go_back {
@@ -117,7 +124,11 @@ fn draw_chrome(frame: &mut Frame, area: Rect, controller: &Controller, theme: &T
     };
 
     // Middle: prefer URL; append title in dim text when space remains.
-    let left_plain_prefix = 4usize; // "◀ ▶ " roughly 4 cells
+    // "2/5 ◀ ▶ " or "◀ ▶ " depending on whether tab position is known.
+    let left_plain_prefix = tab_label
+        .as_ref()
+        .map(|l| l.chars().count() + 1 + 4)
+        .unwrap_or(4);
     let budget = width.saturating_sub(left_plain_prefix + right_width);
     let title = state.title();
     let mut mid = location;
@@ -522,6 +533,10 @@ fn lifecycle_glyph(lifecycle: &Lifecycle) -> &'static str {
 #[allow(dead_code)]
 pub fn chrome_lines(controller: &Controller) -> Vec<String> {
     let state = &controller.state;
+    let tabs = state
+        .tab_position
+        .map(|(i, n)| format!("{i}/{n} "))
+        .unwrap_or_default();
     let back = if state.can_go_back { "◀" } else { "◁" };
     let fwd = if state.can_go_forward { "▶" } else { "▷" };
     let life = lifecycle_glyph(&state.lifecycle);
@@ -538,7 +553,7 @@ pub fn chrome_lines(controller: &Controller) -> Vec<String> {
     } else {
         format!("{} · {}", state.url(), state.title())
     };
-    vec![format!("{back} {fwd} {mid}  {}", flags.join(" "))]
+    vec![format!("{tabs}{back} {fwd} {mid}  {}", flags.join(" "))]
 }
 
 #[cfg(test)]
@@ -571,6 +586,31 @@ mod tests {
             );
             assert!(!line.contains("ready"), "no verbose ready text: {line}");
         }
+    }
+
+    #[test]
+    fn chrome_shows_tab_position_left_of_history() {
+        let mut ctl = Controller::new();
+        let doc = SemanticDocument::empty(DocumentMetadata {
+            document_id: "d".into(),
+            revision: "1".into(),
+            url: "https://example.com/".into(),
+            title: "T".into(),
+            ready_state: "complete".into(),
+            frames: vec![],
+        })
+        .unwrap();
+        ctl.state.publish_page(doc);
+        ctl.state.set_tab_position(Some((2, 5)));
+        ctl.state.set_history_availability(true, false);
+        let line = &chrome_lines(&ctl)[0];
+        assert!(
+            line.starts_with("2/5 ◀ ▷") || line.contains("2/5 ◀"),
+            "tab ordinal should sit left of history arrows: {line}"
+        );
+        let tabs_at = line.find("2/5").expect("tab label");
+        let back_at = line.find('◀').expect("back arrow");
+        assert!(tabs_at < back_at, "2/5 before ◀: {line}");
     }
 
     #[test]

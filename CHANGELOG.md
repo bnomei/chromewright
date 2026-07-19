@@ -16,6 +16,7 @@
 
 ### Changed
 
+- Show the active tab ordinal in the TUI header as `2/5` immediately left of the history arrows.
 - Align TUI muscle memory with [md-tui](https://github.com/henriklovhaug/md-tui) where safe: `s`/`S` link hints (aliases of `f`/`F`), arrow keys for selection and half-page pan, `b` history back; keep browser-first `f`/`h`/`l`/`t`/`o`/`q`. Keymap actions may bind multiple sequences; TOML overlay still replaces the whole action.
 - Drop the redundant `tui_query` companion alias; use `tui_render` for semantic markdown.
 - Make the TUI inspect panel a compact CSS-selector-first developer view (identity, action fields, ref/rev) without Debug/`None` noise.
@@ -43,7 +44,7 @@
 - Exit link-hint mode after a successful current-tab follow (`f`); new-tab hints (`F`) still chain until Esc.
 - Anchor the inspect panel under the selected block and refresh it as selection moves until Esc.
 - Add prose-only heading spacing (2 lines above h1/h2, 1 above h3+, 2 after h1 unless h2 follows); spacer rows are non-selectable and omitted in structure mode.
-- Collapse TUI chrome to a single browser-like header bar (history, location, title, lifecycle glyph) using color only; omit wrap/structure descriptors from the header.
+- Collapse TUI chrome to a single browser-like header bar (tab ordinal, history, location, title, lifecycle glyph) using color only; omit wrap/structure descriptors from the header.
 - Add `Ctrl-d` / `Ctrl-u` to move selection by half a page (`d`/`u` remain view-only pan).
 - Add `O` (`edit_url`) to open the location bar prefilled with the current URL for editing; `o` still starts empty.
 
