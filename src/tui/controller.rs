@@ -15,6 +15,7 @@ use crate::tui::driver::PageDriver;
 use crate::tui::hints::{HintMatch, LinkHint, assign_hints, match_hint};
 use crate::tui::shared::SharedTuiState;
 use crate::tui::state::{HintMode, InputKind, InteractionMode, Lifecycle, TuiState};
+use crate::tui::url_history::UrlHistory;
 
 /// Rows kept above a `#fragment` target when scrolling it into view.
 const FRAGMENT_VIEWPORT_TOP_MARGIN: usize = 5;
@@ -44,6 +45,8 @@ pub struct Controller {
     /// Browser work that may begin only after the event loop has successfully
     /// drawn a Loading frame.
     pending_page_action: Option<PendingPageAction>,
+    /// Local URL bar history for Tab autocomplete (not Chrome profile history).
+    url_history: UrlHistory,
 }
 
 #[derive(Debug)]
@@ -150,6 +153,7 @@ impl Controller {
             shared,
             hints: Vec::new(),
             pending_page_action: None,
+            url_history: UrlHistory::load_default(),
         }
     }
 
@@ -168,6 +172,7 @@ impl Controller {
             shared,
             hints: Vec::new(),
             pending_page_action: None,
+            url_history: UrlHistory::new(),
         }
     }
 
@@ -1001,6 +1006,8 @@ impl Controller {
                     self.ensure_visible(idx, lines.len());
                 }
             }
+            // Remember successful navigations for URL-bar Tab completion.
+            self.url_history.record(&document.document.url);
         }
         // Drop stale inspect text; sticky follow rebuilds for the new selection.
         self.state.view.inspect_text = None;
@@ -1523,6 +1530,32 @@ impl Controller {
         }
         let buffer = self.state.url().to_string();
         self.state.mode = InteractionMode::Input(InputKind::Url { buffer });
+    }
+
+    /// Tab / Shift-Tab while editing the URL bar: accept or cycle history matches.
+    ///
+    /// Returns `true` when the buffer was updated. Uses local TUI history (URLs
+    /// successfully opened in this product), not Chrome profile omnibox data.
+    pub fn complete_url_from_history(&mut self, forward: bool) -> bool {
+        let InteractionMode::Input(InputKind::Url { buffer }) = &self.state.mode else {
+            return false;
+        };
+        let Some(next) = self.url_history.complete(buffer, forward) else {
+            self.state.view.set_status("no url history match");
+            return false;
+        };
+        if let InteractionMode::Input(InputKind::Url { buffer }) = &mut self.state.mode {
+            *buffer = next;
+        }
+        true
+    }
+
+    /// Ghost suffix for the current URL buffer (for chrome display).
+    pub fn url_completion_ghost(&self) -> Option<String> {
+        let InteractionMode::Input(InputKind::Url { buffer }) = &self.state.mode else {
+            return None;
+        };
+        self.url_history.ghost_suffix(buffer)
     }
 
     /// Enter forward-search input mode (`/`).
@@ -2147,6 +2180,32 @@ mod tests {
         assert!(ctl.has_pending_page_action());
         ctl.acknowledge_loading_frame();
         ctl.perform_pending_page_action(driver)
+    }
+
+    #[test]
+    fn url_bar_tab_completes_from_local_history() {
+        let mut ctl = Controller::new();
+        ctl.url_history.record("https://example.com/docs");
+        ctl.url_history.record("https://example.com/blog");
+        ctl.enter_url_input();
+        if let InteractionMode::Input(InputKind::Url { buffer }) = &mut ctl.state.mode {
+            *buffer = "https://ex".into();
+        }
+        assert!(ctl.complete_url_from_history(true));
+        let InteractionMode::Input(InputKind::Url { buffer }) = &ctl.state.mode else {
+            panic!("expected url mode");
+        };
+        assert!(
+            buffer.starts_with("https://example.com/"),
+            "expected completion, got {buffer}"
+        );
+        let first = buffer.clone();
+        assert!(ctl.complete_url_from_history(true));
+        let InteractionMode::Input(InputKind::Url { buffer }) = &ctl.state.mode else {
+            panic!("expected url mode");
+        };
+        assert_ne!(*buffer, first, "Tab should cycle to another match");
+        assert!(ctl.url_completion_ghost().is_none() || buffer.starts_with("https://"));
     }
 
     #[test]

@@ -112,11 +112,26 @@ impl Dispatcher {
                 }
                 Action::Confirm => return self.confirm_input(controller),
                 Action::TabNext => {
-                    controller.tab_focus(true);
+                    // URL bar: Tab accepts/cycles history. Form fields: Tab moves focus.
+                    if matches!(
+                        controller.state.mode,
+                        InteractionMode::Input(InputKind::Url { .. })
+                    ) {
+                        let _ = controller.complete_url_from_history(true);
+                    } else {
+                        controller.tab_focus(true);
+                    }
                     return DispatchOutcome::Redraw;
                 }
                 Action::TabPrev => {
-                    controller.tab_focus(false);
+                    if matches!(
+                        controller.state.mode,
+                        InteractionMode::Input(InputKind::Url { .. })
+                    ) {
+                        let _ = controller.complete_url_from_history(false);
+                    } else {
+                        controller.tab_focus(false);
+                    }
                     return DispatchOutcome::Redraw;
                 }
                 Action::Quit => return self.dispatch_action(controller, action),

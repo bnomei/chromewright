@@ -130,21 +130,25 @@ fn draw_chrome(frame: &mut Frame, area: Rect, controller: &Controller, theme: &T
     spans.push(Span::raw(" "));
 
     // Search + link-hint live in the footer cmdline, not the location bar.
-    let (location, location_style) = match &state.mode {
-        InteractionMode::Input(InputKind::Url { buffer }) => {
-            (format!("URL {buffer}"), theme.chrome_mode())
-        }
+    // URL mode may show a dim ghost suffix from local history (Tab accepts).
+    let url_ghost = controller.url_completion_ghost();
+    let (location, location_style, ghost_suffix) = match &state.mode {
+        InteractionMode::Input(InputKind::Url { buffer }) => (
+            format!("URL {buffer}"),
+            theme.chrome_mode(),
+            url_ghost,
+        ),
         InteractionMode::Input(InputKind::Form { buffer, .. }) => {
-            (format!("IN {buffer}"), theme.chrome_mode())
+            (format!("IN {buffer}"), theme.chrome_mode(), None)
         }
         InteractionMode::Input(InputKind::Search { .. })
         | InteractionMode::Hint(_)
         | InteractionMode::Normal => {
             let url = state.url();
             if url.is_empty() {
-                (String::new(), theme.muted())
+                (String::new(), theme.muted(), None)
             } else {
-                (url.to_string(), theme.muted())
+                (url.to_string(), theme.muted(), None)
             }
         }
     };
@@ -184,9 +188,21 @@ fn draw_chrome(frame: &mut Frame, area: Rect, controller: &Controller, theme: &T
     {
         mid = format!("{mid} · {title}");
     }
-    mid = truncate(&mid, budget);
+    // Leave room for a short ghost completion when editing the URL.
+    let ghost_budget = ghost_suffix
+        .as_ref()
+        .map(|g| g.chars().count().min(budget / 2))
+        .unwrap_or(0);
+    let mid_budget = budget.saturating_sub(ghost_budget);
+    mid = truncate(&mid, mid_budget);
 
     spans.push(Span::styled(mid, location_style));
+    if let Some(ghost) = ghost_suffix.filter(|g| !g.is_empty()) {
+        let ghost = truncate(&ghost, ghost_budget.max(1));
+        if !ghost.is_empty() {
+            spans.push(Span::styled(ghost, theme.muted()));
+        }
+    }
 
     // Pad then right cluster so flags sit at the trailing edge.
     let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();

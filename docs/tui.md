@@ -42,7 +42,7 @@ Vimari plus non-conflicting [md-tui](https://github.com/henriklovhaug/md-tui) al
 selection, `h`/`l` horizontal pan, `u`/`d` or left/right arrows half-page view pan,
 `Ctrl-u`/`Ctrl-d` selection by half page, `gg`/`G` document ends, `gi` first form field
 (edit mode), `H`/`b`/`L` history, `r` reload, `w`/`q`/`x`/`t` tab actions, `o`/`O` URL
-entry, `/` forward search, `n` next match, `N` previous match, Space collapse
+entry (Tab completes from local URL history), `/` forward search, `n` next match, `N` previous match, Space collapse
 (structure mode only), `zw` toggle soft word-wrap (on by default), `zs` toggle prose
 vs structure projection (prose by default; Vim-style `z`-prefix view commands), `i`
 inspection, `y` copy (link/image URL or block text), `Y` semantic-ref copy, Tab/Shift-Tab

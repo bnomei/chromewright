@@ -14,6 +14,10 @@
 - Move TUI selection to in-page fragment targets (`#id`) after capture, including named anchors and `#top`.
 - Add prose (default) vs structure content projection toggled with `zs`; prose hides landmark/list/group chrome, flattens indent, disables collapse, and rebinds hidden container selection to the first visible descendant.
 
+### Added
+
+- URL bar Tab autocomplete from local TUI history (URLs successfully opened): ghost suffix while typing, Tab accepts/cycles, Shift-Tab cycles backward. Stored under `$XDG_DATA_HOME/chromewright/url_history` (not Chrome profile omnibox data).
+
 ### Changed
 
 - Enter on a text field (and Tab-away / blur) writes the value into the live DOM and same-document patches so live-search/filter UIs work without a submit button. Typing stays local until complete; submit buttons still send full multi-field forms.

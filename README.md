@@ -219,8 +219,8 @@ Browser-first (Vimari) defaults, with [md-tui](https://github.com/henriklovhaug/
 | `q` | `prev_tab` | Switch to the previous tab. (Not quit; use `Ctrl-c`.) |
 | `x` | `close_tab` | Close the current tab. |
 | `t` | `new_tab` | Open a new tab. |
-| `o` | `open_url` | Open the URL entry prompt with an empty buffer. |
-| `O` | `edit_url` | Open the URL entry prompt prefilled with the current address (edit from the end). |
+| `o` | `open_url` | Open the URL entry prompt with an empty buffer. While editing, **Tab** / **Shift-Tab** accept or cycle local URL history (ghost suffix shows the best match). |
+| `O` | `edit_url` | Open the URL entry prompt prefilled with the current address (edit from the end). Same Tab history completion as `o`. |
 | `/` | `search` | Start forward search by exact semantic content. (md-tui also binds `f` to search; we keep `f` for link hints.) |
 | `n` | `search_next` | Repeat the last search forward. |
 | `N` | `search_previous` | Repeat the last search backward. |

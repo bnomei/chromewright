@@ -25,6 +25,7 @@ mod render;
 mod shared;
 mod state;
 mod theme;
+mod url_history;
 
 pub use action::Action;
 pub use app::{TuiOptions, run_tui, run_tui_with_config};
