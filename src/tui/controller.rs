@@ -79,12 +79,15 @@ enum PageOperation {
 enum PageActionOutcome {
     /// Fresh semantic capture to publish (navigation, form submit, real navigation).
     Captured(Box<SemanticDocument>),
-    /// Same-document activation: recapture DOM but restore scroll from the top
-    /// viewport line (clipboard copy, in-page toggles that flip labels).
+    /// Same-document activation: recapture DOM. Scroll policy depends on whether
+    /// this was an in-page `#` jump vs a plain in-page click (clipboard copy).
     Patched {
         document: Box<SemanticDocument>,
         top_anchor: Option<ViewportTopAnchor>,
         previous_selection: Option<SemanticRef>,
+        /// When set, jump to this fragment after publish (from link `href` or
+        /// post-click URL). When `None`, pin the top viewport line.
+        jump_fragment: Option<String>,
     },
     /// Focus-only / no-op: keep the published page without capturing.
     Retained,
@@ -555,8 +558,16 @@ impl Controller {
                     // Snapshot identity + top viewport line before the click so
                     // JS-only actions (clipboard copy) can recapture without
                     // jumping the markdown view when the page did not navigate.
+                    // Same-page `#fragment` links also look "same document" once
+                    // the fragment is stripped — those must jump, not pin top.
                     let before_id = document.document.document_id.clone();
                     let before_url = document.document.url.clone();
+                    // Prefer the link's own href fragment when present so we
+                    // still jump if the post-click capture is slow to show #hash.
+                    let link_fragment = document
+                        .resolve(&semantic_ref)
+                        .ok()
+                        .and_then(link_href_fragment);
                     let top_anchor = {
                         let lines = self.lines_for_document(&document);
                         top_viewport_anchor(&lines, self.state.view.scroll_y)
@@ -577,13 +588,18 @@ impl Controller {
                                 && urls_match_for_activate(&meta.url, &before_url)
                         });
                     if same_document {
-                        // Same-doc patch path: settle + capture, restore top line.
+                        // Same-doc patch path: settle + capture; scroll policy
+                        // decided in finish_same_document_patch (fragment vs top).
                         driver.wait_settle().map_err(|e| e.to_string())?;
                         let doc = Self::capture_with_metadata_barrier(driver)?;
+                        let jump_fragment = link_fragment
+                            .or_else(|| url_fragment(&doc.document.url))
+                            .filter(|f| !f.is_empty());
                         return Ok(Some(PageActionOutcome::Patched {
                             document: Box::new(doc),
                             top_anchor,
                             previous_selection,
+                            jump_fragment,
                         }));
                     }
                 }
@@ -610,8 +626,14 @@ impl Controller {
                 document,
                 top_anchor,
                 previous_selection,
+                jump_fragment,
             })) => {
-                self.finish_same_document_patch(*document, top_anchor, previous_selection);
+                self.finish_same_document_patch(
+                    *document,
+                    top_anchor,
+                    previous_selection,
+                    jump_fragment,
+                );
                 self.refresh_history_availability(driver);
                 Ok(())
             }
@@ -683,17 +705,18 @@ impl Controller {
         Err(last_err)
     }
 
-    /// Publish a same-document recapture while pinning the top visible line.
+    /// Publish a same-document recapture.
     ///
-    /// Used after in-page button activates (clipboard copy, label toggles).
-    /// Unlike [`Self::finish_capture`], this never calls `ensure_visible` on
-    /// the selection — scroll is restored from the pre-click top viewport
-    /// anchor so the markdown view does not jump.
+    /// - If `jump_fragment` is set (in-page `#section` link): jump to that
+    ///   target with the usual top margin — do **not** pin the old top.
+    /// - Otherwise (clipboard copy, label toggles): pin the pre-click top
+    ///   viewport line and never `ensure_visible(selection)`.
     fn finish_same_document_patch(
         &mut self,
         doc: SemanticDocument,
         top_anchor: Option<ViewportTopAnchor>,
         previous_selection: Option<SemanticRef>,
+        jump_fragment: Option<String>,
     ) {
         let prev_scroll = self.state.view.scroll_y;
 
@@ -716,7 +739,7 @@ impl Controller {
             .search_index
             .min(search_matches.len().saturating_sub(1));
 
-        // Selection: rebind if the identity survives; otherwise keep none.
+        // Selection: rebind if the identity survives; fragment path may replace it.
         let selection = previous_selection.and_then(|prev| doc.rebind_surviving(&prev).ok());
 
         // Attention: drop if it no longer resolves by identity.
@@ -756,17 +779,28 @@ impl Controller {
             self.state.view.attention_paint = subtree_refs(document, reference);
         }
 
-        // Restore scroll from the top-of-viewport anchor (not selection).
-        let lines = self
-            .state
-            .document()
-            .map(|d| self.lines_for_document(d))
-            .unwrap_or_default();
-        let scroll_y = if let Some(anchor) = top_anchor.as_ref() {
-            if let Some(document) = self.state.document() {
-                if let Ok(rebound) = document.rebind_surviving(&anchor.semantic_ref) {
-                    if let Some(block_start) = line_index_of(&lines, &rebound) {
-                        block_start.saturating_add(anchor.wrap_row)
+        if let Some(fragment) = jump_fragment.filter(|f| !f.is_empty()) {
+            // In-page `#` navigation: select + scroll to the fragment target.
+            // Prefer the explicit fragment (from link href) over whatever the
+            // capture URL happened to contain.
+            if let Some(document) = self.state.document().cloned() {
+                self.select_fragment_target(&document, &fragment);
+            }
+        } else {
+            // Plain same-doc click: restore scroll from the top-of-viewport anchor.
+            let lines = self
+                .state
+                .document()
+                .map(|d| self.lines_for_document(d))
+                .unwrap_or_default();
+            let scroll_y = if let Some(anchor) = top_anchor.as_ref() {
+                if let Some(document) = self.state.document() {
+                    if let Ok(rebound) = document.rebind_surviving(&anchor.semantic_ref) {
+                        if let Some(block_start) = line_index_of(&lines, &rebound) {
+                            block_start.saturating_add(anchor.wrap_row)
+                        } else {
+                            prev_scroll
+                        }
                     } else {
                         prev_scroll
                     }
@@ -775,13 +809,11 @@ impl Controller {
                 }
             } else {
                 prev_scroll
-            }
-        } else {
-            prev_scroll
-        };
-        self.state.view.scroll_y = scroll_y;
-        self.state.clamp_scroll(lines.len());
-        // Intentionally no ensure_visible(selection) — that would yank the view.
+            };
+            self.state.view.scroll_y = scroll_y;
+            self.state.clamp_scroll(lines.len());
+            // Intentionally no ensure_visible(selection) — that would yank the view.
+        }
 
         let document = self.state.document().expect("patch published").clone();
         let selection = self.state.view.selection.clone();
@@ -1006,7 +1038,21 @@ impl Controller {
 /// Fragment portion of a URL without the leading `#`, if any.
 fn url_fragment(url: &str) -> Option<String> {
     let hash = url.find('#')?;
-    Some(url[hash + 1..].to_string())
+    let frag = &url[hash + 1..];
+    if frag.is_empty() {
+        None
+    } else {
+        Some(frag.to_string())
+    }
+}
+
+/// Fragment from a link component's `href` (`#sec` or `…#sec`), if any.
+fn link_href_fragment(component: &crate::semantic::SemanticComponent) -> Option<String> {
+    use crate::semantic::SemanticKind;
+    if component.kind != SemanticKind::Link {
+        return None;
+    }
+    url_fragment(component.attrs.href.as_deref()?)
 }
 
 // Re-open Controller impl block for pure view operations.
@@ -3172,6 +3218,197 @@ mod tests {
             options: vec![],
             children: vec![],
         }
+    }
+
+    #[test]
+    fn same_page_hash_link_jumps_to_fragment() {
+        // Enter on `#sec` must scroll to the heading, not pin the old top line
+        // (same-document patch path used to break this).
+        let url = "https://example.com/docs";
+        let mut nodes = Vec::new();
+        for i in 0..10 {
+            nodes.push(raw_text(&format!("p{i}"), &format!("paragraph {i}")));
+        }
+        nodes.push(RawSemanticNode {
+            kind: "heading".into(),
+            tag: Some("h2".into()),
+            id: Some("sec".into()),
+            unique_id: true,
+            selector: None,
+            text: Some("Target section".into()),
+            href: None,
+            landmark: None,
+            heading_level: Some(2),
+            ordered: None,
+            label: None,
+            src: None,
+            alt: None,
+            name: None,
+            value: None,
+            input_type: None,
+            placeholder: None,
+            checked: None,
+            disabled: None,
+            required: None,
+            readonly: None,
+            multiple: None,
+            button_type: None,
+            options: vec![],
+            children: vec![],
+        });
+        nodes.push(RawSemanticNode {
+            kind: "link".into(),
+            tag: Some("a".into()),
+            id: Some("toc".into()),
+            unique_id: true,
+            selector: None,
+            text: Some("Jump".into()),
+            href: Some("#sec".into()),
+            landmark: None,
+            heading_level: None,
+            ordered: None,
+            label: None,
+            src: None,
+            alt: None,
+            name: None,
+            value: None,
+            input_type: None,
+            placeholder: None,
+            checked: None,
+            disabled: None,
+            required: None,
+            readonly: None,
+            multiple: None,
+            button_type: None,
+            options: vec![],
+            children: vec![],
+        });
+        let doc = normalize_fixture(meta("main:1", url), nodes).expect("doc");
+        let heading = doc
+            .components()
+            .find(|c| c.attrs.element_id.as_deref() == Some("sec"))
+            .unwrap()
+            .semantic_ref
+            .clone();
+        let link = doc
+            .components()
+            .find(|c| c.attrs.element_id.as_deref() == Some("toc"))
+            .unwrap()
+            .semantic_ref
+            .clone();
+
+        // After click, same doc with fragment in URL (browser hash update).
+        let mut after_meta = meta("main:2", url);
+        after_meta.url = format!("{url}#sec");
+        let after_nodes = {
+            // Rebuild identical tree under new revision/url for capture.
+            let mut n = Vec::new();
+            for i in 0..10 {
+                n.push(raw_text(&format!("p{i}"), &format!("paragraph {i}")));
+            }
+            n.push(RawSemanticNode {
+                kind: "heading".into(),
+                tag: Some("h2".into()),
+                id: Some("sec".into()),
+                unique_id: true,
+                selector: None,
+                text: Some("Target section".into()),
+                href: None,
+                landmark: None,
+                heading_level: Some(2),
+                ordered: None,
+                label: None,
+                src: None,
+                alt: None,
+                name: None,
+                value: None,
+                input_type: None,
+                placeholder: None,
+                checked: None,
+                disabled: None,
+                required: None,
+                readonly: None,
+                multiple: None,
+                button_type: None,
+                options: vec![],
+                children: vec![],
+            });
+            n.push(RawSemanticNode {
+                kind: "link".into(),
+                tag: Some("a".into()),
+                id: Some("toc".into()),
+                unique_id: true,
+                selector: None,
+                text: Some("Jump".into()),
+                href: Some("#sec".into()),
+                landmark: None,
+                heading_level: None,
+                ordered: None,
+                label: None,
+                src: None,
+                alt: None,
+                name: None,
+                value: None,
+                input_type: None,
+                placeholder: None,
+                checked: None,
+                disabled: None,
+                required: None,
+                readonly: None,
+                multiple: None,
+                button_type: None,
+                options: vec![],
+                children: vec![],
+            });
+            n
+        };
+        let after = normalize_fixture(after_meta, after_nodes).expect("after");
+
+        let mut driver = FakePageDriver::new(vec![doc.clone(), after]);
+        driver.advance_page_on_capture = true;
+        let mut ctl = Controller::new();
+        ctl.shared.activate_runtime();
+        ctl.state.publish_page(doc.clone());
+        ctl.shared.publish(doc);
+        ctl.set_viewport(40, 5);
+        ctl.state.view.scroll_y = 0;
+        ctl.state.view.selection = Some(link.clone());
+
+        ctl.activate_selection().expect("activate hash link");
+        ctl.acknowledge_loading_frame();
+        ctl.perform_pending_page_action(&mut driver)
+            .expect("run");
+
+        assert!(ctl.state.lifecycle.is_ready());
+        let heading_after = ctl
+            .state
+            .document()
+            .unwrap()
+            .rebind_surviving(&heading)
+            .expect("heading survives");
+        assert_eq!(
+            ctl.state.view.selection.as_ref(),
+            Some(&heading_after),
+            "selection should move to fragment target"
+        );
+        let lines = ctl.content_lines();
+        let heading_line = line_index_of(&lines, &heading_after).expect("heading line");
+        // Top margin places the target a few rows below the top of the viewport.
+        assert!(
+            ctl.state.view.scroll_y <= heading_line,
+            "scroll should be at or above heading"
+        );
+        assert!(
+            heading_line < ctl.state.view.scroll_y + ctl.state.view.viewport_height.max(1),
+            "heading must be visible after # jump: scroll={} heading={line} vh={}",
+            ctl.state.view.scroll_y,
+            ctl.state.view.viewport_height,
+            line = heading_line
+        );
+        assert!(
+            ctl.state.view.scroll_y > 0 || heading_line < 5,
+            "should have scrolled away from document top for a mid-page target"
+        );
     }
 
     #[test]

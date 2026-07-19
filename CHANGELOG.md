@@ -34,7 +34,7 @@
 
 ### Fixed
 
-- Same-document button activates (e.g. clipboard copy on docs sites) recapture DOM updates (label flips) while pinning the topmost visible content line so the markdown view does not jump; selection is rebound without `ensure_visible`.
+- Same-document button activates (e.g. clipboard copy on docs sites) recapture DOM updates (label flips) while pinning the topmost visible content line so the markdown view does not jump; selection is rebound without `ensure_visible`. Same-page `#fragment` links still jump to the target (detected from link `href` / post-click URL).
 - When no tabs are open, submitting a URL (`o` then Enter) opens a new tab at that address instead of failing to navigate a missing page; `o` remains available in Error for empty-session recovery.
 - Make TUI `y` copy the resolved URL for links and images instead of the full rendered element.
 - Allow `about:blank` (and other `about:` URLs) in navigation validation so TUI `t` / `new_tab` can open a blank tab without `allow_unsafe`.
