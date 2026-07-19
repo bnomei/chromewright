@@ -33,6 +33,29 @@ impl Drop for CompanionRequestGuard {
     }
 }
 
+/// Fails a claimed companion page transaction if unwinding skips normal resolution.
+pub(crate) struct CompanionPageTransaction {
+    shared: SharedTuiState,
+    ticket: PageActionTicket,
+    action: String,
+}
+
+impl CompanionPageTransaction {
+    pub(crate) fn ticket(&self) -> PageActionTicket {
+        self.ticket
+    }
+}
+
+impl Drop for CompanionPageTransaction {
+    fn drop(&mut self) {
+        let _ = self.shared.fail_page_action(
+            self.ticket,
+            &self.action,
+            "companion page action aborted",
+        );
+    }
+}
+
 /// Result of successfully finalizing a companion browser mutation.
 pub enum FinalizeOutcome {
     Published(RefreshPage),
@@ -72,11 +95,17 @@ impl PageCoordinator {
         self.shared.begin_page_action(action)
     }
 
-    pub fn begin_companion(
+    pub(crate) fn begin_companion(
         &self,
         action: impl Into<String>,
-    ) -> Result<PageActionTicket, CoordinationError> {
-        self.shared.begin_companion_page_action(action)
+    ) -> Result<CompanionPageTransaction, CoordinationError> {
+        let action = action.into();
+        let ticket = self.shared.begin_companion_page_action(&action)?;
+        Ok(CompanionPageTransaction {
+            shared: self.shared.clone(),
+            ticket,
+            action,
+        })
     }
 
     /// Count a companion tool request before it can be queued on the blocking pool.
@@ -174,13 +203,14 @@ impl PageCoordinator {
     }
 
     pub fn refresh(&self) -> Result<RefreshPage, CoordinationError> {
-        let ticket = self.begin_companion("refresh").map_err(|e| {
+        let transaction = self.begin_companion("refresh").map_err(|e| {
             if e == CoordinationError::ActionInProgress {
                 CoordinationError::RefreshInProgress
             } else {
                 e
             }
         })?;
+        let ticket = transaction.ticket();
         if self.session.evaluate("location.reload()", false).is_err() {
             let _ = self.shared.fail_page_action(
                 ticket,
@@ -258,5 +288,27 @@ mod tests {
             coordinator.begin_companion_request().is_none(),
             "shutdown gate must remain closed"
         );
+    }
+
+    #[test]
+    fn companion_transaction_guard_fails_ticket_during_unwind() {
+        let shared = SharedTuiState::new();
+        shared.activate_runtime();
+        let coordinator = PageCoordinator::new(
+            Arc::new(BrowserSession::with_test_backend(FakeSessionBackend::new())),
+            shared.clone(),
+        );
+
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _transaction = coordinator.begin_companion("panic-test").unwrap();
+            panic!("simulated companion tool panic");
+        }));
+
+        assert!(unwind.is_err());
+        assert!(matches!(
+            shared.lifecycle(),
+            crate::tui::state::Lifecycle::Error { action, message }
+                if action == "panic-test" && message == "companion page action aborted"
+        ));
     }
 }

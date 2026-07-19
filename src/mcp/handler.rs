@@ -183,10 +183,11 @@ fn execute_companion_page_mutation(
     request: CallToolRequestParams,
 ) -> Result<CallToolResult, McpError> {
     let action = request.name.to_string();
-    let ticket = match coordinator.begin_companion(&action) {
-        Ok(ticket) => ticket,
+    let transaction = match coordinator.begin_companion(&action) {
+        Ok(transaction) => transaction,
         Err(error) => return convert_result(InternalToolResult::failure(error.to_string())),
     };
+    let ticket = transaction.ticket();
     let session = coordinator.session().as_ref();
 
     let mut context = crate::tools::ToolContext::new(session);
