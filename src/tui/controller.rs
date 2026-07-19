@@ -806,13 +806,10 @@ impl Controller {
             history,
             tab_position,
         } = prepared;
-        self.state.set_history_availability(history.0, history.1);
-        self.state.set_tab_position(tab_position);
         match result {
             Ok(Some(PageActionOutcome::Captured(doc))) => {
                 let saved_state = self.state.clone();
                 let saved_hints = self.hints.clone();
-                let saved_history = self.url_history.clone();
                 if let Err(error) = self.finish_capture(
                     *doc,
                     pending.previous_selection,
@@ -822,10 +819,13 @@ impl Controller {
                 ) {
                     self.state = saved_state;
                     self.hints = saved_hints;
-                    self.url_history = saved_history;
                     self.synchronize_companion_state();
                     return Err(error.to_string());
                 }
+                self.state.set_history_availability(history.0, history.1);
+                self.state.set_tab_position(tab_position);
+                let url = self.state.url().to_owned();
+                self.url_history.record(&url);
                 if let Some(mode) = pending.hint_mode_after_success {
                     self.enter_hint_mode(mode);
                 }
@@ -855,6 +855,8 @@ impl Controller {
                     self.synchronize_companion_state();
                     return Err(error.to_string());
                 }
+                self.state.set_history_availability(history.0, history.1);
+                self.state.set_tab_position(tab_position);
                 Ok(())
             }
             Ok(Some(PageActionOutcome::Retained)) => {
@@ -865,6 +867,8 @@ impl Controller {
                 }
                 self.state.lifecycle = Lifecycle::Ready;
                 self.state.view.set_status("activated");
+                self.state.set_history_availability(history.0, history.1);
+                self.state.set_tab_position(tab_position);
                 Ok(())
             }
             Ok(None) => {
@@ -1140,8 +1144,6 @@ impl Controller {
                     self.ensure_visible(idx, lines.len());
                 }
             }
-            // Remember successful navigations for URL-bar Tab completion.
-            self.url_history.record(&document.document.url);
             if document.truncated {
                 self.state
                     .view
@@ -3569,11 +3571,21 @@ mod tests {
     #[test]
     fn stale_capture_completion_adopts_authoritative_state() {
         let before = text_doc("1", "before", "one");
-        let captured = text_doc("2", "captured", "two");
+        let captured = normalize_fixture(
+            meta("2", "https://captured.example/stale"),
+            vec![raw_text("captured", "two")],
+        )
+        .unwrap();
         let newer = text_doc("3", "newer", "three");
         let mut driver = FakePageDriver::new(vec![captured]);
+        driver.history = (false, true);
+        driver.open_tab_count = 3;
+        driver.active_tab_index = 2;
         let mut ctl = Controller::new();
+        ctl.url_history = UrlHistory::new();
         ctl.state.publish_page(before.clone());
+        ctl.state.set_history_availability(true, false);
+        ctl.state.set_tab_position(Some((1, 4)));
         ctl.coordinator.shared().publish(before);
         ctl.reload();
         ctl.acknowledge_loading_frame();
@@ -3592,6 +3604,16 @@ mod tests {
         assert_eq!(
             ctl.coordinator.shared().active().unwrap().document.revision,
             newer.document.revision
+        );
+        assert!(ctl.state.can_go_back);
+        assert!(!ctl.state.can_go_forward);
+        assert_eq!(ctl.state.tab_position, Some((1, 4)));
+        assert!(
+            !ctl.url_history
+                .entries()
+                .iter()
+                .any(|url| url == "https://captured.example/stale"),
+            "stale URL must not be recorded"
         );
     }
 
