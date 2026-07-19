@@ -41,7 +41,7 @@ Vimari plus non-conflicting [md-tui](https://github.com/henriklovhaug/md-tui) al
 `f`/`F` (and `s`/`S`) hints for links and form controls (footer cmdline while active; one label per target), `j`/`k` or arrows for
 selection, `h`/`l` horizontal pan, `u`/`d` or left/right arrows half-page view pan,
 `Ctrl-u`/`Ctrl-d` selection by half page, `gg`/`G` document ends, `gi` first form field
-(edit mode), `H`/`b`/`L` history, `r` reload, `w`/`q`/`x`/`t` tab actions, `o`/`O` URL
+(edit mode), `H`/`b`/`L` history, `r` reload, `[`/`]`/`x`/`t` tab actions, `q` quit, `o`/`O` URL
 entry (Tab completes from local URL history), `/` forward search, `n` next match, `N` previous match, Space collapse
 (structure mode only), `zw` toggle soft word-wrap (on by default), `zs` toggle prose
 vs structure projection (prose by default; Vim-style `z`-prefix view commands), `i`
@@ -49,7 +49,8 @@ inspection, `y` copy (link/image URL or block text), `Y` semantic-ref copy, Tab/
 focus (writes the leaving field to the live DOM + same-doc patch), Enter on a
 text field applies the value and patches (live search works without a submit),
 Escape cancel (and dismiss a failed page-action Error back to Ready while
-retaining the last good page), and Ctrl-C quit. See the README default keymap
+retaining the last good page), and `q` / Ctrl-C quit. Browser tabs use `[` /
+`]`. See the README default keymap
 table for the full action map.
 
 Form controls render inline in the content pane. Text inputs show

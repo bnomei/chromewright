@@ -29,7 +29,7 @@
 - Color form controls light cyan so they stay distinct from yellow `f`/`F` hint labels.
 - Default TUI soft word-wrap to on (`zw` still toggles; off disables wrap and restores horizontal pan).
 - Show the active tab ordinal in the TUI header as `2/5` immediately left of the history arrows.
-- Align TUI muscle memory with [md-tui](https://github.com/henriklovhaug/md-tui) where safe: `s`/`S` link hints (aliases of `f`/`F`), arrow keys for selection and half-page pan, `b` history back; keep browser-first `f`/`h`/`l`/`t`/`o`/`q`. Keymap actions may bind multiple sequences; TOML overlay still replaces the whole action.
+- Align TUI muscle memory with [md-tui](https://github.com/henriklovhaug/md-tui) where safe: `s`/`S` link hints (aliases of `f`/`F`), arrow keys for selection and half-page pan, `b` history back; keep browser-first `f`/`h`/`l`/`t`/`o`. Keymap actions may bind multiple sequences; TOML overlay still replaces the whole action.
 - Drop the redundant `tui_query` companion alias; use `tui_render` for semantic markdown.
 - Make the TUI inspect panel a compact CSS-selector-first developer view (identity, action fields, ref/rev) without Debug/`None` noise.
 - Show the full DOM path (`main > form#x > input#y`) as the TUI inspect panel title instead of a static `inspect` label.
@@ -42,6 +42,10 @@
 - Multi-field TUI forms: Tab/Enter on a text field stages values only; **Enter on a submit button** writes staged fields, clicks submit, and recaptures (forms without a submit control are unsupported).
 - Enter on a selected text input starts form edit mode (header shows `IN …`); Enter again commits the field without sending the form.
 - Render form controls inline with live values (staged Tab edits + active `IN` buffer with cursor); checkbox/radio toggle on Enter, select cycles options.
+
+### Changed
+
+- TUI browser tabs: `[` previous / `]` next; `q` quits (Ctrl-c still works); `w` is unbound (was next tab).
 
 ### Fixed
 

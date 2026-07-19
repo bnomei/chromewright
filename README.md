@@ -215,8 +215,8 @@ Browser-first (Vimari) defaults, with [md-tui](https://github.com/henriklovhaug/
 | `H` / `b` | `history_back` | Browser history back. (`b` = md-tui back.) |
 | `L` | `history_forward` | Browser history forward. |
 | `r` | `reload` | Reload the active page. |
-| `w` | `next_tab` | Switch to the next tab. |
-| `q` | `prev_tab` | Switch to the previous tab. (Not quit; use `Ctrl-c`.) |
+| `[` | `prev_tab` | Switch to the previous browser tab. |
+| `]` | `next_tab` | Switch to the next browser tab. |
 | `x` | `close_tab` | Close the current tab. |
 | `t` | `new_tab` | Open a new tab. |
 | `o` | `open_url` | Open the URL entry prompt with an empty buffer. While editing, **Tab** / **Shift-Tab** accept or cycle local URL history (ghost suffix shows the best match). |
@@ -234,7 +234,7 @@ Browser-first (Vimari) defaults, with [md-tui](https://github.com/henriklovhaug/
 | `Shift-Tab` | `tab_prev` | Previous focusable control; same write-on-leave behavior as Tab. |
 | `Enter` | `confirm` | Text input: apply value to the live DOM + same-doc patch (no submit needed; live search works). Checkbox/radio: toggle. Select: cycle options. **Submit button**: write staged fields + click + recapture. Link/other: activate. |
 | `Esc` | `escape` | Leave prompt, hint, or inspect mode. In Normal mode, also clears sticky `/search` footer (`/{query}  n/m`). After a failed page action, dismiss Error back to Ready (retained page stays) so keys work again. |
-| `Ctrl-c` | `quit` | Quit the TUI. |
+| `q` / `Ctrl-c` | `quit` | Quit the TUI. (`w` is unbound.) |
 
 Hints use deterministic two-key labels from the alphabet `asdfgqwertzxcvb` (for example `aa`, `as`), assigned to viewport-visible links and form controls (one label per target; painted on the first line only when a target wraps).
 

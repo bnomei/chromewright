@@ -84,7 +84,7 @@ pub enum Action {
     Confirm,
     /// `Escape` — leave prompt, hint, or inspect; dismiss Error → Ready.
     Escape,
-    /// `Ctrl-c` — quit the TUI.
+    /// `q` / `Ctrl-c` — quit the TUI.
     Quit,
 }
 

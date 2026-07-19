@@ -264,8 +264,9 @@ impl TuiKeymap {
         insert_alias(&mut map, Action::HistoryBack, KeySequence::chars("b"));
         insert(&mut map, Action::HistoryForward, KeySequence::chars("L"));
         insert(&mut map, Action::Reload, KeySequence::chars("r"));
-        insert(&mut map, Action::NextTab, KeySequence::chars("w"));
-        insert(&mut map, Action::PrevTab, KeySequence::chars("q"));
+        // Browser tabs: `[` / `]` (vim-buffer style). `w` is unbound.
+        insert(&mut map, Action::NextTab, KeySequence::chars("]"));
+        insert(&mut map, Action::PrevTab, KeySequence::chars("["));
         insert(&mut map, Action::CloseTab, KeySequence::chars("x"));
         insert(&mut map, Action::NewTab, KeySequence::chars("t"));
         insert(&mut map, Action::OpenUrl, KeySequence::chars("o"));
@@ -300,7 +301,9 @@ impl TuiKeymap {
             KeySequence::single(KeyCode::Enter),
         );
         insert(&mut map, Action::Escape, KeySequence::single(KeyCode::Esc));
-        insert(
+        // `q` quits; Ctrl-c kept as an alias.
+        insert(&mut map, Action::Quit, KeySequence::chars("q"));
+        insert_alias(
             &mut map,
             Action::Quit,
             KeySequence::with_modifiers(KeyCode::Char('c'), KeyModifiers::CTRL),
@@ -643,7 +646,20 @@ mod tests {
         );
         assert_eq!(
             km.resolve_sequence(&KeySequence::chars("q")),
+            Some(Action::Quit)
+        );
+        assert_eq!(
+            km.resolve_sequence(&KeySequence::chars("[")),
             Some(Action::PrevTab)
+        );
+        assert_eq!(
+            km.resolve_sequence(&KeySequence::chars("]")),
+            Some(Action::NextTab)
+        );
+        assert_eq!(
+            km.resolve_sequence(&KeySequence::chars("w")),
+            None,
+            "w is unbound (not next_tab)"
         );
         // zs multi-key still works alongside single-s alias
         assert_eq!(
