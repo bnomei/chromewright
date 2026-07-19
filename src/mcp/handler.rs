@@ -202,7 +202,7 @@ fn execute_companion_page_mutation(
     {
         Ok(result) if result.success => {
             match coordinator.finalize_browser_mutation(ticket, &action) {
-                Ok(FinalizeOutcome::Published(_)) | Ok(FinalizeOutcome::Cleared) => {}
+                Ok(FinalizeOutcome::Published(_)) => {}
                 Err(error) => {
                     return convert_result(InternalToolResult::failure(error.to_string()));
                 }
@@ -569,7 +569,7 @@ mod tests {
 
     #[cfg(feature = "tui")]
     #[test]
-    fn companion_close_final_tab_succeeds_and_clears_shared_document() {
+    fn companion_close_final_tab_preserves_refresh_failure_contract() {
         use crate::tui::SharedTuiState;
         use std::sync::Arc;
 
@@ -584,12 +584,14 @@ mod tests {
         let result = server
             .execute_tool_sync(call_tool_request("close_tab", None))
             .expect("close final tab");
-        assert_eq!(result.is_error, Some(false));
-        assert!(shared.lifecycle().is_ready());
-        assert_eq!(
-            shared.active(),
-            Err(crate::tui::CoordinationError::NoDocument)
-        );
+        assert_eq!(result.is_error, Some(true));
+        assert!(matches!(
+            shared.lifecycle(),
+            crate::tui::Lifecycle::Error { action, message }
+                if action == "close_tab"
+                    && message == crate::tui::CoordinationError::RefreshFailed.to_string()
+        ));
+        assert!(shared.active().is_ok(), "last valid document is retained");
         assert!(shared.selection().is_none());
         assert!(!shared.attention().is_set());
     }

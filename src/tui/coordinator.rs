@@ -56,7 +56,6 @@ impl Drop for CompanionPageTransaction {
 /// Result of successfully finalizing a companion browser mutation.
 pub enum FinalizeOutcome {
     Published(RefreshPage),
-    Cleared,
 }
 
 /// Structurally couples the one companion browser session to its publication store.
@@ -168,8 +167,11 @@ impl PageCoordinator {
             }
         };
         if tabs.is_empty() {
-            self.shared.clear_session(ticket)?;
-            return Ok(FinalizeOutcome::Cleared);
+            let error = CoordinationError::RefreshFailed;
+            let _ = self
+                .shared
+                .fail_page_action(ticket, action, error.to_string());
+            return Err(error);
         }
         let result = (|| {
             let mut driver = SessionPageDriver::new(&self.session);
@@ -216,10 +218,8 @@ impl PageCoordinator {
             );
             return Err(CoordinationError::RefreshFailed);
         }
-        match self.finalize_browser_mutation(ticket, "refresh")? {
-            FinalizeOutcome::Published(page) => Ok(page),
-            FinalizeOutcome::Cleared => Err(CoordinationError::NoDocument),
-        }
+        let FinalizeOutcome::Published(page) = self.finalize_browser_mutation(ticket, "refresh")?;
+        Ok(page)
     }
 
     pub fn commit(
