@@ -55,6 +55,7 @@ fn session_close_result(total_tabs: usize, failures: Vec<String>) -> Result<()> 
 pub(crate) struct FakeSessionBackend {
     state: Mutex<FakeState>,
     close_failure_urls: Vec<String>,
+    open_failure_urls: Vec<String>,
     bump_revision_before_semantic_capture: bool,
 }
 
@@ -70,7 +71,7 @@ struct FakeState {
 impl FakeSessionBackend {
     /// Single `about:blank` tab as the active page target; revision starts at `1`.
     pub(crate) fn new() -> Self {
-        Self::with_close_failures(std::iter::empty::<String>())
+        Self::with_failures(std::iter::empty::<String>(), std::iter::empty::<String>())
     }
 
     /// Simulate hydration changing a settled page immediately before the
@@ -131,6 +132,39 @@ impl FakeSessionBackend {
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
+        Self::with_failures(close_failure_urls, std::iter::empty::<String>())
+    }
+
+    /// Script open failures for matching URLs.
+    pub(crate) fn with_open_failures<I, S>(open_failure_urls: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        Self::with_failures(std::iter::empty::<String>(), open_failure_urls)
+    }
+
+    /// Script both open and close failures for startup rollback tests.
+    pub(crate) fn with_open_and_close_failures<I, S, J, T>(
+        close_failure_urls: I,
+        open_failure_urls: J,
+    ) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+        J: IntoIterator<Item = T>,
+        T: Into<String>,
+    {
+        Self::with_failures(close_failure_urls, open_failure_urls)
+    }
+
+    fn with_failures<I, S, J, T>(close_failure_urls: I, open_failure_urls: J) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+        J: IntoIterator<Item = T>,
+        T: Into<String>,
+    {
         let initial_tab = TabDescriptor {
             id: "tab-1".to_string(),
             title: "about:blank".to_string(),
@@ -146,6 +180,7 @@ impl FakeSessionBackend {
                 viewport_emulation_by_tab_id: HashMap::new(),
             }),
             close_failure_urls: close_failure_urls.into_iter().map(Into::into).collect(),
+            open_failure_urls: open_failure_urls.into_iter().map(Into::into).collect(),
             bump_revision_before_semantic_capture: false,
         }
     }
@@ -927,6 +962,16 @@ impl SessionBackend for FakeSessionBackend {
     }
 
     fn open_tab(&self, url: &str) -> Result<TabDescriptor> {
+        if self
+            .open_failure_urls
+            .iter()
+            .any(|failed_url| failed_url == url)
+        {
+            return Err(BrowserError::TabOperationFailed(format!(
+                "Failed to open tab: {url}"
+            )));
+        }
+
         let mut state = self.lock_state()?;
         let tab = TabDescriptor {
             id: format!("tab-{}", state.next_tab_id),

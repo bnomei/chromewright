@@ -18,6 +18,7 @@ use crate::contract::{
 };
 use crate::dom::{DocumentMetadata, DomTree};
 use crate::error::{BrowserError, Result};
+use crate::tools::utils::validate_startup_tab_url;
 use crate::tools::{ToolContext, ToolRegistry};
 use std::collections::{HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -272,6 +273,121 @@ impl BrowserSession {
             url: tab.url,
             active: true,
         })
+    }
+
+    /// Seed the startup session with one tab per safe URL, in the supplied order.
+    ///
+    /// Launch mode reuses its initial managed page for the first URL, then opens
+    /// one managed tab per remaining URL. Attach mode never mutates existing
+    /// tabs, so it opens one new managed tab for every URL. All URLs are
+    /// validated before any tab is opened or navigated; a failure while opening
+    /// a later URL rolls back every startup tab that was newly opened.
+    pub fn seed_startup_urls(&self, urls: &[String]) -> Result<Vec<TabInfo>> {
+        let normalized_urls = urls
+            .iter()
+            .map(|url| validate_startup_tab_url(url))
+            .collect::<Result<Vec<_>>>()?;
+
+        let mut urls = normalized_urls.into_iter();
+        let Some(first_url) = urls.next() else {
+            return Ok(Vec::new());
+        };
+
+        let mut seeded = Vec::new();
+        let mut opened_tab_ids = Vec::new();
+        if self.origin == SessionOrigin::Launched {
+            self.navigate(&first_url).map_err(|error| {
+                BrowserError::NavigationFailed(format!(
+                    "Failed to navigate the initial startup tab to '{first_url}': {error}"
+                ))
+            })?;
+            self.wait_for_navigation().map_err(|error| {
+                BrowserError::NavigationFailed(format!(
+                    "Initial startup tab did not settle at '{first_url}': {error}"
+                ))
+            })?;
+            let initial_tab = self
+                .tab_overview()?
+                .into_iter()
+                .find(|tab| tab.active)
+                .ok_or_else(|| {
+                    BrowserError::TabOperationFailed(
+                        "Initial startup tab was not active after navigation".into(),
+                    )
+                })?;
+            seeded.push(initial_tab);
+        } else {
+            match self.open_tab(&first_url) {
+                Ok(tab) => {
+                    opened_tab_ids.push(tab.id.clone());
+                    seeded.push(tab);
+                }
+                Err(error) => {
+                    return Err(BrowserError::TabOperationFailed(format!(
+                        "Failed to open initial URL 1 ('{first_url}'): {error}"
+                    )));
+                }
+            }
+        }
+
+        for (index, url) in urls.enumerate() {
+            match self.open_tab(&url) {
+                Ok(tab) => {
+                    opened_tab_ids.push(tab.id.clone());
+                    seeded.push(tab);
+                }
+                Err(error) => {
+                    let startup_error = BrowserError::TabOperationFailed(format!(
+                        "Failed to open initial URL {} ('{url}'): {error}",
+                        index + 2
+                    ));
+                    return match self.rollback_startup_tabs(&opened_tab_ids) {
+                        Ok(()) => Err(startup_error),
+                        Err(rollback_error) => Err(BrowserError::TabOperationFailed(format!(
+                            "{startup_error}; startup tab rollback also failed: {rollback_error}"
+                        ))),
+                    };
+                }
+            }
+        }
+
+        Ok(seeded)
+    }
+
+    fn rollback_startup_tabs(&self, tab_ids: &[String]) -> Result<()> {
+        let mut closed_tabs = 0usize;
+        let mut failures = Vec::new();
+        for tab_id in tab_ids.iter().rev() {
+            match self.backend.close_tab(tab_id, false) {
+                Ok(()) => {
+                    closed_tabs += 1;
+                    if let Err(error) = self.forget_managed_tab(tab_id) {
+                        failures.push(format!(
+                            "closed startup tab [id={tab_id}] but could not release managed ownership: {error}"
+                        ));
+                    }
+                }
+                Err(error) => failures.push(format!(
+                    "failed to close startup tab [id={tab_id}]: {error}"
+                )),
+            }
+        }
+        if closed_tabs > 0 {
+            if let Err(error) = self.invalidate_snapshot_cache() {
+                failures.push(format!(
+                    "failed to invalidate cache after rollback: {error}"
+                ));
+            }
+        }
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(BrowserError::TabOperationFailed(format!(
+                "Startup tab rollback encountered {} error(s): {}",
+                failures.len(),
+                failures.join("; ")
+            )))
+        }
     }
 
     /// Close the active tab, drop managed ownership, and return a close summary.
@@ -541,6 +657,152 @@ mod tests {
     use serde_json::json;
     use std::ffi::OsStr;
     use std::sync::Arc;
+
+    #[test]
+    fn seed_startup_urls_reuses_launched_initial_tab_then_activates_last_url() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        let urls = vec![
+            "example.com".to_string(),
+            "https://second.example/path".to_string(),
+        ];
+
+        let seeded = session
+            .seed_startup_urls(&urls)
+            .expect("startup URLs should seed launched session");
+
+        assert_eq!(seeded.len(), 2);
+        assert_eq!(seeded[0].id, "tab-1");
+        assert_eq!(seeded[0].url, "https://example.com");
+        assert_eq!(seeded[1].id, "tab-2");
+        assert_eq!(seeded[1].url, "https://second.example/path");
+        assert!(seeded[1].active);
+
+        let tabs = session.list_tabs().expect("list seeded tabs");
+        assert_eq!(tabs.len(), 2, "launch should not retain a blank seed tab");
+        assert!(tabs[1].active, "final seeded URL should be active");
+    }
+
+    #[test]
+    fn seed_startup_urls_preserves_connected_tabs_and_marks_new_tabs_managed() {
+        let session = BrowserSession::with_test_backend_origin(
+            FakeSessionBackend::new(),
+            SessionOrigin::Connected,
+        );
+        let existing = session.list_tabs().expect("list existing tab");
+        let urls = vec![
+            "https://first.example".to_string(),
+            "https://second.example".to_string(),
+        ];
+
+        let seeded = session
+            .seed_startup_urls(&urls)
+            .expect("startup URLs should seed connected session");
+
+        assert_eq!(seeded.len(), 2);
+        let tabs = session.list_tabs().expect("list seeded tabs");
+        assert_eq!(tabs.len(), existing.len() + 2);
+        assert_eq!(tabs[0].id, existing[0].id, "existing tab id must stay put");
+        assert_eq!(
+            tabs[0].url, existing[0].url,
+            "existing tab URL must stay put"
+        );
+        assert!(tabs.last().expect("last tab").active);
+        assert!(
+            session
+                .is_tab_managed(&seeded[0].id)
+                .expect("managed tab state")
+        );
+        assert!(
+            session
+                .is_tab_managed(&seeded[1].id)
+                .expect("managed tab state")
+        );
+    }
+
+    #[test]
+    fn seed_startup_urls_rejects_all_unsafe_urls_before_mutating_tabs() {
+        let session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        let before = session.list_tabs().expect("list initial tab");
+        let urls = vec![
+            "https://safe.example".to_string(),
+            "/relative/without-an-origin".to_string(),
+        ];
+
+        let error = session
+            .seed_startup_urls(&urls)
+            .expect_err("unsafe initial URL should fail before startup mutation");
+
+        assert!(error.to_string().contains("must be an absolute"));
+        assert_eq!(
+            session.list_tabs().expect("list tabs after failure"),
+            before
+        );
+    }
+
+    #[test]
+    fn seed_startup_urls_rolls_back_previously_opened_tabs_after_operational_failure() {
+        let session = BrowserSession::with_test_backend_origin(
+            FakeSessionBackend::with_open_failures(["https://broken.example"]),
+            SessionOrigin::Connected,
+        );
+        let before = session
+            .list_tabs()
+            .expect("list attached tabs before seeding");
+
+        let error = session
+            .seed_startup_urls(&[
+                "https://first.example".to_string(),
+                "https://broken.example".to_string(),
+            ])
+            .expect_err("the scripted second URL should fail");
+
+        assert!(error.to_string().contains("broken.example"));
+        assert_eq!(
+            session.list_tabs().expect("list tabs after rollback"),
+            before,
+            "a failed startup seed must not leave its earlier tab open"
+        );
+        assert!(
+            !session
+                .is_tab_managed("tab-2")
+                .expect("managed tab state should be available"),
+            "rollback must release managed ownership too"
+        );
+    }
+
+    #[test]
+    fn seed_startup_urls_reports_failed_rollback_and_retains_managed_ownership() {
+        let session = BrowserSession::with_test_backend_origin(
+            FakeSessionBackend::with_open_and_close_failures(
+                ["https://first.example"],
+                ["https://broken.example"],
+            ),
+            SessionOrigin::Connected,
+        );
+
+        let error = session
+            .seed_startup_urls(&[
+                "https://first.example".to_string(),
+                "https://broken.example".to_string(),
+            ])
+            .expect_err("the scripted second URL should fail");
+
+        assert!(error.to_string().contains("rollback also failed"));
+        assert!(
+            session
+                .is_tab_managed("tab-2")
+                .expect("managed tab state should be available"),
+            "a tab left open after rollback failure must remain session-managed"
+        );
+        assert!(
+            session
+                .list_tabs()
+                .expect("list tabs after rollback failure")
+                .iter()
+                .any(|tab| tab.id == "tab-2"),
+            "a rollback close failure leaves the tab open for normal managed cleanup"
+        );
+    }
 
     fn launch_or_skip(result: Result<BrowserSession>) -> Option<BrowserSession> {
         match result {

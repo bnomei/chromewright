@@ -3,7 +3,7 @@
 //! Defaults to attach mode against `http://127.0.0.1:9222`; launch flags start a local browser.
 //! The `serve` subcommand exposes streamable HTTP for shared local MCP sessions.
 
-use chromewright::{BrowserServer, ConnectionOptions, LaunchOptions};
+use chromewright::{BrowserServer, BrowserSession, ConnectionOptions, LaunchOptions};
 use clap::{Parser, Subcommand};
 use log::{debug, info};
 use rmcp::{ServiceExt, transport::stdio};
@@ -16,9 +16,7 @@ use rmcp::transport::streamable_http_server::{
 };
 
 #[cfg(feature = "tui")]
-use chromewright::{
-    BrowserSession, BrowserSessionPolicy, ManagedHeadlessSession, TuiOptions, run_tui,
-};
+use chromewright::{BrowserSessionPolicy, ManagedHeadlessSession, TuiOptions, run_tui};
 
 /// How the process obtains a browser: local launch or DevTools attach.
 #[derive(Debug, Clone)]
@@ -63,6 +61,10 @@ enum Command {
 #[command(version)]
 #[command(about = "Browser automation MCP server", long_about = None)]
 struct Cli {
+    /// Open a URL in a new managed tab at startup. Repeat to seed multiple tabs.
+    #[arg(long = "url", global = true, value_name = "URL")]
+    urls: Vec<String>,
+
     /// Launch a new browser in headless mode instead of headed launch mode
     #[arg(long, conflicts_with = "ws_endpoint")]
     headless: bool,
@@ -130,14 +132,6 @@ fn browser_mode_from_cli(cli: &Cli) -> BrowserMode {
     })
 }
 
-fn create_browser_server(mode: &BrowserMode) -> Result<BrowserServer, String> {
-    match mode {
-        BrowserMode::Launch(options) => BrowserServer::with_options(options.clone()),
-        BrowserMode::Connect(options) => BrowserServer::connect(options.clone()),
-    }
-}
-
-#[cfg(feature = "tui")]
 fn create_browser_session(mode: &BrowserMode) -> Result<BrowserSession, String> {
     match mode {
         BrowserMode::Launch(options) => {
@@ -147,6 +141,24 @@ fn create_browser_session(mode: &BrowserMode) -> Result<BrowserSession, String> 
             BrowserSession::connect(options.clone()).map_err(|e| e.to_string())
         }
     }
+}
+
+fn seed_initial_tabs(session: &BrowserSession, urls: &[String]) -> Result<(), String> {
+    if urls.is_empty() {
+        return Ok(());
+    }
+
+    session
+        .seed_startup_urls(urls)
+        .map_err(|error| format!("Failed to seed initial --url tabs: {error}"))?;
+    info!("Opened {} initial tab(s) from --url", urls.len());
+    Ok(())
+}
+
+fn create_browser_server(mode: &BrowserMode, urls: &[String]) -> Result<BrowserServer, String> {
+    let session = create_browser_session(mode)?;
+    seed_initial_tabs(&session, urls)?;
+    Ok(BrowserServer::from_session(session))
 }
 
 #[cfg(feature = "tui")]
@@ -308,7 +320,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             info!("Transport: stdio");
             info!("Ready to accept MCP connections via stdio");
             let (_read, _write) = (stdin(), stdout());
-            let service = create_browser_server(&browser_mode)
+            let service = create_browser_server(&browser_mode, &cli.urls)
                 .map_err(|e| format!("Failed to create browser server: {}", e))?;
             let server = service.serve(stdio()).await?;
 
@@ -384,6 +396,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let session = managed.take_session().map_err(|e| {
                     format!("Failed to transfer managed headless browser session: {e}")
                 })?;
+                if let Err(seed_error) = seed_initial_tabs(session.as_ref(), &cli.urls) {
+                    drop(session);
+                    let _ = managed.shutdown();
+                    return Err(seed_error.into());
+                }
                 let tui_result =
                     run_tui(session, options).map_err(|e| format!("TUI exited with error: {e}"));
                 let shutdown_result = managed
@@ -402,6 +419,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 let session = create_browser_session(&browser_mode)
                     .map_err(|e| format!("Failed to create browser session: {e}"))?;
+                seed_initial_tabs(&session, &cli.urls)?;
                 run_tui(std::sync::Arc::new(session), options)
                     .map_err(|e| format!("TUI exited with error: {e}"))?;
             }
@@ -413,12 +431,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             info!("HTTP path: {}", http_path);
 
             let bind_addr = format!("127.0.0.1:{}", port);
-            let browser_mode = browser_mode.clone();
-
-            let service_factory = move || {
-                create_browser_server(&browser_mode)
-                    .map_err(|e| std::io::Error::other(e.to_string()))
-            };
+            let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
+            let service = create_browser_server(&browser_mode, &cli.urls)
+                .map_err(|e| std::io::Error::other(e.to_string()))?;
+            let service_factory = move || Ok::<_, std::io::Error>(service.clone());
 
             let http_service = StreamableHttpService::new(
                 service_factory,
@@ -433,7 +449,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 bind_addr, http_path
             );
 
-            let listener = tokio::net::TcpListener::bind(bind_addr).await?;
             axum::serve(listener, router).await?;
         }
     }
@@ -451,6 +466,38 @@ mod tests {
         let cli = Cli::try_parse_from(["chromewright"]).expect("CLI should parse");
 
         assert!(cli.command.is_none());
+        assert!(cli.urls.is_empty());
+    }
+
+    #[test]
+    fn test_cli_urls_are_repeatable_ordered_and_global() {
+        let before_subcommand = Cli::try_parse_from([
+            "chromewright",
+            "--url",
+            "https://first.example",
+            "--url",
+            "https://second.example",
+            "serve",
+        ])
+        .expect("global URLs should parse before subcommand");
+        assert_eq!(
+            before_subcommand.urls,
+            ["https://first.example", "https://second.example"]
+        );
+
+        let after_subcommand = Cli::try_parse_from([
+            "chromewright",
+            "serve",
+            "--url",
+            "https://first.example",
+            "--url",
+            "https://second.example",
+        ])
+        .expect("global URLs should parse after subcommand");
+        assert_eq!(
+            after_subcommand.urls,
+            ["https://first.example", "https://second.example"]
+        );
     }
 
     #[test]

@@ -959,15 +959,26 @@ impl ChromeSessionBackend {
             BrowserError::TabOperationFailed(format!("Failed to create tab: {}", e))
         })?;
 
-        tab.navigate_to(url).map_err(|e| {
-            BrowserError::NavigationFailed(format!("Failed to navigate to {}: {}", url, e))
-        })?;
+        if let Err(error) = tab.navigate_to(url) {
+            let _ = tab.close(false);
+            return Err(BrowserError::NavigationFailed(format!(
+                "Failed to navigate to {}: {}",
+                url, error
+            )));
+        }
 
-        tab.wait_until_navigated().map_err(|e| {
-            BrowserError::NavigationFailed(format!("Navigation to {} did not complete: {}", url, e))
-        })?;
+        if let Err(error) = tab.wait_until_navigated() {
+            let _ = tab.close(false);
+            return Err(BrowserError::NavigationFailed(format!(
+                "Navigation to {} did not complete: {}",
+                url, error
+            )));
+        }
 
-        self.activate_real_tab(&tab)?;
+        if let Err(error) = self.activate_real_tab(&tab) {
+            let _ = tab.close(false);
+            return Err(error);
+        }
         Ok(tab)
     }
 

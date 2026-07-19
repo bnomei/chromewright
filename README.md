@@ -4,7 +4,7 @@
 [![Build Status](https://github.com/bnomei/chromewright/actions/workflows/ci.yml/badge.svg)](https://github.com/bnomei/chromewright/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-Chromewright is a local-first browser automation MCP server built on Chrome DevTools Protocol (CDP). It exposes a real Chrome or Chromium browser to MCP clients over stdio or loopback streamable HTTP, with high-level tools for navigation, page reading, tab management, screenshots, viewport emulation, and bounded interaction.
+Chromewright is a local-first browser automation MCP server built on Chrome DevTools Protocol (CDP). It exposes a real Chrome or Chromium browser to MCP clients over stdio or loopback streamable HTTP, with high-level tools for navigation, page reading, tab management, screenshots, viewport emulation, and bounded interaction. The default build also includes a semantic terminal browser and a co-hosted loopback MCP companion for its live document state.
 
 Use Chromewright when an agent needs browser state from a real browser without embedding a Node.js automation stack or writing raw CDP calls. Chromewright is not an end-to-end test runner; it is a browser control layer for AI agents and MCP clients.
 
@@ -13,6 +13,7 @@ Use Chromewright when an agent needs browser state from a real browser without e
 - Attach an MCP client to an existing Chrome or Chromium profile on a DevTools endpoint.
 - Launch a dedicated local browser session for agent work.
 - Read pages through snapshots, markdown extraction, targeted inspection, and link inventory.
+- Browse a page's semantic DOM locally in the terminal, with a co-hosted MCP companion for its active document and selection state.
 - Drive bounded interactions such as click, input, select, hover, key press, scroll, and wait.
 - Capture managed PNG screenshots without letting callers choose arbitrary output paths.
 - Reuse revision-scoped `cursor` handles from snapshots instead of relying only on CSS selectors.
@@ -156,7 +157,16 @@ chromewright --user-data-dir /tmp/chromewright-profile
 
 # Launch a headless browser and serve streamable HTTP.
 chromewright --headless --user-data-dir /tmp/chromewright-profile serve
+
+# Seed two managed tabs at startup. This works with attach, launch, serve, and tui modes.
+chromewright --url https://example.com --url https://example.org serve
 ```
+
+`--url` is repeatable and seeds one separate managed tab for every value, in
+the order supplied; the final seeded tab becomes active. It accepts absolute
+`http:`, `https:`, and `about:` URLs. Relative, unsafe, and protocol-relative
+URLs are rejected before any startup tab is opened. In attach mode, existing
+tabs are untouched; only seeded tabs become managed by chromewright.
 
 ## CLI reference
 
@@ -171,6 +181,7 @@ chromewright --headless --user-data-dir /tmp/chromewright-profile serve
 | `--executable-path <PATH>` | auto-detected by the browser backend | Uses a specific browser executable in launch mode. |
 | `--user-data-dir <DIR>` | backend default | Uses a persistent browser profile directory in launch mode. |
 | `--debug-port <PORT>` | auto-selected | Uses a specific DevTools port for a locally launched browser. |
+| `--url <URL>` | none; repeatable | Seeds each supplied safe URL in its own managed startup tab. The final seeded tab is active. |
 | `chromewright tui` | (feature `tui`, default-on) | Starts the semantic terminal browser against the same browser session. Always co-hosts a loopback MCP companion. |
 | `tui --config <PATH>` | `$XDG_CONFIG_HOME/chromewright/tui.toml` or `~/.config/chromewright/tui.toml` | TOML keymap plus optional `[theme]` and `[layout]` overlays. An explicit path must exist and parse; a missing default file keeps built-in bindings. |
 | `tui --companion-port <PORT>` | `0` (ephemeral) | Loopback port for the co-hosted streamable-HTTP MCP companion. |
@@ -190,6 +201,26 @@ chromewright tui
 # Managed private headless Chrome for the normal terminal-browser flow.
 chromewright --headless tui
 ```
+
+To connect an MCP client to the co-hosted companion, choose a fixed loopback
+port; the default `0` selects an ephemeral port that the TUI does not print.
+
+```bash
+chromewright --headless tui --companion-port 3334
+```
+
+```toml
+[mcp_servers.chromewright_tui]
+url = "http://127.0.0.1:3334/mcp"
+enabled = true
+```
+
+The companion exposes eight `tui_*` coordination tools and bounded semantic
+resources. `semantic_ref` values are tied to one document revision; the active
+capture plus the previous eight revisions are retained, while stale or evicted
+references fail closed. Attention messages are limited to 512 characters.
+Semantic Markdown resources paginate at 32,000 characters by default and cap
+at 200,000; JSON resources fail instead of returning a truncated document.
 
 The header is a single browser-like bar: tab ordinal (`2/5`) left of the history arrows, then location/title, with a lifecycle glyph on the right. Keyboard bindings are not shown in the terminal chrome. Defaults are Vimari-compatible. Multi-key sequences such as `gg` and `gi` wait for the full chord; an unbound prefix is rejected rather than re-firing the last key.
 
@@ -287,7 +318,7 @@ Theme roles: `link`, `h1`–`h6`, `landmark`, `group`, `list`, `image`, `form_co
 
 Layout keys: `content_padding_x`, `content_padding_y` (symmetric inset around the markdown/content pane only), `content_max_width` (default 100; `0` disables the cap; `w` toggles full vs capped).
 
-More detail on managed headless sessions, logging, and the co-hosted `tui_*` companion lives in [docs/tui.md](docs/tui.md). Source of truth for defaults: [src/tui/keymap.rs](src/tui/keymap.rs) and [src/tui/action.rs](src/tui/action.rs).
+The source of truth for defaults is [src/tui/keymap.rs](src/tui/keymap.rs) and [src/tui/action.rs](src/tui/action.rs).
 
 ## Tool workflow
 
@@ -368,7 +399,7 @@ Use `set_viewport` to emulate responsive breakpoints through CDP. Successful cal
 - Attach mode can see the tabs, cookies, and authenticated state in the browser profile you connect to.
 - Use a dedicated browser profile for agent work when you do not want automation attached to a personal browser session.
 - `evaluate` requires `confirm_unsafe = true` because it runs arbitrary JavaScript in the active page.
-- `navigate` and `new_tab` reject unsafe schemes such as `data:` and `file:` unless that request passes `allow_unsafe = true`.
+- `navigate` and `new_tab` allow `http:`, `https:`, `about:`, and same-origin relative paths by default. `data:`, `file:`, other absolute schemes, and protocol-relative URLs require `allow_unsafe = true`.
 - `go_back` and `go_forward` apply the same unsafe-scheme gate and revert rejected history moves.
 - `close_tab` requires `confirm_destructive = true` before closing an unmanaged active tab in a connected session.
 - `close` requires `confirm_destructive = true` before expanding connected-session cleanup from managed tabs to all tabs.
@@ -430,7 +461,6 @@ Browser smoke checks launch a local browser and are intended for maintainer work
 - MCP handler: [src/mcp/handler.rs](src/mcp/handler.rs)
 - Public target contract: [src/contract/target.rs](src/contract/target.rs)
 - Screenshot contract: [src/tools/screenshot.rs](src/tools/screenshot.rs)
-- TUI overview (managed headless, companion, resources): [docs/tui.md](docs/tui.md)
 - TUI default keymap and actions: [src/tui/keymap.rs](src/tui/keymap.rs), [src/tui/action.rs](src/tui/action.rs)
 - Browser smoke script: [scripts/browser-smoke.sh](scripts/browser-smoke.sh)
 

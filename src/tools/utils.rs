@@ -107,6 +107,22 @@ pub fn validate_navigation_url(url: &str, allow_unsafe: bool) -> Result<String> 
     )))
 }
 
+/// Validate a startup-tab URL, which cannot safely infer an origin for relative paths.
+///
+/// Unlike ordinary navigation, startup seeding has no caller-selected document
+/// context, so every `--url` value must resolve to an absolute safe URL.
+pub(crate) fn validate_startup_tab_url(url: &str) -> Result<String> {
+    let normalized = validate_navigation_url(url, false)?;
+    if has_absolute_scheme(&normalized) {
+        return Ok(normalized);
+    }
+
+    Err(BrowserError::InvalidArgument(format!(
+        "Startup URL '{}' must be an absolute http:, https:, or about: URL",
+        url
+    )))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -230,6 +246,15 @@ mod tests {
             let normalized = validate_navigation_url(target, false)
                 .unwrap_or_else(|err| panic!("relative path {target:?} should pass: {err}"));
             assert_eq!(normalized, target);
+        }
+    }
+
+    #[test]
+    fn test_validate_startup_tab_url_rejects_relative_paths() {
+        for target in ["/settings", "./relative", "../parent"] {
+            let error = validate_startup_tab_url(target)
+                .expect_err("startup URLs cannot resolve a relative path without an origin");
+            assert!(error.to_string().contains("must be an absolute"));
         }
     }
 }
