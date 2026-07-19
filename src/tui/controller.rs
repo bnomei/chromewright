@@ -74,6 +74,23 @@ enum PageOperation {
     },
 }
 
+/// Result of performing a deferred page operation.
+enum PageActionOutcome {
+    /// Fresh semantic capture to publish (navigation, form submit, DOM-mutating click).
+    Captured(Box<SemanticDocument>),
+    /// Click/focus finished without leaving the document; keep the published page.
+    Retained,
+}
+
+/// Compare URLs for same-document activate short-circuit (ignore trailing slash / fragment).
+fn urls_match_for_activate(a: &str, b: &str) -> bool {
+    fn normalize(url: &str) -> String {
+        let without_fragment = url.split('#').next().unwrap_or(url);
+        without_fragment.trim_end_matches('/').to_string()
+    }
+    normalize(a) == normalize(b)
+}
+
 impl Controller {
     #[cfg(test)]
     pub fn new() -> Self {
@@ -469,7 +486,7 @@ impl Controller {
             return Err(message);
         }
 
-        let result = (|| -> Result<Option<SemanticDocument>, String> {
+        let result = (|| -> Result<Option<PageActionOutcome>, String> {
             match pending.operation {
                 PageOperation::Bootstrap => {}
                 PageOperation::Navigate(url) => {
@@ -527,9 +544,29 @@ impl Controller {
                     document,
                     semantic_ref,
                 } => {
-                    let _ = driver
+                    // Snapshot identity before the click so JS-only actions
+                    // (clipboard copy, type=button handlers) can skip recapture
+                    // when the page did not navigate.
+                    let before_id = document.document.document_id.clone();
+                    let before_url = document.document.url.clone();
+                    let page_changing = driver
                         .activate_ref(&document, &semantic_ref, false)
                         .map_err(|e| e.to_string())?;
+                    if !page_changing {
+                        // Focus-only (text inputs): nothing to settle/capture.
+                        return Ok(Some(PageActionOutcome::Retained));
+                    }
+                    // Prefer a cheap metadata probe over full settle+capture when
+                    // the document identity and URL are unchanged. Docs sites often
+                    // wire type=button handlers that only touch the clipboard (and
+                    // may flip a "Copied!" label, which advances revision without
+                    // leaving the page — still retain to avoid a full TUI refresh).
+                    if let Ok(meta) = driver.document_metadata()
+                        && meta.document_id == before_id
+                        && urls_match_for_activate(&meta.url, &before_url)
+                    {
+                        return Ok(Some(PageActionOutcome::Retained));
+                    }
                 }
             }
             driver.wait_settle().map_err(|e| e.to_string())?;
@@ -561,14 +598,14 @@ impl Controller {
                     continue;
                 }
                 // Atomic consistency: url/title/revision come only from this document.
-                return Ok(Some(doc));
+                return Ok(Some(PageActionOutcome::Captured(Box::new(doc))));
             }
             Err(last_err)
         })();
         match result {
-            Ok(Some(doc)) => {
+            Ok(Some(PageActionOutcome::Captured(doc))) => {
                 self.finish_capture(
-                    doc,
+                    *doc,
                     pending.previous_selection,
                     pending.previous_scroll,
                     pending.anchor_offset,
@@ -577,6 +614,13 @@ impl Controller {
                 if let Some(mode) = pending.hint_mode_after_success {
                     self.enter_hint_mode(mode);
                 }
+                Ok(())
+            }
+            Ok(Some(PageActionOutcome::Retained)) => {
+                // Keep published page + selection; just leave Loading.
+                self.state.lifecycle = Lifecycle::Ready;
+                self.shared.finish_page_action_retained();
+                self.state.view.set_status("activated");
                 Ok(())
             }
             Ok(None) => {
@@ -2955,6 +2999,77 @@ mod tests {
         assert!(
             ctl.state.view.pending_form_values.is_empty(),
             "pending cleared after capture"
+        );
+    }
+
+    #[test]
+    fn js_button_activate_retains_page_without_recapture() {
+        // type=button clipboard/copy controls must not flash Loading + recapture
+        // when the document identity and URL stay the same.
+        let document = normalize_fixture(
+            meta("1", "https://getkirby.com/docs/guide"),
+            vec![RawSemanticNode {
+                kind: "button".into(),
+                tag: Some("button".into()),
+                id: Some("copy".into()),
+                unique_id: true,
+                selector: None,
+                text: Some("Copy".into()),
+                href: None,
+                landmark: None,
+                heading_level: None,
+                ordered: None,
+                label: None,
+                src: None,
+                alt: None,
+                name: None,
+                value: None,
+                input_type: None,
+                placeholder: None,
+                checked: None,
+                disabled: None,
+                required: None,
+                readonly: None,
+                multiple: None,
+                button_type: Some("button".into()),
+                options: vec![],
+                children: vec![],
+            }],
+        )
+        .expect("doc");
+        let button = document
+            .components()
+            .find(|c| c.attrs.element_id.as_deref() == Some("copy"))
+            .unwrap()
+            .semantic_ref
+            .clone();
+        let before_rev = document.document.revision.clone();
+        let mut driver = FakePageDriver::new(vec![document.clone()]);
+        let mut ctl = Controller::new();
+        ctl.shared.activate_runtime();
+        ctl.state.publish_page(document.clone());
+        ctl.shared.publish(document);
+        ctl.state.view.selection = Some(button.clone());
+
+        ctl.activate_selection().expect("activate");
+        assert!(ctl.state.lifecycle.is_loading());
+        ctl.acknowledge_loading_frame();
+        ctl.perform_pending_page_action(&mut driver)
+            .expect("run activate");
+
+        assert!(ctl.state.lifecycle.is_ready());
+        assert_eq!(ctl.state.url(), "https://getkirby.com/docs/guide");
+        assert_eq!(ctl.state.revision(), before_rev);
+        assert_eq!(ctl.state.view.selection.as_ref(), Some(&button));
+        assert_eq!(ctl.state.view.status_message.as_deref(), Some("activated"));
+        assert_eq!(driver.capture_calls, 0, "must not recapture same-document button");
+        assert!(
+            driver
+                .activated
+                .iter()
+                .any(|(r, _)| r == button.as_str()),
+            "button was clicked: {:?}",
+            driver.activated
         );
     }
 }

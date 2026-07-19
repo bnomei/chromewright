@@ -34,6 +34,7 @@
 
 ### Fixed
 
+- Skip TUI settle+recapture after same-document button activates (e.g. clipboard copy on docs sites): click still runs, but the published page and selection are retained when document id and URL are unchanged.
 - When no tabs are open, submitting a URL (`o` then Enter) opens a new tab at that address instead of failing to navigate a missing page; `o` remains available in Error for empty-session recovery.
 - Make TUI `y` copy the resolved URL for links and images instead of the full rendered element.
 - Allow `about:blank` (and other `about:` URLs) in navigation validation so TUI `t` / `new_tab` can open a blank tab without `allow_unsafe`.

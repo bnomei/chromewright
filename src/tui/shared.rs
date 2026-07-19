@@ -319,6 +319,18 @@ impl SharedTuiState {
         };
     }
 
+    /// End a Loading page action without publishing a new document.
+    ///
+    /// Used when an in-page activation (clipboard copy, toggle that does not
+    /// navigate) leaves document identity and URL unchanged so a full
+    /// settle+recapture would only flash Loading and reset the view.
+    pub fn finish_page_action_retained(&self) {
+        let mut state = self.inner.lock().unwrap();
+        if state.lifecycle.is_loading() {
+            state.lifecycle = Lifecycle::Ready;
+        }
+    }
+
     /// Dismiss a shared Error lifecycle back to Ready without changing the
     /// retained document. No-op while Loading or already Ready so a dismiss
     /// cannot interrupt an in-flight page action.

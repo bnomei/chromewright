@@ -725,20 +725,40 @@ impl PageDriver for FakePageDriver {
             .map_err(|e| BrowserError::InvalidArgument(e.to_string()))?;
         self.activated
             .push((semantic_ref.as_str().to_string(), new_tab));
-        if component.kind == SemanticKind::Link {
-            if let Some(href) = &component.attrs.href {
-                if new_tab {
-                    self.open_tabs.push(href.clone());
-                } else {
-                    self.navigate_calls.push(href.clone());
-                    if self.page_index + 1 < self.pages.len() {
-                        self.page_index += 1;
+        match component.kind {
+            SemanticKind::Link => {
+                if let Some(href) = &component.attrs.href {
+                    if new_tab {
+                        self.open_tabs.push(href.clone());
+                    } else {
+                        self.navigate_calls.push(href.clone());
+                        if self.page_index + 1 < self.pages.len() {
+                            self.page_index += 1;
+                        }
                     }
                 }
+                Ok(true)
             }
-            Ok(true)
-        } else {
-            Ok(false)
+            // Buttons / submit-like inputs: click without leaving the page unless
+            // a later test advances pages. Matches production activate_ref.
+            SemanticKind::Button => Ok(true),
+            SemanticKind::Input => {
+                let t = component
+                    .attrs
+                    .input_type
+                    .as_deref()
+                    .unwrap_or("text")
+                    .to_ascii_lowercase();
+                if matches!(
+                    t.as_str(),
+                    "checkbox" | "radio" | "submit" | "button" | "reset"
+                ) {
+                    Ok(true)
+                } else {
+                    Ok(false)
+                }
+            }
+            _ => Ok(false),
         }
     }
 
