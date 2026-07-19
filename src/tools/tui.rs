@@ -248,11 +248,7 @@ impl Tool for TuiTool {
     /// # Errors
     ///
     /// This path does not return `Err`; companion failures are encoded inside [`TuiResult`].
-    fn execute_typed(&self, params: TuiParams, context: &mut ToolContext) -> Result<ToolResult> {
-        if self.name == "tui_refresh" && self.shared.is_some() {
-            context.session.evaluate("location.reload()", false)?;
-            return Ok(ToolResult::success_with(success(TuiData::Acknowledged)));
-        }
+    fn execute_typed(&self, params: TuiParams, _context: &mut ToolContext) -> Result<ToolResult> {
         let result = self
             .shared
             .as_ref()
@@ -453,6 +449,43 @@ mod tests {
         assert_eq!(
             result.error.as_deref(),
             Some("active TUI runtime is required")
+        );
+    }
+
+    #[test]
+    fn direct_registered_refresh_cannot_bypass_page_coordinator() {
+        let shared = SharedTuiState::new();
+        shared.activate_runtime();
+        let mut session = BrowserSession::with_test_backend(FakeSessionBackend::new());
+        session
+            .tool_registry_mut()
+            .register(TuiTool::with_shared("tui_refresh", shared));
+        let before = session
+            .extract_semantic_document()
+            .expect("initial capture")
+            .document
+            .revision;
+
+        let result = session
+            .execute_tool("tui_refresh", serde_json::json!({}))
+            .expect("structured runtime-required result");
+
+        assert!(result.success);
+        assert_eq!(
+            result
+                .data
+                .as_ref()
+                .and_then(|data| data["available"].as_bool()),
+            Some(false)
+        );
+        assert_eq!(
+            session
+                .extract_semantic_document()
+                .expect("capture after rejected refresh")
+                .document
+                .revision,
+            before,
+            "direct tool execution must not reload Chrome"
         );
     }
 
