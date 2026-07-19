@@ -33,7 +33,7 @@ pub use action::Action;
 pub use app::{TuiOptions, run_tui, run_tui_with_config};
 pub use config::{TuiConfig, TuiLayout, default_config_path, example_config_toml, load_tui_config};
 pub use controller::Controller;
-pub use coordinator::PageCoordinator;
+pub use coordinator::{FinalizeOutcome, PageCoordinator};
 pub use driver::{FakePageDriver, PageDriver, SessionPageDriver};
 pub use keymap::{KeyChord, KeyCode, KeyModifiers, KeySequence, TuiKeymap};
 pub use managed_headless::{BrowserSessionPolicy, ManagedHeadlessSession};

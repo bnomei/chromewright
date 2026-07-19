@@ -9,10 +9,7 @@
 use crate::semantic::{SemanticDocument, SemanticRef, render_outline, render_semantic_markdown};
 use crate::tui::state::Lifecycle;
 use std::collections::VecDeque;
-use std::sync::{
-    Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::{Arc, Mutex};
 
 /// Opaque ownership token for one Loading transaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -209,6 +206,7 @@ pub struct RefreshPage {
 
 #[derive(Debug)]
 struct Inner {
+    runtime_active: bool,
     lifecycle: Lifecycle,
     active: Option<SemanticDocument>,
     retained: VecDeque<SemanticDocument>,
@@ -229,7 +227,6 @@ struct Inner {
 #[derive(Clone)]
 pub struct SharedTuiState {
     inner: Arc<Mutex<Inner>>,
-    runtime_active: Arc<AtomicBool>,
 }
 
 impl SharedTuiState {
@@ -253,6 +250,7 @@ impl SharedTuiState {
     fn with_limit(limit: usize) -> Self {
         Self {
             inner: Arc::new(Mutex::new(Inner {
+                runtime_active: false,
                 lifecycle: Lifecycle::Ready,
                 active: None,
                 retained: VecDeque::new(),
@@ -263,25 +261,36 @@ impl SharedTuiState {
                 next_ticket: 0,
                 active_ticket: None,
             })),
-            runtime_active: Arc::new(AtomicBool::new(false)),
         }
     }
 
     /// Mark the interactive runtime as ready to accept companion operations.
     /// Standard stdio sessions never call this, so their registry stays separate.
     pub fn activate_runtime(&self) {
-        self.runtime_active.store(true, Ordering::Release);
+        self.inner.lock().unwrap().runtime_active = true;
     }
 
     /// Stop accepting companion state changes before the terminal or HTTP host
     /// is torn down.
     pub fn deactivate_runtime(&self) {
-        self.runtime_active.store(false, Ordering::Release);
+        self.inner.lock().unwrap().runtime_active = false;
     }
 
     /// Whether companion tools may mutate coordination state (set by the interactive TUI host).
     pub fn runtime_active(&self) -> bool {
-        self.runtime_active.load(Ordering::Acquire)
+        self.inner.lock().unwrap().runtime_active
+    }
+
+    /// Atomically check the companion runtime gate and claim a page action.
+    pub fn begin_companion_page_action(
+        &self,
+        action: impl Into<String>,
+    ) -> Result<PageActionTicket, CoordinationError> {
+        let mut state = self.inner.lock().unwrap();
+        if !state.runtime_active {
+            return Err(CoordinationError::RuntimeRequired);
+        }
+        Self::begin_page_action_locked(&mut state, action.into())
     }
 
     /// Shared Loading → Ready | Error lifecycle visible to both terminal and companion.
@@ -298,15 +307,20 @@ impl SharedTuiState {
         action: impl Into<String>,
     ) -> Result<PageActionTicket, CoordinationError> {
         let mut state = self.inner.lock().unwrap();
+        Self::begin_page_action_locked(&mut state, action.into())
+    }
+
+    fn begin_page_action_locked(
+        state: &mut Inner,
+        action: String,
+    ) -> Result<PageActionTicket, CoordinationError> {
         if state.lifecycle.is_loading() {
             return Err(CoordinationError::ActionInProgress);
         }
         state.next_ticket = state.next_ticket.wrapping_add(1).max(1);
         let ticket = PageActionTicket(state.next_ticket);
         state.active_ticket = Some(ticket);
-        state.lifecycle = Lifecycle::Loading {
-            action: action.into(),
-        };
+        state.lifecycle = Lifecycle::Loading { action };
         Ok(ticket)
     }
 
@@ -825,6 +839,21 @@ mod tests {
             .commit_page_action(second, doc("tab", "current"), None)
             .unwrap();
         assert_eq!(shared.active().unwrap().document.revision, "current");
+    }
+
+    #[test]
+    fn deactivation_is_atomic_with_companion_claims() {
+        let shared = SharedTuiState::new();
+        shared.activate_runtime();
+        let ticket = shared.begin_companion_page_action("first").unwrap();
+        shared.deactivate_runtime();
+        // Work claimed before shutdown may finish; no later companion can claim.
+        shared.finish_page_action_retained(ticket).unwrap();
+        assert_eq!(
+            shared.begin_companion_page_action("second"),
+            Err(CoordinationError::RuntimeRequired)
+        );
+        assert!(shared.lifecycle().is_ready());
     }
 
     #[test]

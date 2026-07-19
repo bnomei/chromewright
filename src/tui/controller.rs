@@ -16,7 +16,7 @@ use crate::tui::content::{
 };
 use crate::tui::driver::PageDriver;
 use crate::tui::hints::{HintMatch, LinkHint, assign_hints, match_hint};
-use crate::tui::shared::{Attention, PageActionTicket};
+use crate::tui::shared::{Attention, CoordinationError, PageActionTicket};
 use crate::tui::state::{HintMode, InputKind, InteractionMode, Lifecycle, TuiState};
 use crate::tui::url_history::UrlHistory;
 use std::sync::Arc;
@@ -562,12 +562,15 @@ impl Controller {
         };
         if !pending.loading_frame_drawn {
             let message = "browser action rejected before a Loading frame was rendered".to_string();
-            self.state.enter_error(&pending.action, message.clone());
-            let _ = self.coordinator.shared().fail_page_action(
+            if let Err(error) = self.coordinator.shared().fail_page_action(
                 pending.ticket,
                 pending.action.clone(),
                 message.clone(),
-            );
+            ) {
+                self.synchronize_companion_state();
+                return Err(error.to_string());
+            }
+            self.state.enter_error(&pending.action, message.clone());
             return Err(message);
         }
 
@@ -718,13 +721,22 @@ impl Controller {
         })();
         match result {
             Ok(Some(PageActionOutcome::Captured(doc))) => {
-                self.finish_capture(
+                let saved_state = self.state.clone();
+                let saved_hints = self.hints.clone();
+                let saved_history = self.url_history.clone();
+                if let Err(error) = self.finish_capture(
                     *doc,
                     pending.previous_selection,
                     pending.previous_scroll,
                     pending.anchor_offset,
                     pending.ticket,
-                );
+                ) {
+                    self.state = saved_state;
+                    self.hints = saved_hints;
+                    self.url_history = saved_history;
+                    self.synchronize_companion_state();
+                    return Err(error.to_string());
+                }
                 self.refresh_history_availability(driver);
                 if let Some(mode) = pending.hint_mode_after_success {
                     self.enter_hint_mode(mode);
@@ -739,7 +751,9 @@ impl Controller {
                 focus_after,
                 applied_field,
             })) => {
-                self.finish_same_document_patch(
+                let saved_state = self.state.clone();
+                let saved_hints = self.hints.clone();
+                if let Err(error) = self.finish_same_document_patch(
                     *document,
                     top_anchor,
                     previous_selection,
@@ -747,30 +761,44 @@ impl Controller {
                     focus_after,
                     applied_field,
                     pending.ticket,
-                );
+                ) {
+                    self.state = saved_state;
+                    self.hints = saved_hints;
+                    self.synchronize_companion_state();
+                    return Err(error.to_string());
+                }
                 self.refresh_history_availability(driver);
                 Ok(())
             }
             Ok(Some(PageActionOutcome::Retained)) => {
                 // Keep published page + selection; just leave Loading.
+                if let Err(error) = self.coordinator.retain(pending.ticket) {
+                    self.synchronize_companion_state();
+                    return Err(error.to_string());
+                }
                 self.state.lifecycle = Lifecycle::Ready;
-                let _ = self.coordinator.retain(pending.ticket);
                 self.state.view.set_status("activated");
                 Ok(())
             }
             Ok(None) => {
-                self.clear_empty_session(pending.ticket);
+                if let Err(error) = self.clear_empty_session(pending.ticket) {
+                    self.synchronize_companion_state();
+                    return Err(error.to_string());
+                }
                 Ok(())
             }
             Err(msg) => {
                 // Retain last valid page; never publish partial update as Ready.
                 log::error!("tui page action '{}' failed: {msg}", pending.action);
-                self.state.enter_error(&pending.action, msg.clone());
-                let _ = self.coordinator.shared().fail_page_action(
+                if let Err(error) = self.coordinator.shared().fail_page_action(
                     pending.ticket,
                     pending.action.clone(),
                     msg.clone(),
-                );
+                ) {
+                    self.synchronize_companion_state();
+                    return Err(error.to_string());
+                }
+                self.state.enter_error(&pending.action, msg.clone());
                 Err(msg)
             }
         }
@@ -778,11 +806,12 @@ impl Controller {
 
     /// Browser has zero tabs: drop retained page so chrome/content clear and
     /// lifecycle stays Ready for recovery via `t` (blank tab) or `o` (URL → new tab).
-    fn clear_empty_session(&mut self, ticket: PageActionTicket) {
+    fn clear_empty_session(&mut self, ticket: PageActionTicket) -> Result<(), CoordinationError> {
+        self.coordinator.clear(ticket)?;
         self.pending_page_action = None;
         self.hints.clear();
         self.state.clear_session();
-        let _ = self.coordinator.clear(ticket);
+        Ok(())
     }
 
     /// Publish a same-document recapture.
@@ -800,7 +829,7 @@ impl Controller {
         focus_after: Option<SemanticRef>,
         applied_field: Option<(SemanticRef, String)>,
         ticket: PageActionTicket,
-    ) {
+    ) -> Result<(), CoordinationError> {
         let prev_scroll = self.state.view.scroll_y;
 
         // Rebind collapse / search against the new revision.
@@ -940,8 +969,9 @@ impl Controller {
         }
         let document = self.state.document().expect("patch published").clone();
         let selection = self.state.view.selection.clone();
-        let _ = self.coordinator.commit(ticket, document, selection);
+        self.coordinator.commit(ticket, document, selection)?;
         self.refresh_inspect_panel();
+        Ok(())
     }
 
     fn finish_capture(
@@ -951,7 +981,7 @@ impl Controller {
         prev_scroll: usize,
         anchor_offset: usize,
         ticket: PageActionTicket,
-    ) {
+    ) -> Result<(), CoordinationError> {
         let collapsed = self.state.view.collapsed.clone();
         let wrap = self.state.view.wrap;
         let projection = self.state.view.projection;
@@ -1004,8 +1034,9 @@ impl Controller {
         self.hints.clear();
         let document = self.state.document().expect("capture published").clone();
         let selection = self.state.view.selection.clone();
-        let _ = self.coordinator.commit(ticket, document, selection);
+        self.coordinator.commit(ticket, document, selection)?;
         self.refresh_inspect_panel();
+        Ok(())
     }
 
     /// After a capture, if the document URL has a fragment, move selection to it.
@@ -3161,6 +3192,35 @@ mod tests {
         assert!(err.contains("Loading frame"));
         assert!(driver.navigate_calls.is_empty());
         assert!(matches!(ctl.state.lifecycle, Lifecycle::Error { .. }));
+    }
+
+    #[test]
+    fn stale_capture_completion_adopts_authoritative_state() {
+        let before = text_doc("1", "before", "one");
+        let captured = text_doc("2", "captured", "two");
+        let newer = text_doc("3", "newer", "three");
+        let mut driver = FakePageDriver::new(vec![captured]);
+        let mut ctl = Controller::new();
+        ctl.state.publish_page(before.clone());
+        ctl.coordinator.shared().publish(before);
+        ctl.reload();
+        ctl.acknowledge_loading_frame();
+
+        // An authoritative publication invalidates the terminal's pending ticket.
+        ctl.coordinator.shared().publish(newer.clone());
+        let error = ctl
+            .perform_pending_page_action(&mut driver)
+            .expect_err("stale completion must fail");
+
+        assert!(error.contains("stale"));
+        assert_eq!(
+            ctl.state.document().unwrap().document.revision,
+            newer.document.revision
+        );
+        assert_eq!(
+            ctl.coordinator.shared().active().unwrap().document.revision,
+            newer.document.revision
+        );
     }
 
     #[test]

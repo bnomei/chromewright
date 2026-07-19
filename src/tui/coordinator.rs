@@ -6,6 +6,12 @@ use crate::tui::driver::{PageDriver, SessionPageDriver};
 use crate::tui::shared::{CoordinationError, PageActionTicket, RefreshPage, SharedTuiState};
 use std::sync::Arc;
 
+/// Result of successfully finalizing a companion browser mutation.
+pub enum FinalizeOutcome {
+    Published(RefreshPage),
+    Cleared,
+}
+
 /// Structurally couples the one companion browser session to its publication store.
 pub struct PageCoordinator {
     session: Arc<BrowserSession>,
@@ -26,6 +32,13 @@ impl PageCoordinator {
 
     pub fn begin(&self, action: impl Into<String>) -> Result<PageActionTicket, CoordinationError> {
         self.shared.begin_page_action(action)
+    }
+
+    pub fn begin_companion(
+        &self,
+        action: impl Into<String>,
+    ) -> Result<PageActionTicket, CoordinationError> {
+        self.shared.begin_companion_page_action(action)
     }
 
     pub fn capture_with_metadata_barrier<D: PageDriver>(
@@ -58,7 +71,21 @@ impl PageCoordinator {
         &self,
         ticket: PageActionTicket,
         action: &str,
-    ) -> Result<RefreshPage, CoordinationError> {
+    ) -> Result<FinalizeOutcome, CoordinationError> {
+        let tabs = match self.session.list_tabs() {
+            Ok(tabs) => tabs,
+            Err(_) => {
+                let error = CoordinationError::RefreshFailed;
+                let _ = self
+                    .shared
+                    .fail_page_action(ticket, action, error.to_string());
+                return Err(error);
+            }
+        };
+        if tabs.is_empty() {
+            self.shared.clear_session(ticket)?;
+            return Ok(FinalizeOutcome::Cleared);
+        }
         let result = (|| {
             let mut driver = SessionPageDriver::new(&self.session);
             driver
@@ -76,7 +103,7 @@ impl PageCoordinator {
                     title: document.document.title.clone(),
                 };
                 self.shared.commit_page_action(ticket, document, None)?;
-                Ok(page)
+                Ok(FinalizeOutcome::Published(page))
             }
             Err(error) => {
                 let _ = self
@@ -88,10 +115,7 @@ impl PageCoordinator {
     }
 
     pub fn refresh(&self) -> Result<RefreshPage, CoordinationError> {
-        if !self.shared.runtime_active() {
-            return Err(CoordinationError::RuntimeRequired);
-        }
-        let ticket = self.begin("refresh").map_err(|e| {
+        let ticket = self.begin_companion("refresh").map_err(|e| {
             if e == CoordinationError::ActionInProgress {
                 CoordinationError::RefreshInProgress
             } else {
@@ -106,7 +130,10 @@ impl PageCoordinator {
             );
             return Err(CoordinationError::RefreshFailed);
         }
-        self.finalize_browser_mutation(ticket, "refresh")
+        match self.finalize_browser_mutation(ticket, "refresh")? {
+            FinalizeOutcome::Published(page) => Ok(page),
+            FinalizeOutcome::Cleared => Err(CoordinationError::NoDocument),
+        }
     }
 
     pub fn commit(
