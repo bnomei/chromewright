@@ -19,9 +19,6 @@ use crate::tui::state::{HintMode, InputKind, InteractionMode, Lifecycle, TuiStat
 /// Rows kept above a `#fragment` target when scrolling it into view.
 const FRAGMENT_VIEWPORT_TOP_MARGIN: usize = 5;
 
-/// Idle delay before writing a search-like field to the live DOM while typing.
-const LIVE_APPLY_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(280);
-
 /// Extra settle time after applying a field so filter JS can mutate the DOM.
 const APPLY_FIELD_SETTLE_PAD: std::time::Duration = std::time::Duration::from_millis(120);
 
@@ -47,10 +44,6 @@ pub struct Controller {
     /// Browser work that may begin only after the event loop has successfully
     /// drawn a Loading frame.
     pending_page_action: Option<PendingPageAction>,
-    /// When set, [`Self::poll_live_form_apply`] queues a live field write.
-    live_apply_deadline: Option<std::time::Instant>,
-    /// Last value written via apply_field (skip redundant debounce writes).
-    last_applied_form: Option<(SemanticRef, String)>,
 }
 
 #[derive(Debug)]
@@ -94,14 +87,11 @@ enum PageOperation {
     },
     /// Write one field into the live DOM (input/change events) and same-doc patch.
     ///
-    /// Used for Enter-to-apply, Tab-away write, and debounced live search — no
-    /// submit button required.
+    /// Used for Enter-to-apply and Tab-away (blur/complete) only — not while typing.
     ApplyField {
         document: SemanticDocument,
         semantic_ref: SemanticRef,
         value: String,
-        /// Keep `IN` edit mode after patch (live debounce) vs leave to Normal.
-        stay_in_edit: bool,
         /// After a successful patch, move focus to this control (Tab-away).
         focus_after: Option<SemanticRef>,
     },
@@ -120,11 +110,9 @@ enum PageActionOutcome {
         /// When set, jump to this fragment after publish (from link `href` or
         /// post-click URL). When `None`, pin the top viewport line.
         jump_fragment: Option<String>,
-        /// Keep form edit mode after patch (debounced live apply).
-        stay_in_edit: bool,
         /// After patch, move selection/edit to this control (Tab-away).
         focus_after: Option<SemanticRef>,
-        /// Field just written (for restoring edit buffer after rebind).
+        /// Field just written (for restoring selection after rebind).
         applied_field: Option<(SemanticRef, String)>,
     },
     /// Focus-only / no-op: keep the published page without capturing.
@@ -162,8 +150,6 @@ impl Controller {
             shared,
             hints: Vec::new(),
             pending_page_action: None,
-            live_apply_deadline: None,
-            last_applied_form: None,
         }
     }
 
@@ -182,8 +168,6 @@ impl Controller {
             shared,
             hints: Vec::new(),
             pending_page_action: None,
-            live_apply_deadline: None,
-            last_applied_form: None,
         }
     }
 
@@ -289,73 +273,17 @@ impl Controller {
     /// an explicit submit control.
     pub fn commit_form_field(&mut self, semantic_ref: &SemanticRef, text: &str) {
         self.stash_form_field(semantic_ref, text);
-        self.clear_live_apply_deadline();
-        if let Err(msg) = self.queue_apply_field(semantic_ref, text, false, None) {
+        if let Err(msg) = self.queue_apply_field(semantic_ref, text, None) {
             self.state.view.set_status(msg);
             self.state.mode = InteractionMode::Normal;
         }
     }
 
-    /// Note that form text changed (for debounced live apply on search-like fields).
-    pub fn note_form_buffer_changed(&mut self) {
-        let Some(doc) = self.state.document() else {
-            return;
-        };
-        let InteractionMode::Input(InputKind::Form { semantic_ref, .. }) = &self.state.mode else {
-            return;
-        };
-        let Ok(component) = doc.resolve(semantic_ref) else {
-            return;
-        };
-        if !is_live_apply_field(component) {
-            return;
-        }
-        self.live_apply_deadline =
-            Some(std::time::Instant::now() + LIVE_APPLY_DEBOUNCE);
-    }
-
-    /// If a debounced live-apply is due, queue it (stay in edit mode).
-    ///
-    /// Called from the event loop on idle ticks. No-op while Loading or when
-    /// the buffer has not changed since the last apply.
-    pub fn poll_live_form_apply(&mut self) {
-        let Some(deadline) = self.live_apply_deadline else {
-            return;
-        };
-        if std::time::Instant::now() < deadline {
-            return;
-        }
-        if self.pending_page_action.is_some() || self.state.lifecycle.is_loading() {
-            return;
-        }
-        let InteractionMode::Input(InputKind::Form {
-            semantic_ref,
-            buffer,
-        }) = &self.state.mode
-        else {
-            self.clear_live_apply_deadline();
-            return;
-        };
-        let semantic_ref = semantic_ref.clone();
-        let buffer = buffer.clone();
-        if self.last_applied_form.as_ref() == Some(&(semantic_ref.clone(), buffer.clone())) {
-            self.clear_live_apply_deadline();
-            return;
-        }
-        self.clear_live_apply_deadline();
-        let _ = self.queue_apply_field(&semantic_ref, &buffer, true, None);
-    }
-
-    fn clear_live_apply_deadline(&mut self) {
-        self.live_apply_deadline = None;
-    }
-
-    /// Queue write + same-doc patch for one field.
+    /// Queue write + same-doc patch for one field (Enter complete or Tab blur).
     fn queue_apply_field(
         &mut self,
         semantic_ref: &SemanticRef,
         text: &str,
-        stay_in_edit: bool,
         focus_after: Option<SemanticRef>,
     ) -> Result<(), String> {
         let document = self
@@ -364,14 +292,12 @@ impl Controller {
             .cloned()
             .ok_or_else(|| "no document".to_string())?;
         document.resolve(semantic_ref).map_err(|e| e.to_string())?;
-        self.last_applied_form = Some((semantic_ref.clone(), text.to_string()));
         self.queue_page_action(
             "apply_field",
             PageOperation::ApplyField {
                 document,
                 semantic_ref: semantic_ref.clone(),
                 value: text.to_string(),
-                stay_in_edit,
                 focus_after,
             },
             None,
@@ -730,7 +656,6 @@ impl Controller {
                             top_anchor,
                             previous_selection,
                             jump_fragment,
-                            stay_in_edit: false,
                             focus_after: None,
                             applied_field: None,
                         }));
@@ -740,7 +665,6 @@ impl Controller {
                     document,
                     semantic_ref,
                     value,
-                    stay_in_edit,
                     focus_after,
                 } => {
                     let before_id = document.document.document_id.clone();
@@ -767,7 +691,6 @@ impl Controller {
                             top_anchor,
                             previous_selection,
                             jump_fragment: None,
-                            stay_in_edit,
                             focus_after,
                             applied_field: Some((semantic_ref, value)),
                         }));
@@ -799,7 +722,6 @@ impl Controller {
                 top_anchor,
                 previous_selection,
                 jump_fragment,
-                stay_in_edit,
                 focus_after,
                 applied_field,
             })) => {
@@ -808,7 +730,6 @@ impl Controller {
                     top_anchor,
                     previous_selection,
                     jump_fragment,
-                    stay_in_edit,
                     focus_after,
                     applied_field,
                 );
@@ -889,14 +810,12 @@ impl Controller {
     ///   target with the usual top margin — do **not** pin the old top.
     /// - Otherwise (clipboard copy, field apply): pin the pre-click top
     ///   viewport line and never `ensure_visible(selection)`.
-    #[allow(clippy::too_many_arguments)]
     fn finish_same_document_patch(
         &mut self,
         doc: SemanticDocument,
         top_anchor: Option<ViewportTopAnchor>,
         previous_selection: Option<SemanticRef>,
         jump_fragment: Option<String>,
-        stay_in_edit: bool,
         focus_after: Option<SemanticRef>,
         applied_field: Option<(SemanticRef, String)>,
     ) {
@@ -944,13 +863,6 @@ impl Controller {
             && let Ok(rebound) = doc.rebind_surviving(old_ref)
         {
             pending_form.insert(rebound, value.clone());
-        }
-
-        // Rebind last_applied_form tracking.
-        if let Some((old_ref, value)) = self.last_applied_form.take()
-            && let Ok(rebound) = doc.rebind_surviving(&old_ref)
-        {
-            self.last_applied_form = Some((rebound, value));
         }
 
         let focus_after_rebound = focus_after.and_then(|r| doc.rebind_surviving(&r).ok());
@@ -1028,15 +940,6 @@ impl Controller {
                 } else {
                     self.state.view.selection = Some(next);
                     self.state.mode = InteractionMode::Normal;
-                }
-            } else if stay_in_edit {
-                // Live debounce: stay in IN with the same buffer.
-                if let Some((field_ref, value)) = applied_rebound {
-                    self.state.view.selection = Some(field_ref.clone());
-                    self.state.mode = InteractionMode::Input(InputKind::Form {
-                        semantic_ref: field_ref,
-                        buffer: value,
-                    });
                 }
             } else if let Some((field_ref, _)) = applied_rebound {
                 // Enter-apply: leave edit mode, keep selection on the field.
@@ -1869,11 +1772,10 @@ impl Controller {
 
         if let Some((ref_left, text_left)) = leaving_form {
             self.stash_form_field(&ref_left, &text_left);
-            self.clear_live_apply_deadline();
             // Apply leaving field, then land on next control after patch.
             let focus_after = Some(next_ref.clone());
             if self
-                .queue_apply_field(&ref_left, &text_left, false, focus_after)
+                .queue_apply_field(&ref_left, &text_left, focus_after)
                 .is_ok()
             {
                 return;
@@ -2048,7 +1950,6 @@ impl Controller {
             self.state.view.inspect_follow = false;
             // Discard unstaged form typing without writing to the page.
             self.state.view.clear_pending_form_values();
-            self.clear_live_apply_deadline();
         }
         self.hints.clear();
     }
@@ -2069,47 +1970,6 @@ impl Controller {
             self.ensure_visible(idx, lines.len());
         }
     }
-}
-
-/// Whether a text field should receive debounced live DOM writes while typing.
-///
-/// Heuristic for search/filter UIs (no submit button): `type=search`, common
-/// name/id/placeholder tokens. Classic multi-field forms are not matched.
-fn is_live_apply_field(component: &crate::semantic::SemanticComponent) -> bool {
-    use crate::semantic::SemanticKind;
-    if !is_text_editable_control(component) {
-        return false;
-    }
-    if component.kind == SemanticKind::Textarea {
-        return false;
-    }
-    let input_type = component
-        .attrs
-        .input_type
-        .as_deref()
-        .unwrap_or("text")
-        .to_ascii_lowercase();
-    if input_type == "search" {
-        return true;
-    }
-    let mut hay = String::new();
-    for part in [
-        component.attrs.name.as_deref(),
-        component.attrs.element_id.as_deref(),
-        component.attrs.placeholder.as_deref(),
-        component.label.as_deref(),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        hay.push(' ');
-        hay.push_str(&part.to_ascii_lowercase());
-    }
-    const NEEDLES: &[&str] = &[
-        "search", "filter", "query", "find", "keyword", "lookup",
-    ];
-    NEEDLES.iter().any(|n| hay.contains(n))
-        || hay.split(|c: char| !c.is_ascii_alphanumeric()).any(|t| t == "q")
 }
 
 /// Explicit submit controls (form send only happens through these).
@@ -3636,76 +3496,6 @@ mod tests {
             "must not click anything: {:?}",
             driver.activated
         );
-    }
-
-    #[test]
-    fn live_apply_heuristic_matches_search_fields() {
-        let search = normalize_fixture(
-            meta("1", "https://example.com/"),
-            vec![RawSemanticNode {
-                kind: "input".into(),
-                tag: Some("input".into()),
-                id: Some("q".into()),
-                unique_id: true,
-                selector: None,
-                text: None,
-                href: None,
-                landmark: None,
-                heading_level: None,
-                ordered: None,
-                label: None,
-                src: None,
-                alt: None,
-                name: Some("q".into()),
-                value: None,
-                input_type: Some("text".into()),
-                placeholder: Some("Filter projects".into()),
-                checked: None,
-                disabled: None,
-                required: None,
-                readonly: None,
-                multiple: None,
-                button_type: None,
-                options: vec![],
-                children: vec![],
-            }],
-        )
-        .expect("doc");
-        let email = normalize_fixture(
-            meta("1", "https://example.com/"),
-            vec![RawSemanticNode {
-                kind: "input".into(),
-                tag: Some("input".into()),
-                id: Some("email".into()),
-                unique_id: true,
-                selector: None,
-                text: None,
-                href: None,
-                landmark: None,
-                heading_level: None,
-                ordered: None,
-                label: Some("Email".into()),
-                src: None,
-                alt: None,
-                name: Some("email".into()),
-                value: None,
-                input_type: Some("email".into()),
-                placeholder: None,
-                checked: None,
-                disabled: None,
-                required: None,
-                readonly: None,
-                multiple: None,
-                button_type: None,
-                options: vec![],
-                children: vec![],
-            }],
-        )
-        .expect("doc");
-        let s = search.components().next().unwrap();
-        let e = email.components().next().unwrap();
-        assert!(is_live_apply_field(s));
-        assert!(!is_live_apply_field(e));
     }
 
     fn copy_button_node(text: &str) -> RawSemanticNode {

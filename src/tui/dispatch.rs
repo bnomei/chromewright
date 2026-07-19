@@ -69,7 +69,6 @@ impl Dispatcher {
         let InteractionMode::Input(kind) = &mut controller.state.mode else {
             return DispatchOutcome::Continue;
         };
-        let was_form = matches!(kind, InputKind::Form { .. });
         let buffer = input_buffer_mut(kind);
         let remaining = MAX_TUI_INPUT_CHARS.saturating_sub(buffer.chars().count());
         let appended: String = text.chars().take(remaining).collect();
@@ -79,9 +78,6 @@ impl Dispatcher {
             controller.state.view.set_status(format!(
                 "paste truncated at {MAX_TUI_INPUT_CHARS} characters"
             ));
-        }
-        if was_form {
-            controller.note_form_buffer_changed();
         }
         DispatchOutcome::Redraw
     }
@@ -129,10 +125,6 @@ impl Dispatcher {
         }
         match chord.code {
             KeyCode::Backspace => {
-                let was_form = matches!(
-                    controller.state.mode,
-                    InteractionMode::Input(InputKind::Form { .. })
-                );
                 if let InteractionMode::Input(kind) = &mut controller.state.mode {
                     match kind {
                         InputKind::Url { buffer }
@@ -142,24 +134,14 @@ impl Dispatcher {
                         }
                     }
                 }
-                if was_form {
-                    controller.note_form_buffer_changed();
-                }
                 DispatchOutcome::Redraw
             }
             KeyCode::Char(ch) if !chord.modifiers.ctrl && !chord.modifiers.alt => {
-                let was_form = matches!(
-                    controller.state.mode,
-                    InteractionMode::Input(InputKind::Form { .. })
-                );
                 if let InteractionMode::Input(kind) = &mut controller.state.mode {
                     let buffer = input_buffer_mut(kind);
                     if buffer.chars().count() < MAX_TUI_INPUT_CHARS {
                         buffer.push(ch);
                     }
-                }
-                if was_form {
-                    controller.note_form_buffer_changed();
                 }
                 DispatchOutcome::Redraw
             }

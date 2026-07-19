@@ -291,12 +291,6 @@ fn run_loop(
             continue;
         }
 
-        // Debounced live apply for search-like fields (idle tick).
-        controller.poll_live_form_apply();
-        if controller.has_pending_page_action() {
-            continue;
-        }
-
         if controller.state.should_quit {
             break;
         }

@@ -57,10 +57,10 @@ Form controls render inline in the content pane. Text inputs show
 editing so reverse selection fills the field). Checkboxes/radios show `☑`/`☐`
 and `●`/`○` and toggle on Enter. Selects show the current option and cycle on
 Enter. Enter/Tab on a text field writes `input`/`change` into Chrome and
-same-document patches (search-like fields also debounce-apply while typing).
-**HTTP form send** still requires Enter on an explicit submit button
-(`button`/`input type=submit`): all staged fields are written, the button is
-clicked, then the page settles and is recaptured.
+same-document patches once (no while-typing debounce). **HTTP form send** still
+requires Enter on an explicit submit button (`button`/`input type=submit`): all
+staged fields are written, the button is clicked, then the page settles and is
+recaptured.
 
 Failed page actions (history, navigate, reload, tab changes, …) enter the
 Error lifecycle, keep the last published page on screen, and block normal
