@@ -1971,6 +1971,7 @@ impl Controller {
         if self.state.clear_error() {
             let _ = self.shared.clear_error();
         } else {
+            let was_normal = matches!(self.state.mode, InteractionMode::Normal);
             self.state.mode = InteractionMode::Normal;
             self.state.view.hint_buffer.clear();
             self.state.view.inspect_text = None;
@@ -1978,6 +1979,12 @@ impl Controller {
             self.state.view.inspect_follow = false;
             // Discard unstaged form typing without writing to the page.
             self.state.view.clear_pending_form_values();
+            // Sticky footer `/{query}  n/m` is cleared by Esc in Normal mode
+            // (Vim-like dismiss). Esc while typing `/…` only cancels the prompt
+            // and leaves a prior pattern active so n/N still work.
+            if was_normal {
+                let _ = self.state.view.clear_search();
+            }
         }
         self.hints.clear();
     }

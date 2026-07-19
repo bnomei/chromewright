@@ -198,6 +198,27 @@ impl ViewState {
     pub fn clear_pending_form_values(&mut self) {
         self.pending_form_values.clear();
     }
+
+    /// Clear sticky `/search` state (footer `/{query}  n/m` and match list).
+    ///
+    /// Returns `true` when a search was active. Used by Escape in Normal mode.
+    pub fn clear_search(&mut self) -> bool {
+        let had = !self.search_query.is_empty() || !self.search_matches.is_empty();
+        self.search_query.clear();
+        self.search_matches.clear();
+        self.search_index = 0;
+        if had {
+            // Drop stale "pattern not found" / search: status once the cmdline is gone.
+            if self
+                .status_message
+                .as_deref()
+                .is_some_and(|m| m.starts_with("search:") || m == "pattern not found")
+            {
+                self.clear_status();
+            }
+        }
+        had
+    }
 }
 
 /// Full terminal browser state shared by controller and renderer.

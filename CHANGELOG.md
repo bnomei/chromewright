@@ -45,6 +45,7 @@
 
 ### Fixed
 
+- Esc in Normal mode clears sticky TUI `/search` footer (`/{query}  n/m`); Esc while typing `/…` still only cancels the prompt and keeps the prior pattern for `n`/`N`.
 - Semantic capture skips effectively hidden nodes (`display:none`, `visibility:hidden`, `[hidden]`, `aria-hidden`) so client-side filters like Holmes on builtwithkirby.com update the markdown list after search, not only the input value/URL.
 - TUI settle after navigate/reload/field apply waits for navigation completion and a quiet main-frame revision so the semantic body matches the updated URL (was capturing stale DOM while the address bar already moved).
 - Form edit (`IN`) caret uses a reverse-filled ASCII space instead of U+2588 full block, and the hardware cursor stays hidden after each draw, so the value field no longer shows a hollow empty cell next to `]`.

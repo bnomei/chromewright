@@ -233,7 +233,7 @@ Browser-first (Vimari) defaults, with [md-tui](https://github.com/henriklovhaug/
 | `Tab` | `tab_next` | Next focusable control; writes the leaving field to the live DOM + same-doc patch, then moves focus. |
 | `Shift-Tab` | `tab_prev` | Previous focusable control; same write-on-leave behavior as Tab. |
 | `Enter` | `confirm` | Text input: apply value to the live DOM + same-doc patch (no submit needed; live search works). Checkbox/radio: toggle. Select: cycle options. **Submit button**: write staged fields + click + recapture. Link/other: activate. |
-| `Esc` | `escape` | Leave prompt, hint, or inspect mode. After a failed page action, dismiss Error back to Ready (retained page stays) so keys work again. |
+| `Esc` | `escape` | Leave prompt, hint, or inspect mode. In Normal mode, also clears sticky `/search` footer (`/{query}  n/m`). After a failed page action, dismiss Error back to Ready (retained page stays) so keys work again. |
 | `Ctrl-c` | `quit` | Quit the TUI. |
 
 Hints use deterministic two-key labels from the alphabet `asdfgqwertzxcvb` (for example `aa`, `as`), assigned to viewport-visible links and form controls (one label per target; painted on the first line only when a target wraps).
@@ -244,7 +244,7 @@ The content pane uses a terminal-native ANSI-16 role palette (clearer heading la
 
 Default reading mode is **prose** (markdown-like): no `▾ [main]` / `ol` / group chrome, fully flat lines. Press `zs` for **structure** (DOM-like outline). Wrap (`zw`) and structure (`zs`) are not shown in the header bar; toggle feedback appears in the status line.
 
-Search follows Vim semantics: a new `/pattern` starts after the current selection and wraps at the end; `n` repeats forward, `N` repeats backward, and submitting an empty `/` prompt repeats the previous pattern. The footer shows the cmdline while typing (`/…`) and keeps `/{pattern}  n/m` while a search is active; link hints (`f` / `F`) also use the footer (`f as`) rather than the header. Bracketed paste is accepted only in URL, search, and form input modes and is bounded to 4096 characters.
+Search follows Vim semantics: a new `/pattern` starts after the current selection and wraps at the end; `n` repeats forward, `N` repeats backward, and submitting an empty `/` prompt repeats the previous pattern. The footer shows the cmdline while typing (`/…`) and keeps `/{pattern}  n/m` while a search is active — press **Esc** in Normal mode to clear it (Esc while typing `/…` only cancels the prompt and keeps the prior pattern for `n`/`N`). Link hints (`f` / `F`) also use the footer (`f as`) rather than the header. Bracketed paste is accepted only in URL, search, and form input modes and is bounded to 4096 characters.
 
 ### Custom keymap
 

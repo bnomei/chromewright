@@ -90,9 +90,10 @@ Search follows Vim semantics: a new `/pattern` starts after the current
 selection and wraps at the end; `n` repeats forward, `N` repeats backward, and
 submitting an empty `/` prompt repeats the previous pattern. The footer hosts the
 search cmdline while typing (`/…`) and keeps `/{pattern}  n/m` while a search is
-active (cleared when the pattern is empty / no prior search). Bracketed paste is
-accepted only in URL, search, and form input modes and is bounded to 4096
-characters.
+active. Esc in Normal mode clears the sticky search (query + match list); Esc
+while typing `/…` only cancels the prompt and keeps the prior pattern for
+`n`/`N`. Bracketed paste is accepted only in URL, search, and form input modes
+and is bounded to 4096 characters.
 
 Bindings are replaceable by action name. `--config PATH` takes precedence; if
 omitted, Chromewright reads `$XDG_CONFIG_HOME/chromewright/tui.toml`, falling

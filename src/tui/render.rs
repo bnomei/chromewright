@@ -454,7 +454,7 @@ fn hint_status_line(
 /// Vim-style search indicator for the footer.
 ///
 /// - While typing: `/{buffer}`
-/// - After submit with matches: `/{query}  n/m`
+/// - After submit with matches: `/{query}  n/m` (clear with Esc in Normal mode)
 /// - After submit with no matches: `/{query}  0/0`
 fn search_status_line(
     state: &crate::tui::state::TuiState,
@@ -734,6 +734,36 @@ mod tests {
         let ctl = Controller::new();
         let theme = TuiTheme::new();
         assert!(search_status_line(&ctl.state, &theme).is_none());
+    }
+
+    #[test]
+    fn escape_in_normal_clears_sticky_search_footer() {
+        let mut ctl = Controller::new();
+        ctl.state.view.search_query = "space".into();
+        ctl.state.view.search_matches =
+            vec![SemanticRef::from_opaque("r1"), SemanticRef::from_opaque("r2")];
+        ctl.state.view.search_index = 1;
+        ctl.state.mode = InteractionMode::Normal;
+        let theme = TuiTheme::new();
+        assert!(search_status_line(&ctl.state, &theme).is_some());
+        ctl.escape();
+        assert!(ctl.state.view.search_query.is_empty());
+        assert!(ctl.state.view.search_matches.is_empty());
+        assert!(search_status_line(&ctl.state, &theme).is_none());
+    }
+
+    #[test]
+    fn escape_while_typing_search_keeps_prior_pattern() {
+        let mut ctl = Controller::new();
+        ctl.state.view.search_query = "prior".into();
+        ctl.state.view.search_matches = vec![SemanticRef::from_opaque("r1")];
+        ctl.state.mode = InteractionMode::Input(InputKind::Search {
+            buffer: "new".into(),
+        });
+        ctl.escape();
+        assert_eq!(ctl.state.view.search_query, "prior");
+        assert_eq!(ctl.state.view.search_matches.len(), 1);
+        assert!(matches!(ctl.state.mode, InteractionMode::Normal));
     }
 
     #[test]
