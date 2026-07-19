@@ -442,7 +442,8 @@ impl Controller {
         // One coherent coordination read per pass: lifecycle, document, and attention
         // must describe the same publication revision.
         let snapshot = self.coordinator.shared().read_snapshot();
-        if self.pending_page_action.is_none() {
+        let terminal_transaction_pending = self.pending_page_action.is_some();
+        if !terminal_transaction_pending {
             match snapshot.lifecycle {
                 Lifecycle::Loading { action } => self.state.enter_loading(action),
                 Lifecycle::Error { action, message } => self.state.enter_error(action, message),
@@ -483,8 +484,41 @@ impl Controller {
                     }
                 }
             }
+
+            // Selection belongs to this exact lifecycle/document snapshot. Apply it
+            // only after document reconciliation, never from a separate shared read.
+            let changed = self.state.view.selection != snapshot.selection;
+            self.state.view.selection = snapshot.selection;
+            if changed {
+                self.scroll_selection_into_view();
+                self.refresh_inspect_panel();
+            }
         }
         self.sync_attention_from_shared(snapshot.attention);
+    }
+
+    /// Validate and write human selection to canonical coordination storage before
+    /// changing the render projection. Failed writes leave both views unchanged.
+    fn set_human_selection(
+        &mut self,
+        selection: Option<SemanticRef>,
+    ) -> Result<(), CoordinationError> {
+        match selection.as_ref() {
+            Some(reference) => self.coordinator.shared().set_selection(reference.clone())?,
+            None => self.coordinator.shared().clear_selection(),
+        }
+        self.state.view.selection = selection;
+        Ok(())
+    }
+
+    fn select_or_record_error(&mut self, selection: Option<SemanticRef>) -> bool {
+        match self.set_human_selection(selection) {
+            Ok(()) => true,
+            Err(error) => {
+                self.state.view.set_status(error.to_string());
+                false
+            }
+        }
     }
 
     /// Apply agent attention from shared state: highlight + scroll into view,
@@ -944,7 +978,7 @@ impl Controller {
                     })
                 });
                 if is_form {
-                    self.begin_form_edit(next);
+                    self.begin_form_edit_transaction_local(next);
                 } else {
                     self.state.view.selection = Some(next);
                     self.state.mode = InteractionMode::Normal;
@@ -1011,7 +1045,7 @@ impl Controller {
             } else {
                 let lines = self.lines_for_document(&document);
                 self.state.clamp_scroll(lines.len());
-                self.ensure_selection_visible_in_lines(&document, &lines);
+                self.ensure_selection_visible_in_lines(&document, &lines, false);
                 if let Some(sel) = self.state.view.selection.clone()
                     && let Some(idx) = line_index_of(&lines, &sel)
                 {
@@ -1099,13 +1133,6 @@ impl Controller {
         }
     }
 
-    /// Push the current human selection into shared coordination for companion tools.
-    pub fn publish_selection(&self) {
-        if let Some(selection) = self.state.view.selection.clone() {
-            let _ = self.coordinator.shared().set_selection(selection);
-        }
-    }
-
     fn refresh_history_availability<D: PageDriver>(&mut self, driver: &mut D) {
         let (back, forward) = driver.history_availability().unwrap_or((false, false));
         self.state.set_history_availability(back, forward);
@@ -1176,20 +1203,29 @@ impl Controller {
         &mut self,
         document: &SemanticDocument,
         lines: &[crate::tui::content::ContentLine],
+        write_through: bool,
     ) {
         if let Some(sel) = self.state.view.selection.clone() {
             if line_index_of(lines, &sel).is_some() {
                 return;
             }
             if let Some(next) = first_visible_descendant_ref(document, &sel, lines) {
-                self.state.view.selection = Some(next);
+                if write_through {
+                    self.select_or_record_error(Some(next));
+                } else {
+                    self.state.view.selection = Some(next);
+                }
                 return;
             }
         }
         if self.state.view.selection.is_none()
             && let Some(first) = lines.iter().find_map(|l| l.semantic_ref.clone())
         {
-            self.state.view.selection = Some(first);
+            if write_through {
+                self.select_or_record_error(Some(first));
+            } else {
+                self.state.view.selection = Some(first);
+            }
         }
     }
 }
@@ -1345,7 +1381,7 @@ impl Controller {
         };
         let lines = self.lines_for_document(&document);
         self.state.clamp_scroll(lines.len());
-        self.ensure_selection_visible_in_lines(&document, &lines);
+        self.ensure_selection_visible_in_lines(&document, &lines, true);
         if let Some(sel) = self.state.view.selection.clone()
             && let Some(idx) = line_index_of(&lines, &sel)
         {
@@ -1398,7 +1434,9 @@ impl Controller {
             .unwrap_or(0);
         let next = (current as isize + delta).clamp(0, positions.len() as isize - 1) as usize;
         let line_idx = positions[next];
-        self.state.view.selection = lines[line_idx].semantic_ref.clone();
+        if !self.select_or_record_error(lines[line_idx].semantic_ref.clone()) {
+            return;
+        }
         self.ensure_visible(line_idx, lines.len());
         self.refresh_inspect_panel();
     }
@@ -1439,7 +1477,7 @@ impl Controller {
         self.state.view.scroll_y = 0;
         let lines = self.content_lines();
         if let Some(r) = lines.iter().find_map(|l| l.semantic_ref.clone()) {
-            self.state.view.selection = Some(r);
+            self.select_or_record_error(Some(r));
         }
     }
 
@@ -1449,7 +1487,7 @@ impl Controller {
         let len = lines.len();
         self.state.view.scroll_y = len.saturating_sub(self.state.view.viewport_height.max(1));
         if let Some(r) = lines.iter().rev().find_map(|l| l.semantic_ref.clone()) {
-            self.state.view.selection = Some(r);
+            self.select_or_record_error(Some(r));
         }
     }
 
@@ -1731,7 +1769,9 @@ impl Controller {
         else {
             return;
         };
-        self.state.view.selection = Some(selected.clone());
+        if !self.select_or_record_error(Some(selected.clone())) {
+            return;
+        }
         if let Some(line) = line_index_of(lines, &selected) {
             self.ensure_visible(line, lines.len());
         }
@@ -1911,7 +1951,9 @@ impl Controller {
             self.begin_form_edit(next_ref);
             return;
         }
-        self.state.view.selection = Some(next_ref.clone());
+        if !self.select_or_record_error(Some(next_ref.clone())) {
+            return;
+        }
         self.state.mode = InteractionMode::Normal;
         let lines = self.content_lines();
         if let Some(idx) = line_index_of(&lines, &next_ref) {
@@ -1921,6 +1963,15 @@ impl Controller {
     }
 
     fn begin_form_edit(&mut self, semantic_ref: SemanticRef) {
+        if !self.select_or_record_error(Some(semantic_ref.clone())) {
+            return;
+        }
+        self.begin_form_edit_transaction_local(semantic_ref);
+    }
+
+    /// Prepare focus against a newly captured document. The selection is committed
+    /// atomically with that document by the owning page-action transaction.
+    fn begin_form_edit_transaction_local(&mut self, semantic_ref: SemanticRef) {
         // Prefer a value already staged this capture; else the captured attr.
         let buffer = self
             .state
@@ -2021,28 +2072,26 @@ impl Controller {
                 // Leave hint mode, select, and start editing when text-like.
                 self.state.mode = InteractionMode::Normal;
                 self.hints.clear();
-                self.state.view.selection = Some(activation.semantic_ref.clone());
+                self.set_human_selection(Some(activation.semantic_ref.clone()))
+                    .map_err(|error| error.to_string())?;
                 self.scroll_selection_into_view();
-                if !self.edit_selection_if_form() {
-                    // checkbox/radio/etc. fall through — select only.
-                    self.publish_selection();
-                }
+                self.edit_selection_if_form();
                 Ok(())
             }
             SemanticKind::Select | SemanticKind::Button => {
                 self.state.mode = InteractionMode::Normal;
                 self.hints.clear();
-                self.state.view.selection = Some(activation.semantic_ref.clone());
+                self.set_human_selection(Some(activation.semantic_ref.clone()))
+                    .map_err(|error| error.to_string())?;
                 self.scroll_selection_into_view();
-                self.publish_selection();
                 Ok(())
             }
             _ => {
                 self.state.mode = InteractionMode::Normal;
                 self.hints.clear();
-                self.state.view.selection = Some(activation.semantic_ref);
+                self.set_human_selection(Some(activation.semantic_ref))
+                    .map_err(|error| error.to_string())?;
                 self.scroll_selection_into_view();
-                self.publish_selection();
                 Ok(())
             }
         }
@@ -2355,11 +2404,21 @@ mod tests {
         let document = search_doc();
         let refs = document.semantic_refs();
         let mut ctl = Controller::new();
+        ctl.coordinator.shared().publish(document.clone());
         ctl.state.publish_page(document);
+        ctl.coordinator
+            .shared()
+            .set_selection(refs[0].clone())
+            .unwrap();
         ctl.state.view.selection = Some(refs[0].clone());
 
         ctl.apply_search("needle");
-        assert_eq!(ctl.state.view.selection.as_ref(), Some(&refs[2]));
+        assert_eq!(
+            ctl.state.view.selection.as_ref(),
+            Some(&refs[2]),
+            "status: {:?}",
+            ctl.state.view.status_message
+        );
         assert_eq!(ctl.state.view.search_index, 1);
 
         ctl.repeat_search(true);
@@ -2376,6 +2435,7 @@ mod tests {
         let document = search_doc();
         let refs = document.semantic_refs();
         let mut ctl = Controller::new();
+        ctl.coordinator.shared().publish(document.clone());
         ctl.state.publish_page(document);
 
         ctl.apply_search("needle");
@@ -2383,6 +2443,75 @@ mod tests {
         ctl.apply_search("");
         assert_eq!(ctl.state.view.selection.as_ref(), Some(&refs[2]));
         assert_eq!(ctl.state.view.search_query, "needle");
+    }
+
+    #[test]
+    fn companion_selection_is_imported_from_one_authoritative_snapshot() {
+        let document = search_doc();
+        let refs = document.semantic_refs();
+        let mut ctl = Controller::new();
+        ctl.coordinator
+            .shared()
+            .publish_with_selection(document.clone(), Some(refs[2].clone()));
+
+        ctl.synchronize_companion_state();
+
+        assert_eq!(ctl.state.document().unwrap().document.revision, "1");
+        assert_eq!(ctl.state.view.selection.as_ref(), Some(&refs[2]));
+    }
+
+    #[test]
+    fn local_selection_movement_writes_shared_state_immediately() {
+        let document = normalize_fixture(
+            meta("1", "https://example.com/"),
+            vec![raw_text("a", "first"), raw_text("b", "second")],
+        )
+        .unwrap();
+        let refs = document.semantic_refs();
+        let mut ctl = Controller::new();
+        ctl.coordinator
+            .shared()
+            .publish_with_selection(document.clone(), Some(refs[0].clone()));
+        ctl.state.publish_page(document);
+        ctl.state.view.selection = Some(refs[0].clone());
+
+        ctl.scroll_down();
+
+        assert_eq!(ctl.state.view.selection.as_ref(), Some(&refs[1]));
+        assert_eq!(
+            ctl.coordinator.shared().selection().as_ref(),
+            Some(&refs[1])
+        );
+    }
+
+    #[test]
+    fn stale_selection_write_preserves_local_shared_and_attention() {
+        let current = text_doc("2", "current", "current");
+        let stale = text_doc("1", "stale", "stale");
+        let current_ref = current.semantic_refs()[0].clone();
+        let stale_ref = stale.semantic_refs()[0].clone();
+        let mut ctl = Controller::new();
+        ctl.coordinator
+            .shared()
+            .publish_with_selection(current.clone(), Some(current_ref.clone()));
+        ctl.coordinator
+            .shared()
+            .set_attention(current_ref.clone(), Some("keep".into()))
+            .unwrap();
+        ctl.state.publish_page(current);
+        ctl.state.view.selection = Some(current_ref.clone());
+
+        assert!(ctl.set_human_selection(Some(stale_ref)).is_err());
+
+        assert_eq!(ctl.state.view.selection.as_ref(), Some(&current_ref));
+        assert_eq!(
+            ctl.coordinator.shared().selection().as_ref(),
+            Some(&current_ref)
+        );
+        assert_eq!(
+            ctl.coordinator.shared().attention().semantic_ref.as_ref(),
+            Some(&current_ref)
+        );
     }
 
     #[test]
@@ -2784,7 +2913,8 @@ mod tests {
         let long = "word ".repeat(20);
         let doc = text_doc("1", "body", long.trim());
         let mut ctl = Controller::new();
-        ctl.state.publish_page(doc);
+        ctl.state.publish_page(doc.clone());
+        ctl.coordinator.shared().publish(doc);
         ctl.set_viewport(20, 10);
         // Wrap is on by default.
         assert!(ctl.state.view.wrap);
@@ -2938,7 +3068,8 @@ mod tests {
         let landmark = doc.semantic_refs()[0].clone();
         let text_ref = doc.semantic_refs()[1].clone();
         let mut ctl = Controller::new();
-        ctl.state.publish_page(doc);
+        ctl.state.publish_page(doc.clone());
+        ctl.coordinator.shared().publish(doc);
         ctl.set_viewport(80, 20);
         // Enter structure and select the landmark container.
         ctl.toggle_structure();
@@ -3032,7 +3163,12 @@ mod tests {
         let refs = doc.semantic_refs();
         assert_eq!(refs.len(), 2);
         let mut ctl = Controller::new();
-        ctl.state.publish_page(doc);
+        ctl.state.publish_page(doc.clone());
+        ctl.coordinator.shared().publish(doc);
+        ctl.coordinator
+            .shared()
+            .set_selection(refs[0].clone())
+            .unwrap();
         ctl.set_viewport(12, 20);
         ctl.state.view.selection = Some(refs[0].clone());
         ctl.toggle_wrap();
@@ -3062,7 +3198,12 @@ mod tests {
         let refs = doc.semantic_refs();
         let mut ctl = Controller::new();
         ctl.set_viewport(80, 10); // half page = 5 stops
-        ctl.state.publish_page(doc);
+        ctl.state.publish_page(doc.clone());
+        ctl.coordinator.shared().publish(doc);
+        ctl.coordinator
+            .shared()
+            .set_selection(refs[0].clone())
+            .unwrap();
         ctl.state.view.selection = Some(refs[0].clone());
         ctl.page_select_down();
         assert_eq!(ctl.state.view.selection.as_ref(), Some(&refs[5]));
@@ -3086,7 +3227,12 @@ mod tests {
         let refs = doc.semantic_refs();
         let mut ctl = Controller::new();
         ctl.set_viewport(80, 20);
-        ctl.state.publish_page(doc);
+        ctl.state.publish_page(doc.clone());
+        ctl.coordinator.shared().publish(doc);
+        ctl.coordinator
+            .shared()
+            .set_selection(refs[0].clone())
+            .unwrap();
         ctl.state.view.selection = Some(refs[0].clone());
         ctl.inspect_selection();
         assert!(ctl.state.view.inspect_follow);
@@ -3265,6 +3411,10 @@ mod tests {
         ctl.coordinator.shared().activate_runtime();
         ctl.state.publish_page(document.clone());
         ctl.coordinator.shared().publish(document);
+        ctl.coordinator
+            .shared()
+            .set_selection(selection.clone())
+            .unwrap();
         ctl.state.view.selection = Some(selection.clone());
         ctl.state.view.viewport_height = 5;
         ctl.state.view.scroll_y = 0;
@@ -3383,6 +3533,10 @@ mod tests {
         // Default projection is prose — landmark chrome hidden.
         assert!(ctl.state.view.projection.is_prose());
         ctl.state.view.selection = Some(pad0.clone());
+        ctl.coordinator
+            .shared()
+            .set_selection(pad0.clone())
+            .unwrap();
         ctl.set_viewport(80, 6);
         ctl.state.view.scroll_y = 0;
         let scroll_before = ctl.state.view.scroll_y;
@@ -3471,7 +3625,12 @@ mod tests {
             .semantic_ref
             .clone();
         let mut ctl = Controller::new();
-        ctl.state.publish_page(document);
+        ctl.state.publish_page(document.clone());
+        ctl.coordinator.shared().publish(document);
+        ctl.coordinator
+            .shared()
+            .set_selection(email.clone())
+            .unwrap();
         ctl.state.view.selection = Some(email.clone());
         assert!(ctl.edit_selection_if_form());
         match &ctl.state.mode {

@@ -365,7 +365,6 @@ fn run_loop(
                             DispatchOutcome::Quit => break,
                             DispatchOutcome::Continue | DispatchOutcome::Redraw => {}
                         }
-                        controller.publish_selection();
                     }
                 }
                 Event::Resize(_, _) => {}

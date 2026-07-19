@@ -613,6 +613,12 @@ impl SharedTuiState {
         Ok(())
     }
 
+    /// Clear human selection atomically. This is valid even when no document is active.
+    /// Does not mutate agent attention.
+    pub fn clear_selection(&self) {
+        self.inner.lock().unwrap().selection = None;
+    }
+
     /// Current agent attention spotlight (independent of human selection).
     pub fn attention(&self) -> Attention {
         self.inner.lock().unwrap().attention.clone()

@@ -21,8 +21,9 @@
 
 ### Changed
 
-- Make companion synchronization consume one coherent shared-state snapshot and centralize tool
-  browser-effect classification in the registry, preventing torn lifecycle/document reads.
+- Make companion synchronization consume one coherent shared-state snapshot, make terminal
+  selection changes write through immediately, and centralize tool browser-effect classification
+  in the registry, preventing torn lifecycle/document/selection reads.
 - Enter on a text field (and Tab-away / blur) writes the value into the live DOM and same-document patches so live-search/filter UIs work without a submit button. Typing stays local until complete; submit buttons still send full multi-field forms.
 - Form control selection uses reverse only on the field text (no full-width pad or extra edit spaces that left a long bar / empty non-bg cell).
 - TUI content theme uses a clearer ANSI-16 role ladder (H1–H6, blue links, light-cyan forms, yellow hints, muted gray images) inspired by md-tui’s role idea, not a 1:1 color match; optional `[theme]` keys in `tui.toml` override individual roles.
