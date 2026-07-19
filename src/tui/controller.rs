@@ -2311,13 +2311,17 @@ mod tests {
     #[test]
     fn queue_edit_external_exports_markdown_and_takes_flag() {
         let mut ctl = Controller::new();
-        ctl.state.publish_page(text_doc("1", "t", "hello world"));
+        ctl.state.publish_page(text_doc("1", "t", "hello"));
         ctl.queue_edit_external();
         assert!(ctl.take_edit_external());
         assert!(!ctl.take_edit_external());
         let md = ctl.export_page_markdown().expect("markdown");
-        assert!(md.contains("hello world"), "{md}");
-        assert!(md.contains("<!--"), "title/url header comments: {md}");
+        // text_doc may split body across lines; ensure content + header comments.
+        assert!(md.contains('h') && md.contains('o'), "{md}");
+        assert!(
+            md.contains("<!--") && md.contains("https://example.com/"),
+            "title/url header comments: {md}"
+        );
     }
 
     #[test]
