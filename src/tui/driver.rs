@@ -419,6 +419,8 @@ fn set_value_only(
     text: &str,
 ) -> Result<()> {
     let prelude = exact_target_prelude(document, component)?;
+    // Native value setter + InputEvent: React-style trackers see the prototype
+    // write; Holmes and similar plain `input` listeners only need bubbles + value.
     let script = format!(
         r#"(function(){{
             {prelude}
@@ -429,8 +431,25 @@ fn set_value_only(
                 if (el.checked !== want) el.click();
                 return 'ok';
             }}
-            el.value = {text};
-            el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+            const proto = el instanceof HTMLTextAreaElement
+                ? HTMLTextAreaElement.prototype
+                : HTMLInputElement.prototype;
+            const desc = Object.getOwnPropertyDescriptor(proto, 'value');
+            if (desc && desc.set) {{
+                desc.set.call(el, {text});
+            }} else {{
+                el.value = {text};
+            }}
+            try {{
+                el.dispatchEvent(new InputEvent('input', {{
+                    bubbles: true,
+                    cancelable: true,
+                    inputType: 'insertText',
+                    data: {text}
+                }}));
+            }} catch (e) {{
+                el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+            }}
             el.dispatchEvent(new Event('change', {{ bubbles: true }}));
             return 'ok';
         }})()"#,

@@ -1,5 +1,8 @@
 // Hydrated DOM semantic capture for the tui-gated SemanticDocument path.
-// Separate from extract_dom.js (ARIA actionability). No CSS/layout/pixel queries.
+// Separate from extract_dom.js (ARIA actionability). Avoids layout/geometry
+// queries (no getBoundingClientRect); uses cheap visibility checks so client
+// filters (e.g. Holmes toggling Tailwind `.hidden` / display:none) drop from
+// the markdown view.
 JSON.stringify((function() {
     'use strict';
 
@@ -162,9 +165,57 @@ JSON.stringify((function() {
 
     function isSkippable(element) {
         var tag = element.tagName;
-        return tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT' ||
+        if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT' ||
             tag === 'TEMPLATE' || tag === 'SVG' || tag === 'HEAD' || tag === 'META' ||
-            tag === 'LINK' || tag === 'BR' || tag === 'HR';
+            tag === 'LINK' || tag === 'BR' || tag === 'HR') {
+            return true;
+        }
+        // Client-side filters (Holmes, Alpine, etc.) hide non-matches with
+        // [hidden], aria-hidden, or display:none / visibility:hidden. Without
+        // this, the TUI keeps showing the full unfiltered list after search.
+        if (isEffectivelyHidden(element)) {
+            return true;
+        }
+        return false;
+    }
+
+    // True when the element is not presented to the user (no geometry probes).
+    function isEffectivelyHidden(element) {
+        if (!element || element.nodeType !== 1) {
+            return false;
+        }
+        // HTML hidden property / attribute
+        if (element.hidden === true) {
+            return true;
+        }
+        if (element.getAttribute('hidden') != null) {
+            return true;
+        }
+        if (element.getAttribute('aria-hidden') === 'true') {
+            return true;
+        }
+        // Inline styles (common for scripted hide without class)
+        var inline = element.style;
+        if (inline) {
+            if (inline.display === 'none' || inline.visibility === 'hidden') {
+                return true;
+            }
+        }
+        // Computed style: Tailwind `.hidden` and similar utility classes.
+        try {
+            var view = getDocumentView(element.ownerDocument || document);
+            if (view && typeof view.getComputedStyle === 'function') {
+                var style = view.getComputedStyle(element);
+                if (style) {
+                    if (style.display === 'none' || style.visibility === 'hidden') {
+                        return true;
+                    }
+                }
+            }
+        } catch (error) {
+            // Cross-origin / detached — treat as not hidden.
+        }
+        return false;
     }
 
     function collectSelectOptions(select) {

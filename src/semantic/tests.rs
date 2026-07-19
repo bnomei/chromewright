@@ -675,13 +675,28 @@ fn extract_script_is_json_string_expression() {
         script.contains("JSON.stringify("),
         "semantic extract script should return a JSON string expression"
     );
+    // getComputedStyle is allowed only for cheap visibility (display/visibility)
+    // so client-side filters (Holmes + Tailwind `.hidden`) drop from capture.
     assert!(
-        !script.contains("getComputedStyle"),
-        "semantic capture must not query computed CSS"
+        script.contains("isEffectivelyHidden"),
+        "semantic capture must skip effectively hidden nodes"
+    );
+    // Ban geometry APIs in executable code (comments may name them as non-goals).
+    let code_only: String = script
+        .lines()
+        .filter(|line| {
+            let t = line.trim_start();
+            !t.starts_with("//") && !t.starts_with('*')
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !code_only.contains("getBoundingClientRect"),
+        "semantic capture must not query layout geometry"
     );
     assert!(
-        !script.contains("getBoundingClientRect"),
-        "semantic capture must not query layout geometry"
+        !code_only.contains("offsetWidth") && !code_only.contains("getClientRects"),
+        "semantic capture must not probe element geometry"
     );
 }
 
