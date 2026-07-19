@@ -18,6 +18,7 @@ mod content;
 mod controller;
 mod dispatch;
 mod driver;
+mod editor;
 mod hints;
 mod keymap;
 mod managed_headless;

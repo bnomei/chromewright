@@ -319,6 +319,10 @@ impl Dispatcher {
                 controller.toggle_full_width();
                 DispatchOutcome::Redraw
             }
+            Action::EditExternal => {
+                controller.queue_edit_external();
+                DispatchOutcome::Redraw
+            }
             Action::Inspect => {
                 controller.inspect_selection();
                 DispatchOutcome::Redraw

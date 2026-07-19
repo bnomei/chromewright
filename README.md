@@ -235,6 +235,7 @@ Browser-first (Vimari) defaults, with [md-tui](https://github.com/henriklovhaug/
 | `Enter` | `confirm` | Text input: apply value to the live DOM + same-doc patch (no submit needed; live search works). Checkbox/radio: toggle. Select: cycle options. **Submit button**: write staged fields + click + recapture. Link/other: activate. |
 | `Esc` | `escape` | Leave prompt, hint, or inspect mode. In Normal mode, also clears sticky `/search` footer (`/{query}  n/m`). After a failed page action, dismiss Error back to Ready (retained page stays) so keys work again. |
 | `w` | `toggle_full_width` | Toggle full-width content vs the configured `content_max_width` column (default 100, capped by default). |
+| `e` | `edit_external` | Open the current page’s semantic markdown in `$VISUAL`, then `$EDITOR`, then `vi` (read-only; TUI suspends like Nereid). |
 | `q` / `Ctrl-c` | `quit` | Quit the TUI. |
 
 Hints use deterministic two-key labels from the alphabet `asdfgqwertzxcvb` (for example `aa`, `as`), assigned to viewport-visible links and form controls (one label per target; painted on the first line only when a target wraps).

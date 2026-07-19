@@ -44,6 +44,8 @@ pub struct Controller {
     pending_page_action: Option<PendingPageAction>,
     /// Local URL bar history for Tab autocomplete (not Chrome profile history).
     url_history: UrlHistory,
+    /// When true, the event loop should suspend the TUI and open `$EDITOR`.
+    pending_edit_external: bool,
 }
 
 #[derive(Debug)]
@@ -151,6 +153,7 @@ impl Controller {
             hints: Vec::new(),
             pending_page_action: None,
             url_history: UrlHistory::load_default(),
+            pending_edit_external: false,
         }
     }
 
@@ -170,6 +173,7 @@ impl Controller {
             hints: Vec::new(),
             pending_page_action: None,
             url_history: UrlHistory::new(),
+            pending_edit_external: false,
         }
     }
 
@@ -1237,6 +1241,72 @@ impl Controller {
         self.after_projection_change();
     }
 
+    /// Queue opening the current page markdown in `$VISUAL` / `$EDITOR` / `vi`.
+    ///
+    /// The event loop suspends the alternate screen, runs the editor, then
+    /// resumes. Read-only for now (edits are not applied back to the page).
+    pub fn queue_edit_external(&mut self) {
+        if self.state.lifecycle.is_loading() {
+            return;
+        }
+        if self.state.document().is_none() {
+            self.state.view.set_status("nothing to edit");
+            return;
+        }
+        self.pending_edit_external = true;
+    }
+
+    /// Take a pending external-edit request (event loop).
+    pub fn take_edit_external(&mut self) -> bool {
+        std::mem::take(&mut self.pending_edit_external)
+    }
+
+    /// Markdown body for external edit: current content lines joined by `\n`.
+    pub fn export_page_markdown(&self) -> Option<String> {
+        let _ = self.state.document()?;
+        let lines = self.content_lines();
+        if lines.is_empty() {
+            return Some(String::new());
+        }
+        let mut out = String::new();
+        for (i, line) in lines.iter().enumerate() {
+            if i > 0 {
+                out.push('\n');
+            }
+            out.push_str(&line.text);
+        }
+        // Header comment for context (not part of semantic capture).
+        let url = self.state.url();
+        let title = self.state.title();
+        let mut header = String::new();
+        if !title.is_empty() {
+            header.push_str(&format!("<!-- {title} -->\n"));
+        }
+        if !url.is_empty() {
+            header.push_str(&format!("<!-- {url} -->\n"));
+        }
+        if !header.is_empty() {
+            header.push('\n');
+            header.push_str(&out);
+            Some(header)
+        } else {
+            Some(out)
+        }
+    }
+
+    /// Safe file stem from the current page title or host.
+    pub fn export_page_stem(&self) -> String {
+        let title = self.state.title();
+        if !title.is_empty() {
+            return title.chars().take(48).collect();
+        }
+        let url = self.state.url();
+        if !url.is_empty() {
+            return url.chars().take(48).collect();
+        }
+        "page".into()
+    }
+
     /// Toggle prose (default) vs structure content projection.
     ///
     /// Prose hides landmark/list/group chrome and flattens indent. Structure is
@@ -2236,6 +2306,18 @@ mod tests {
             ctl.state.mode,
             InteractionMode::Input(InputKind::Url { ref buffer }) if buffer.is_empty()
         ));
+    }
+
+    #[test]
+    fn queue_edit_external_exports_markdown_and_takes_flag() {
+        let mut ctl = Controller::new();
+        ctl.state.publish_page(text_doc("1", "t", "hello world"));
+        ctl.queue_edit_external();
+        assert!(ctl.take_edit_external());
+        assert!(!ctl.take_edit_external());
+        let md = ctl.export_page_markdown().expect("markdown");
+        assert!(md.contains("hello world"), "{md}");
+        assert!(md.contains("<!--"), "title/url header comments: {md}");
     }
 
     #[test]

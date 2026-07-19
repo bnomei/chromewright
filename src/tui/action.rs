@@ -72,6 +72,8 @@ pub enum Action {
     ToggleStructure,
     /// `w` — toggle full-width content vs configured `content_max_width` column.
     ToggleFullWidth,
+    /// `e` — open current page markdown in `$VISUAL` / `$EDITOR` / `vi`.
+    EditExternal,
     /// `i` — inspect selected component metadata.
     Inspect,
     /// `y` — copy rendered block text (OSC 52).
@@ -123,6 +125,7 @@ impl Action {
             Self::ToggleWrap => "toggle_wrap",
             Self::ToggleStructure => "toggle_structure",
             Self::ToggleFullWidth => "toggle_full_width",
+            Self::EditExternal => "edit_external",
             Self::Inspect => "inspect",
             Self::CopyBlock => "copy_block",
             Self::CopyRef => "copy_ref",
@@ -166,6 +169,7 @@ impl Action {
             "toggle_wrap" => Some(Self::ToggleWrap),
             "toggle_structure" => Some(Self::ToggleStructure),
             "toggle_full_width" => Some(Self::ToggleFullWidth),
+            "edit_external" => Some(Self::EditExternal),
             "inspect" => Some(Self::Inspect),
             "copy_block" => Some(Self::CopyBlock),
             "copy_ref" => Some(Self::CopyRef),
@@ -201,7 +205,7 @@ impl Action {
     }
 }
 
-const ALL_ACTIONS: [Action; 37] = [
+const ALL_ACTIONS: [Action; 38] = [
     Action::LinkHintsFollow,
     Action::LinkHintsNewTab,
     Action::ScrollDown,
@@ -231,6 +235,7 @@ const ALL_ACTIONS: [Action; 37] = [
     Action::ToggleWrap,
     Action::ToggleStructure,
     Action::ToggleFullWidth,
+    Action::EditExternal,
     Action::Inspect,
     Action::CopyBlock,
     Action::CopyRef,

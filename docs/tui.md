@@ -41,7 +41,8 @@ Vimari plus non-conflicting [md-tui](https://github.com/henriklovhaug/md-tui) al
 `f`/`F` (and `s`/`S`) hints for links and form controls (footer cmdline while active; one label per target), `j`/`k` or arrows for
 selection, `h`/`l` horizontal pan, `u`/`d` or left/right arrows half-page view pan,
 `Ctrl-u`/`Ctrl-d` selection by half page, `gg`/`G` document ends, `gi` first form field
-(edit mode), `H`/`b`/`L` history, `r` reload, `[`/`]`/`x`/`t` tab actions, `q` quit, `o`/`O` URL
+(edit mode), `H`/`b`/`L` history, `r` reload, `[`/`]`/`x`/`t` tab actions, `e` external
+editor (`$VISUAL`/`$EDITOR`/`vi`), `q` quit, `o`/`O` URL
 entry (Tab completes from local URL history), `/` forward search, `n` next match, `N` previous match, Space collapse
 (structure mode only), `zw` toggle soft word-wrap (on by default), `zs` toggle prose
 vs structure projection (prose by default; Vim-style `z`-prefix view commands), `i`

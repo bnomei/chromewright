@@ -87,7 +87,7 @@ fn run_tui_with_config_and_companion(
         .map_err(|e| e.to_string())?;
     shared.activate_runtime();
     let companion = crate::tui::companion::start(session.clone(), shared.clone(), path, port)?;
-    let result = run_loop(&session, shared.clone(), config, terminal.terminal_mut());
+    let result = run_loop(&session, shared.clone(), config, &mut terminal);
     shared.deactivate_runtime();
     let restore_result = terminal.restore().map_err(|e| e.to_string());
     companion.stop();
@@ -252,6 +252,33 @@ impl TerminalGuard {
         };
         self.lifecycle.restore(&mut control)
     }
+
+    /// Leave alt-screen/raw mode, run `f`, then re-enter. Used for `$EDITOR`.
+    fn run_external<T, F>(&mut self, f: F) -> Result<T, String>
+    where
+        F: FnOnce() -> Result<T, String>,
+    {
+        {
+            let mut control = CrosstermTerminalControl {
+                terminal: &mut self.terminal,
+            };
+            self.lifecycle
+                .restore(&mut control)
+                .map_err(|e| format!("terminal suspend failed: {e}"))?;
+        }
+        let result = f();
+        {
+            let mut control = CrosstermTerminalControl {
+                terminal: &mut self.terminal,
+            };
+            self.lifecycle
+                .enable(&mut control)
+                .map_err(|e| format!("terminal resume failed: {e}"))?;
+        }
+        // Clear leftover editor paint before the next Ratatui frame.
+        let _ = self.terminal.clear();
+        result
+    }
 }
 
 impl Drop for TerminalGuard {
@@ -264,7 +291,7 @@ fn run_loop(
     session: &BrowserSession,
     shared: SharedTuiState,
     config: TuiConfig,
-    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    terminal_guard: &mut TerminalGuard,
 ) -> Result<(), String> {
     let mut controller = Controller::with_shared(shared);
     let mut dispatcher = Dispatcher::new(config.keymap);
@@ -278,29 +305,33 @@ fn run_loop(
 
     loop {
         controller.synchronize_companion_state();
-        let size = terminal.size().map_err(|e| e.to_string())?;
-        // Content outer box is total height minus chrome (1) and status (1).
-        // Reserve 1 col for the right-edge scrollbar (matches render), then
-        // padding + optional max-width for the markdown viewport.
-        let outer_h = size.height.saturating_sub(2);
-        let band_w = size.width.saturating_sub(1).max(1); // scrollbar column
-        let (vw, vh) = layout.content_viewport_size(
-            band_w,
-            outer_h,
-            controller.state.view.full_width,
-        );
-        controller.set_viewport(vw, vh);
+        let size = {
+            let terminal = terminal_guard.terminal_mut();
+            let size = terminal.size().map_err(|e| e.to_string())?;
+            // Content outer box is total height minus chrome (1) and status (1).
+            // Reserve 1 col for the right-edge scrollbar (matches render), then
+            // padding + optional max-width for the markdown viewport.
+            let outer_h = size.height.saturating_sub(2);
+            let band_w = size.width.saturating_sub(1).max(1); // scrollbar column
+            let (vw, vh) = layout.content_viewport_size(
+                band_w,
+                outer_h,
+                controller.state.view.full_width,
+            );
+            controller.set_viewport(vw, vh);
 
-        terminal
-            .draw(|frame| render::draw_with_theme(frame, &controller, &theme, layout))
-            .map_err(|e| e.to_string())?;
-        // Keep the hardware cursor hidden; form edit uses an in-band soft caret.
-        // Some backends re-show or park a block at the last cell after draw.
-        let _ = crossterm::execute!(
-            terminal.backend_mut(),
-            crossterm::cursor::Hide,
-            crossterm::cursor::MoveTo(0, 0)
-        );
+            terminal
+                .draw(|frame| render::draw_with_theme(frame, &controller, &theme, layout))
+                .map_err(|e| e.to_string())?;
+            // Keep the hardware cursor hidden; form edit uses an in-band soft caret.
+            // Some backends re-show or park a block at the last cell after draw.
+            let _ = crossterm::execute!(
+                terminal.backend_mut(),
+                crossterm::cursor::Hide,
+                crossterm::cursor::MoveTo(0, 0)
+            );
+            size
+        };
 
         // `Terminal::draw` succeeded while lifecycle is Loading, so browser
         // work may now start. No action is executed in the key dispatcher.
@@ -310,6 +341,11 @@ fn run_loop(
             let spinner = LoadingSpinnerGuard::start(size.width);
             let _ = controller.perform_pending_page_action(&mut driver);
             drop(spinner);
+            continue;
+        }
+
+        if controller.take_edit_external() {
+            run_edit_external(terminal_guard, &mut controller);
             continue;
         }
 
@@ -347,6 +383,27 @@ fn run_loop(
     }
 
     Ok(())
+}
+
+/// Suspend the TUI, open page markdown in `$VISUAL`/`$EDITOR`/`vi`, resume.
+fn run_edit_external(terminal_guard: &mut TerminalGuard, controller: &mut Controller) {
+    let Some(markdown) = controller.export_page_markdown() else {
+        controller.state.view.set_status("nothing to edit");
+        return;
+    };
+    let stem = controller.export_page_stem();
+    let result = terminal_guard.run_external(|| {
+        let path = crate::tui::editor::write_temp_markdown(&stem, &markdown)?;
+        let editor = crate::tui::editor::resolve_editor_command();
+        let launch = crate::tui::editor::launch_editor_command(&editor, &path);
+        let _ = std::fs::remove_file(&path);
+        launch?;
+        Ok(())
+    });
+    match result {
+        Ok(()) => controller.state.view.set_status("editor closed"),
+        Err(msg) => controller.state.view.set_status(format!("editor: {msg}")),
+    }
 }
 
 /// Background spinner for the header Loading glyph while CDP work blocks.

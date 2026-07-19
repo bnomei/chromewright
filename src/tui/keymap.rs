@@ -269,6 +269,8 @@ impl TuiKeymap {
         insert(&mut map, Action::PrevTab, KeySequence::chars("["));
         // Full width vs content_max_width column.
         insert(&mut map, Action::ToggleFullWidth, KeySequence::chars("w"));
+        // Open page markdown in $VISUAL / $EDITOR / vi (Nereid-style).
+        insert(&mut map, Action::EditExternal, KeySequence::chars("e"));
         insert(&mut map, Action::CloseTab, KeySequence::chars("x"));
         insert(&mut map, Action::NewTab, KeySequence::chars("t"));
         insert(&mut map, Action::OpenUrl, KeySequence::chars("o"));
