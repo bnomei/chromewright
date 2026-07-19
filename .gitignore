@@ -11,6 +11,8 @@
 
 # Local tool state
 /.frigg/
+.orchid
+.devana
 
 docs/*
 specs/*
