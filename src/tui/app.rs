@@ -301,93 +301,102 @@ fn run_loop(
     // later page transition.
     controller.bootstrap();
 
-    let result = (|| loop {
-        poll_worker(&mut in_flight, &mut controller);
-        controller.synchronize_companion_state();
-        {
-            let terminal = terminal_guard.terminal_mut();
-            let size = terminal.size().map_err(|e| e.to_string())?;
-            // Content outer box is total height minus chrome (1) and status (1).
-            // Reserve 1 col for the right-edge scrollbar (matches render), then
-            // padding + optional max-width for the markdown viewport.
-            let outer_h = size.height.saturating_sub(2);
-            let band_w = size.width.saturating_sub(1).max(1); // scrollbar column
-            let (vw, vh) =
-                layout.content_viewport_size(band_w, outer_h, controller.state.view.full_width);
-            controller.set_viewport(vw, vh);
+    run_loop_with_cleanup(&mut controller, &mut in_flight, |controller, in_flight| {
+        loop {
+            poll_worker(in_flight, controller);
+            controller.synchronize_companion_state();
+            {
+                let terminal = terminal_guard.terminal_mut();
+                let size = terminal.size().map_err(|e| e.to_string())?;
+                // Content outer box is total height minus chrome (1) and status (1).
+                // Reserve 1 col for the right-edge scrollbar (matches render), then
+                // padding + optional max-width for the markdown viewport.
+                let outer_h = size.height.saturating_sub(2);
+                let band_w = size.width.saturating_sub(1).max(1); // scrollbar column
+                let (vw, vh) =
+                    layout.content_viewport_size(band_w, outer_h, controller.state.view.full_width);
+                controller.set_viewport(vw, vh);
 
-            terminal
-                .draw(|frame| render::draw_with_theme(frame, &controller, &theme, layout))
-                .map_err(|e| e.to_string())?;
-            // Keep the hardware cursor hidden; form edit uses an in-band soft caret.
-            // Some backends re-show or park a block at the last cell after draw.
-            let _ = crossterm::execute!(
-                terminal.backend_mut(),
-                crossterm::cursor::Hide,
-                crossterm::cursor::MoveTo(0, 0)
-            );
-        }
+                terminal
+                    .draw(|frame| render::draw_with_theme(frame, &controller, &theme, layout))
+                    .map_err(|e| e.to_string())?;
+                // Keep the hardware cursor hidden; form edit uses an in-band soft caret.
+                // Some backends re-show or park a block at the last cell after draw.
+                let _ = crossterm::execute!(
+                    terminal.backend_mut(),
+                    crossterm::cursor::Hide,
+                    crossterm::cursor::MoveTo(0, 0)
+                );
+            }
 
-        // `Terminal::draw` succeeded while lifecycle is Loading, so browser
-        // work may now start. No action is executed in the key dispatcher.
-        if controller.has_pending_page_action() && in_flight.is_none() {
-            controller.acknowledge_loading_frame();
-            let job = controller
-                .take_page_action_job()
-                .expect("just acknowledged");
-            let session = coordinator.session().clone();
-            in_flight = Some(spawn_worker(job, move |job| {
-                let mut driver = SessionPageDriver::new(&session);
-                Controller::execute_page_action_job(job, &mut driver)
-            }));
-            continue;
-        }
+            // `Terminal::draw` succeeded while lifecycle is Loading, so browser
+            // work may now start. No action is executed in the key dispatcher.
+            if controller.has_pending_page_action() && in_flight.is_none() {
+                controller.acknowledge_loading_frame();
+                let job = controller
+                    .take_page_action_job()
+                    .expect("just acknowledged");
+                let session = coordinator.session().clone();
+                *in_flight = Some(spawn_worker(job, move |job| {
+                    let mut driver = SessionPageDriver::new(&session);
+                    Controller::execute_page_action_job(job, &mut driver)
+                }));
+                continue;
+            }
 
-        if can_open_editor(
-            in_flight.is_some(),
-            coordinator.shared().page_action_in_progress(),
-        ) && controller.take_edit_external()
-        {
-            run_edit_external(terminal_guard, &mut controller);
-            continue;
-        }
+            if can_open_editor(
+                in_flight.is_some(),
+                coordinator.shared().page_action_in_progress(),
+            ) && controller.take_edit_external()
+            {
+                run_edit_external(terminal_guard, controller);
+                continue;
+            }
 
-        if should_exit(
-            quit_requested || controller.state.should_quit,
-            in_flight.is_some() || coordinator.shared().page_action_in_progress(),
-        ) {
-            break Ok(());
-        }
+            if should_exit(
+                quit_requested || controller.state.should_quit,
+                in_flight.is_some() || coordinator.shared().page_action_in_progress(),
+            ) {
+                break Ok(());
+            }
 
-        // While Loading (e.g. companion-driven), wake often enough to advance
-        // the spinner; otherwise a calmer 100 ms poll is fine.
-        let poll_for = if controller.state.lifecycle.is_loading() {
-            LOADING_SPINNER_INTERVAL
-        } else {
-            Duration::from_millis(100)
-        };
-        if event::poll(poll_for).map_err(|e| e.to_string())? {
-            match event::read().map_err(|e| e.to_string())? {
-                Event::Key(key)
-                    if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat =>
-                {
-                    if let Some(chord) = chord_from_crossterm(key.code, key.modifiers) {
-                        match dispatcher.handle_key(&mut controller, chord) {
-                            DispatchOutcome::Quit => quit_requested = true,
-                            DispatchOutcome::Continue | DispatchOutcome::Redraw => {}
+            // While Loading (e.g. companion-driven), wake often enough to advance
+            // the spinner; otherwise a calmer 100 ms poll is fine.
+            let poll_for = if controller.state.lifecycle.is_loading() {
+                LOADING_SPINNER_INTERVAL
+            } else {
+                Duration::from_millis(100)
+            };
+            if event::poll(poll_for).map_err(|e| e.to_string())? {
+                match event::read().map_err(|e| e.to_string())? {
+                    Event::Key(key)
+                        if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat =>
+                    {
+                        if let Some(chord) = chord_from_crossterm(key.code, key.modifiers) {
+                            match dispatcher.handle_key(controller, chord) {
+                                DispatchOutcome::Quit => quit_requested = true,
+                                DispatchOutcome::Continue | DispatchOutcome::Redraw => {}
+                            }
                         }
                     }
+                    Event::Resize(_, _) => {}
+                    Event::Paste(text) => {
+                        let _ = dispatcher.handle_paste(controller, &text);
+                    }
+                    _ => {}
                 }
-                Event::Resize(_, _) => {}
-                Event::Paste(text) => {
-                    let _ = dispatcher.handle_paste(&mut controller, &text);
-                }
-                _ => {}
             }
         }
-    })();
+    })
+}
 
-    finish_run_loop(result, &mut in_flight, &mut controller)
+fn run_loop_with_cleanup(
+    controller: &mut Controller,
+    in_flight: &mut Option<InFlightPageAction>,
+    body: impl FnOnce(&mut Controller, &mut Option<InFlightPageAction>) -> Result<(), String>,
+) -> Result<(), String> {
+    let result = body(controller, in_flight);
+    finish_run_loop(result, in_flight, controller)
 }
 
 fn finish_run_loop(
@@ -608,11 +617,9 @@ mod tests {
         controller.bootstrap();
         let mut worker = None;
 
-        let error = finish_run_loop(
-            Err("injected terminal draw failure".into()),
-            &mut worker,
-            &mut controller,
-        )
+        let error = run_loop_with_cleanup(&mut controller, &mut worker, |_, _| {
+            Err("injected terminal draw failure".into())
+        })
         .expect_err("primary terminal error");
 
         assert_eq!(error, "injected terminal draw failure");
