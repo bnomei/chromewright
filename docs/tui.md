@@ -46,18 +46,21 @@ entry, `/` forward search, `n` next match, `N` previous match, Space collapse
 (structure mode only), `zw` toggle soft word-wrap (on by default), `zs` toggle prose
 vs structure projection (prose by default; Vim-style `z`-prefix view commands), `i`
 inspection, `y` copy (link/image URL or block text), `Y` semantic-ref copy, Tab/Shift-Tab
-focus (form fields stash typed values on Tab or Enter), Enter on a text field
-only commits the value (does not send the form), Escape cancel (and dismiss a
-failed page-action Error back to Ready while retaining the last good page), and
-Ctrl-C quit. See the README default keymap table for the full action map.
+focus (writes the leaving field to the live DOM + same-doc patch), Enter on a
+text field applies the value and patches (live search works without a submit),
+Escape cancel (and dismiss a failed page-action Error back to Ready while
+retaining the last good page), and Ctrl-C quit. See the README default keymap
+table for the full action map.
 
 Form controls render inline in the content pane. Text inputs show
-`[input name: value]` (live staged/`IN` buffer with a `█` cursor while editing).
-Checkboxes/radios show `☑`/`☐` and `●`/`○` and toggle on Enter. Selects show the
-current option and cycle on Enter. **Sending a form requires Enter on an explicit
-submit button** (`button`/`input type=submit`): staged fields are written, the
-button is clicked, then the page settles and is recaptured. Forms without a
-submit control are not supported.
+`[input name: value]` (live staged/`IN` buffer with a `█` cursor and pad while
+editing so reverse selection fills the field). Checkboxes/radios show `☑`/`☐`
+and `●`/`○` and toggle on Enter. Selects show the current option and cycle on
+Enter. Enter/Tab on a text field writes `input`/`change` into Chrome and
+same-document patches (search-like fields also debounce-apply while typing).
+**HTTP form send** still requires Enter on an explicit submit button
+(`button`/`input type=submit`): all staged fields are written, the button is
+clicked, then the page settles and is recaptured.
 
 Failed page actions (history, navigate, reload, tab changes, …) enter the
 Error lifecycle, keep the last published page on screen, and block normal

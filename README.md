@@ -230,9 +230,9 @@ Browser-first (Vimari) defaults, with [md-tui](https://github.com/henriklovhaug/
 | `i` | `inspect` | Open a compact inspect panel under the selected block; title is the full DOM path (`main > … > tag#id`), body has action fields and ref/rev; follows selection until Esc. |
 | `y` | `copy_block` | Copy selection: link/image URL (resolved), otherwise rendered block text (OSC 52). |
 | `Y` | `copy_ref` | Copy the opaque `semantic_ref` (OSC 52). |
-| `Tab` | `tab_next` | Next focusable control; stashes the current form field value (multi-field). |
-| `Shift-Tab` | `tab_prev` | Previous focusable control; stashes the current form field value. |
-| `Enter` | `confirm` | Text input: start/finish editing (stages value; does not send). Checkbox/radio: toggle. Select: cycle options. **Submit button only**: write staged fields + click + recapture. Link/other: activate. |
+| `Tab` | `tab_next` | Next focusable control; writes the leaving field to the live DOM + same-doc patch, then moves focus. |
+| `Shift-Tab` | `tab_prev` | Previous focusable control; same write-on-leave behavior as Tab. |
+| `Enter` | `confirm` | Text input: apply value to the live DOM + same-doc patch (no submit needed; live search works). Checkbox/radio: toggle. Select: cycle options. **Submit button**: write staged fields + click + recapture. Link/other: activate. |
 | `Esc` | `escape` | Leave prompt, hint, or inspect mode. After a failed page action, dismiss Error back to Ready (retained page stays) so keys work again. |
 | `Ctrl-c` | `quit` | Quit the TUI. |
 

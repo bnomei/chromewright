@@ -510,7 +510,10 @@ fn format_control_line(
         .trim();
     let captured = component.attrs.value.as_deref().unwrap_or("");
     let value = live_value.unwrap_or(captured);
+    // Cursor plus trailing pad so reverse-video selection fills the field
+    // while editing (empty/short values otherwise leave a naked gap).
     let cursor = if editing { "█" } else { "" };
+    let edit_pad = if editing { "    " } else { "" };
     let name_bit = if name.is_empty() {
         String::new()
     } else {
@@ -529,7 +532,7 @@ fn format_control_line(
                 select_label_for_value(component, value).unwrap_or_else(|| value.to_string())
             };
             if editing {
-                format!("{indent}[select{name_bit}: {shown}{cursor} ▾]")
+                format!("{indent}[select{name_bit}: {shown}{cursor}{edit_pad} ▾]")
             } else {
                 format!("{indent}[select{name_bit}: {shown} ▾]")
             }
@@ -538,7 +541,7 @@ fn format_control_line(
             let shown = if value.is_empty() && !editing {
                 "…".to_string()
             } else {
-                format!("{value}{cursor}")
+                format!("{value}{cursor}{edit_pad}")
             };
             if label.is_empty() {
                 format!("{indent}[textarea{name_bit}: {shown}]")
@@ -587,7 +590,7 @@ fn format_control_line(
                 "password" => {
                     let dots: String = value.chars().map(|_| '•').collect();
                     let shown = if editing {
-                        format!("{dots}{cursor}")
+                        format!("{dots}{cursor}{edit_pad}")
                     } else if dots.is_empty() {
                         "…".into()
                     } else {
@@ -605,7 +608,7 @@ fn format_control_line(
                             .map(|p| format!("({p})"))
                             .unwrap_or_else(|| "…".into())
                     } else {
-                        format!("{value}{cursor}")
+                        format!("{value}{cursor}{edit_pad}")
                     };
                     let type_bit = if other == "text" || other.is_empty() {
                         String::new()
