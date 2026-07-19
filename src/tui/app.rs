@@ -8,26 +8,25 @@
 use crate::browser::BrowserSession;
 use crate::tui::PageCoordinator;
 use crate::tui::config::TuiConfig;
-use crate::tui::controller::Controller;
+use crate::tui::controller::{Controller, PreparedPageAction};
 use crate::tui::dispatch::{DispatchOutcome, Dispatcher, chord_from_crossterm};
 use crate::tui::driver::SessionPageDriver;
-use crate::tui::render::{self, LOADING_SPINNER_INTERVAL, loading_spinner_glyph};
+use crate::tui::render::{self, LOADING_SPINNER_INTERVAL};
 use crate::tui::shared::SharedTuiState;
-use crossterm::cursor::{Hide, MoveTo, Show};
+use crossterm::cursor::{Hide, Show};
 use crossterm::event::{self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyEventKind};
 use crossterm::execute;
-use crossterm::style::{Color as CtColor, Print, ResetColor, SetForegroundColor};
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use std::io::{self, Stdout, Write};
+use std::io::{self, Stdout};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// Entry options for `chromewright tui`: keymap overlay and companion bind settings.
 #[derive(Debug, Clone, Default)]
@@ -295,15 +294,37 @@ fn run_loop(
     let mut dispatcher = Dispatcher::new(config.keymap);
     let theme = config.theme;
     let layout = config.layout;
-    let mut driver = SessionPageDriver::new(coordinator.session());
+    let mut in_flight: Option<(
+        Receiver<PreparedPageAction>,
+        crate::tui::shared::PageActionTicket,
+        String,
+    )> = None;
+    let mut quit_requested = false;
 
     // Bootstrap follows the same draw-before-browser-work lifecycle as every
     // later page transition.
     controller.bootstrap();
 
     loop {
+        if let Some((receiver, ticket, action)) = &in_flight {
+            match receiver.try_recv() {
+                Ok(prepared) => {
+                    let _ = controller.complete_page_action(prepared);
+                    in_flight = None;
+                }
+                Err(TryRecvError::Disconnected) => {
+                    controller.fail_abandoned_page_action(
+                        *ticket,
+                        action.clone(),
+                        "browser worker disconnected".into(),
+                    );
+                    in_flight = None;
+                }
+                Err(TryRecvError::Empty) => {}
+            }
+        }
         controller.synchronize_companion_state();
-        let size = {
+        {
             let terminal = terminal_guard.terminal_mut();
             let size = terminal.size().map_err(|e| e.to_string())?;
             // Content outer box is total height minus chrome (1) and status (1).
@@ -325,26 +346,40 @@ fn run_loop(
                 crossterm::cursor::Hide,
                 crossterm::cursor::MoveTo(0, 0)
             );
-            size
-        };
+        }
 
         // `Terminal::draw` succeeded while lifecycle is Loading, so browser
         // work may now start. No action is executed in the key dispatcher.
-        if controller.has_pending_page_action() {
+        if controller.has_pending_page_action() && in_flight.is_none() {
             controller.acknowledge_loading_frame();
-            // Keep the header Loading glyph spinning while CDP work blocks.
-            let spinner = LoadingSpinnerGuard::start(size.width);
-            let _ = controller.perform_pending_page_action(&mut driver);
-            drop(spinner);
+            let job = controller
+                .take_page_action_job()
+                .expect("just acknowledged");
+            let (ticket, action) = job.failure_context();
+            let session = coordinator.session().clone();
+            let (sender, receiver) = mpsc::sync_channel(1);
+            thread::spawn(move || {
+                let mut driver = SessionPageDriver::new(&session);
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    Controller::execute_page_action_job(job, &mut driver)
+                }));
+                if let Ok(prepared) = result {
+                    let _ = sender.send(prepared);
+                }
+            });
+            in_flight = Some((receiver, ticket, action));
             continue;
         }
 
-        if controller.take_edit_external() {
+        if in_flight.is_none() && controller.take_edit_external() {
             run_edit_external(terminal_guard, &mut controller);
             continue;
         }
 
-        if controller.state.should_quit {
+        if should_exit(
+            quit_requested || controller.state.should_quit,
+            in_flight.is_some() || coordinator.shared().page_action_in_progress(),
+        ) {
             break;
         }
 
@@ -362,7 +397,7 @@ fn run_loop(
                 {
                     if let Some(chord) = chord_from_crossterm(key.code, key.modifiers) {
                         match dispatcher.handle_key(&mut controller, chord) {
-                            DispatchOutcome::Quit => break,
+                            DispatchOutcome::Quit => quit_requested = true,
                             DispatchOutcome::Continue | DispatchOutcome::Redraw => {}
                         }
                     }
@@ -377,6 +412,10 @@ fn run_loop(
     }
 
     Ok(())
+}
+
+fn should_exit(quit_requested: bool, work_in_flight: bool) -> bool {
+    quit_requested && !work_in_flight
 }
 
 /// Suspend the TUI, open page markdown in `$VISUAL`/`$EDITOR`/`vi`, resume.
@@ -400,59 +439,16 @@ fn run_edit_external(terminal_guard: &mut TerminalGuard, controller: &mut Contro
     }
 }
 
-/// Background spinner for the header Loading glyph while CDP work blocks.
-///
-/// Ratatui cannot redraw during `perform_pending_page_action`, so this paints
-/// only the lifecycle cell (top-right) every [`LOADING_SPINNER_INTERVAL`].
-struct LoadingSpinnerGuard {
-    stop: Arc<AtomicBool>,
-    join: Option<thread::JoinHandle<()>>,
-}
-
-impl LoadingSpinnerGuard {
-    fn start(term_width: u16) -> Self {
-        let stop = Arc::new(AtomicBool::new(false));
-        let flag = Arc::clone(&stop);
-        let join = thread::spawn(move || {
-            // Lifecycle glyph is the last cell of the header row (y = 0).
-            let x = term_width.saturating_sub(1);
-            let mut last = "";
-            while !flag.load(Ordering::Relaxed) {
-                let glyph = loading_spinner_glyph(Instant::now());
-                if glyph != last {
-                    // Match theme chrome_loading (ANSI yellow).
-                    let _ = execute!(
-                        io::stdout(),
-                        MoveTo(x, 0),
-                        SetForegroundColor(CtColor::Yellow),
-                        Print(glyph),
-                        ResetColor
-                    );
-                    let _ = io::stdout().flush();
-                    last = glyph;
-                }
-                thread::sleep(LOADING_SPINNER_INTERVAL);
-            }
-        });
-        Self {
-            stop,
-            join: Some(join),
-        }
-    }
-}
-
-impl Drop for LoadingSpinnerGuard {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
-        if let Some(handle) = self.join.take() {
-            let _ = handle.join();
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quit_waits_for_in_flight_browser_work() {
+        assert!(!should_exit(true, true));
+        assert!(should_exit(true, false));
+        assert!(!should_exit(false, false));
+    }
 
     #[derive(Default)]
     struct FakeTerminalControl {

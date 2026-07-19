@@ -52,7 +52,7 @@ pub struct Controller {
     pending_edit_external: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct PendingPageAction {
     action: String,
     ticket: PageActionTicket,
@@ -62,9 +62,10 @@ struct PendingPageAction {
     anchor_offset: usize,
     loading_frame_drawn: bool,
     hint_mode_after_success: Option<HintMode>,
+    top_anchor: Option<ViewportTopAnchor>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum PageOperation {
     Bootstrap,
     Navigate(String),
@@ -124,6 +125,23 @@ enum PageActionOutcome {
     },
     /// Focus-only / no-op: keep the published page without capturing.
     Retained,
+}
+
+/// Send-able browser transaction prepared only after a Loading frame was drawn.
+pub(crate) struct PageActionJob(PendingPageAction);
+
+impl PageActionJob {
+    pub(crate) fn failure_context(&self) -> (PageActionTicket, String) {
+        (self.0.ticket, self.0.action.clone())
+    }
+}
+
+/// Browser-only result. Reconciliation and publication remain on the TUI thread.
+pub(crate) struct PreparedPageAction {
+    pending: PendingPageAction,
+    result: Result<Option<PageActionOutcome>, String>,
+    history: (bool, bool),
+    tab_position: Option<(usize, usize)>,
 }
 
 /// Compare URLs for same-document activate short-circuit (ignore trailing slash / fragment).
@@ -414,6 +432,10 @@ impl Controller {
             .as_ref()
             .map(|d| self.anchor_offset_in_viewport(d, prev_sel.as_ref()))
             .unwrap_or(0);
+        let top_anchor = prev_doc.as_ref().and_then(|document| {
+            let lines = self.lines_for_document(document);
+            top_viewport_anchor(&lines, self.state.view.scroll_y)
+        });
 
         self.state.enter_loading(&action);
         self.pending_page_action = Some(PendingPageAction {
@@ -425,6 +447,7 @@ impl Controller {
             anchor_offset,
             loading_frame_drawn: false,
             hint_mode_after_success,
+            top_anchor,
         });
     }
 
@@ -580,6 +603,16 @@ impl Controller {
         }
     }
 
+    /// Take the browser job after the event loop acknowledged a successful draw.
+    pub(crate) fn take_page_action_job(&mut self) -> Option<PageActionJob> {
+        let pending = self.pending_page_action.take()?;
+        if !pending.loading_frame_drawn {
+            self.pending_page_action = Some(pending);
+            return None;
+        }
+        Some(PageActionJob(pending))
+    }
+
     /// Perform deferred browser work after a successfully rendered Loading frame.
     ///
     /// Settle → capture SemanticDocument → post-capture metadata barrier →
@@ -591,10 +624,11 @@ impl Controller {
         &mut self,
         driver: &mut D,
     ) -> Result<(), String> {
-        let Some(pending) = self.pending_page_action.take() else {
-            return Ok(());
-        };
-        if !pending.loading_frame_drawn {
+        let Some(job) = self.take_page_action_job() else {
+            if self.pending_page_action.is_none() {
+                return Ok(());
+            }
+            let pending = self.pending_page_action.take().expect("checked above");
             let message = "browser action rejected before a Loading frame was rendered".to_string();
             if let Err(error) = self.coordinator.shared().fail_page_action(
                 pending.ticket,
@@ -606,15 +640,21 @@ impl Controller {
             }
             self.state.enter_error(&pending.action, message.clone());
             return Err(message);
-        }
+        };
+        let prepared = Self::execute_page_action_job(job, driver);
+        self.complete_page_action(prepared)
+    }
 
+    /// Execute only browser-facing work. This is safe to run on the terminal worker.
+    pub(crate) fn execute_page_action_job<D: PageDriver>(
+        job: PageActionJob,
+        driver: &mut D,
+    ) -> PreparedPageAction {
+        let pending = job.0;
         let result = (|| -> Result<Option<PageActionOutcome>, String> {
-            match pending.operation {
+            match pending.operation.clone() {
                 PageOperation::Bootstrap => {}
                 PageOperation::Navigate(url) => {
-                    // Empty session (no open tabs): open a tab at the URL instead
-                    // of navigating a missing active page. Matches "o → type URL"
-                    // recovery after the last tab was closed.
                     if !driver.has_open_tabs().map_err(|e| e.to_string())? {
                         driver.open_tab(&url).map_err(|e| e.to_string())?;
                     } else {
@@ -629,8 +669,6 @@ impl Controller {
                 PageOperation::CloseTab => {
                     driver.close_active_tab().map_err(|e| e.to_string())?;
                     if !driver.has_open_tabs().map_err(|e| e.to_string())? {
-                        // Last tab closed: clear retained UI instead of recapturing
-                        // a missing active page (which would Error and look stuck).
                         return Ok(None);
                     }
                 }
@@ -651,8 +689,6 @@ impl Controller {
                     semantic_ref,
                     values,
                 } => {
-                    // Write every staged field, then click the submit control
-                    // (never requestSubmit from a text field).
                     for (field_ref, field_text) in &values {
                         driver
                             .set_control_value(&document, field_ref, field_text)
@@ -666,29 +702,16 @@ impl Controller {
                     document,
                     semantic_ref,
                 } => {
-                    // Snapshot identity + top viewport line before the click so
-                    // JS-only actions (clipboard copy) can recapture without
-                    // jumping the markdown view when the page did not navigate.
-                    // Same-page `#fragment` links also look "same document" once
-                    // the fragment is stripped — those must jump, not pin top.
                     let before_id = document.document.document_id.clone();
                     let before_url = document.document.url.clone();
-                    // Prefer the link's own href fragment when present so we
-                    // still jump if the post-click capture is slow to show #hash.
                     let link_fragment = document
                         .resolve(&semantic_ref)
                         .ok()
                         .and_then(link_href_fragment);
-                    let top_anchor = {
-                        let lines = self.lines_for_document(&document);
-                        top_viewport_anchor(&lines, self.state.view.scroll_y)
-                    };
-                    let previous_selection = self.state.view.selection.clone();
                     let page_changing = driver
                         .activate_ref(&document, &semantic_ref, false)
                         .map_err(|e| e.to_string())?;
                     if !page_changing {
-                        // Focus-only (text inputs): nothing to settle/capture.
                         return Ok(Some(PageActionOutcome::Retained));
                     }
                     let same_document = driver.document_metadata().ok().is_some_and(|meta| {
@@ -696,8 +719,6 @@ impl Controller {
                             && urls_match_for_activate(&meta.url, &before_url)
                     });
                     if same_document {
-                        // Same-doc patch path: settle + capture; scroll policy
-                        // decided in finish_same_document_patch (fragment vs top).
                         driver.wait_settle().map_err(|e| e.to_string())?;
                         let doc = PageCoordinator::capture_with_metadata_barrier(driver)?;
                         let jump_fragment = link_fragment
@@ -705,8 +726,8 @@ impl Controller {
                             .filter(|f| !f.is_empty());
                         return Ok(Some(PageActionOutcome::Patched {
                             document: Box::new(doc),
-                            top_anchor,
-                            previous_selection,
+                            top_anchor: pending.top_anchor.clone(),
+                            previous_selection: pending.previous_selection.clone(),
                             jump_fragment,
                             focus_after: None,
                             applied_field: None,
@@ -721,38 +742,54 @@ impl Controller {
                 } => {
                     let before_id = document.document.document_id.clone();
                     let before_url = document.document.url.clone();
-                    let top_anchor = {
-                        let lines = self.lines_for_document(&document);
-                        top_viewport_anchor(&lines, self.state.view.scroll_y)
-                    };
-                    let previous_selection = Some(semantic_ref.clone());
                     driver
                         .set_control_value(&document, &semantic_ref, &value)
                         .map_err(|e| e.to_string())?;
-                    // wait_settle is readyState + DOM-quiet (revision/url stable)
-                    // so SPA/filter mutations after input/change are in the capture.
                     driver.wait_settle().map_err(|e| e.to_string())?;
                     let doc = PageCoordinator::capture_with_metadata_barrier(driver)?;
-                    let same_document = doc.document.document_id == before_id
-                        && urls_match_for_activate(&doc.document.url, &before_url);
-                    if same_document {
+                    if doc.document.document_id == before_id
+                        && urls_match_for_activate(&doc.document.url, &before_url)
+                    {
                         return Ok(Some(PageActionOutcome::Patched {
                             document: Box::new(doc),
-                            top_anchor,
-                            previous_selection,
+                            top_anchor: pending.top_anchor.clone(),
+                            previous_selection: Some(semantic_ref.clone()),
                             jump_fragment: None,
                             focus_after,
                             applied_field: Some((semantic_ref, value)),
                         }));
                     }
-                    // Navigated away (unusual for a field write) — full capture.
                     return Ok(Some(PageActionOutcome::Captured(Box::new(doc))));
                 }
             }
             driver.wait_settle().map_err(|e| e.to_string())?;
-            let doc = PageCoordinator::capture_with_metadata_barrier(driver)?;
-            Ok(Some(PageActionOutcome::Captured(Box::new(doc))))
+            Ok(Some(PageActionOutcome::Captured(Box::new(
+                PageCoordinator::capture_with_metadata_barrier(driver)?,
+            ))))
         })();
+        let history = driver.history_availability().unwrap_or((false, false));
+        let tab_position = driver.tab_position().unwrap_or(None);
+        PreparedPageAction {
+            pending,
+            result,
+            history,
+            tab_position,
+        }
+    }
+
+    /// Reconcile and atomically publish a prepared worker result.
+    pub(crate) fn complete_page_action(
+        &mut self,
+        prepared: PreparedPageAction,
+    ) -> Result<(), String> {
+        let PreparedPageAction {
+            pending,
+            result,
+            history,
+            tab_position,
+        } = prepared;
+        self.state.set_history_availability(history.0, history.1);
+        self.state.set_tab_position(tab_position);
         match result {
             Ok(Some(PageActionOutcome::Captured(doc))) => {
                 let saved_state = self.state.clone();
@@ -771,7 +808,6 @@ impl Controller {
                     self.synchronize_companion_state();
                     return Err(error.to_string());
                 }
-                self.refresh_history_availability(driver);
                 if let Some(mode) = pending.hint_mode_after_success {
                     self.enter_hint_mode(mode);
                 }
@@ -801,7 +837,6 @@ impl Controller {
                     self.synchronize_companion_state();
                     return Err(error.to_string());
                 }
-                self.refresh_history_availability(driver);
                 Ok(())
             }
             Ok(Some(PageActionOutcome::Retained)) => {
@@ -836,6 +871,24 @@ impl Controller {
                 Err(msg)
             }
         }
+    }
+
+    pub(crate) fn fail_abandoned_page_action(
+        &mut self,
+        ticket: PageActionTicket,
+        action: String,
+        message: String,
+    ) {
+        if self
+            .coordinator
+            .shared()
+            .fail_page_action(ticket, action.clone(), message.clone())
+            .is_err()
+        {
+            self.synchronize_companion_state();
+            return;
+        }
+        self.state.enter_error(action, message);
     }
 
     /// Browser has zero tabs: drop retained page so chrome/content clear and
@@ -1131,13 +1184,6 @@ impl Controller {
                     .set_status("fragment target not represented");
             }
         }
-    }
-
-    fn refresh_history_availability<D: PageDriver>(&mut self, driver: &mut D) {
-        let (back, forward) = driver.history_availability().unwrap_or((false, false));
-        self.state.set_history_availability(back, forward);
-        let tab_position = driver.tab_position().unwrap_or(None);
-        self.state.set_tab_position(tab_position);
     }
 
     fn anchor_offset_in_viewport(
@@ -3414,6 +3460,28 @@ mod tests {
         assert!(err.contains("Loading frame"));
         assert!(driver.navigate_calls.is_empty());
         assert!(matches!(ctl.state.lifecycle, Lifecycle::Error { .. }));
+    }
+
+    #[test]
+    fn abandoned_worker_fails_matching_ticket_and_retains_document() {
+        let document = text_doc("1", "t", "one");
+        let mut ctl = Controller::new();
+        ctl.state.publish_page(document.clone());
+        ctl.coordinator.shared().publish(document);
+        ctl.reload();
+        ctl.acknowledge_loading_frame();
+        let job = ctl.take_page_action_job().expect("acknowledged job");
+        let (ticket, action) = job.failure_context();
+
+        ctl.fail_abandoned_page_action(ticket, action, "browser worker disconnected".into());
+
+        assert!(matches!(ctl.state.lifecycle, Lifecycle::Error { .. }));
+        assert!(ctl.state.document().is_some());
+        assert!(matches!(
+            ctl.coordinator.shared().lifecycle(),
+            Lifecycle::Error { .. }
+        ));
+        assert!(ctl.coordinator.shared().active().is_ok());
     }
 
     #[test]

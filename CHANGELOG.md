@@ -21,6 +21,7 @@
 
 ### Changed
 
+- Run terminal-owned blocking browser actions on a worker while the normal Ratatui loop remains the sole terminal writer, so Loading spinners and resize redraws continue during page work.
 - Make companion synchronization consume one coherent shared-state snapshot, make terminal
   selection changes write through immediately, and centralize tool browser-effect classification
   in the registry, preventing torn lifecycle/document/selection reads.
