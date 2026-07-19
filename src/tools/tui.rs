@@ -118,15 +118,9 @@ pub fn execute(name: &str, params: TuiParams, shared: &SharedTuiState) -> TuiRes
             Ok(content) => success(TuiData::Content { content }),
             Err(error) => failure(error),
         },
-        "tui_refresh" => match shared.refresh() {
-            Ok(page) => success(TuiData::Refresh {
-                document_id: page.document_id,
-                revision: page.revision,
-                url: page.url,
-                title: page.title,
-            }),
-            Err(error) => failure(error),
-        },
+        // Browser mutation and its result are owned by PageCoordinator in the
+        // companion handler. Direct storage-only execution is unavailable.
+        "tui_refresh" => failure(CoordinationError::RuntimeRequired),
         "tui_inspect" => match shared.outline(params.limit.unwrap_or(32_000)) {
             Ok(content) => success(TuiData::Content { content }),
             Err(error) => failure(error),
@@ -254,7 +248,11 @@ impl Tool for TuiTool {
     /// # Errors
     ///
     /// This path does not return `Err`; companion failures are encoded inside [`TuiResult`].
-    fn execute_typed(&self, params: TuiParams, _context: &mut ToolContext) -> Result<ToolResult> {
+    fn execute_typed(&self, params: TuiParams, context: &mut ToolContext) -> Result<ToolResult> {
+        if self.name == "tui_refresh" && self.shared.is_some() {
+            context.session.evaluate("location.reload()", false)?;
+            return Ok(ToolResult::success_with(success(TuiData::Acknowledged)));
+        }
         let result = self
             .shared
             .as_ref()
@@ -287,9 +285,7 @@ mod tests {
 
     #[test]
     fn successful_render_is_typed_data_without_error_field() {
-        let shared = SharedTuiState::new(Arc::new(BrowserSession::with_test_backend(
-            FakeSessionBackend::new(),
-        )));
+        let shared = SharedTuiState::new();
         shared.publish(document("one"));
 
         let result = execute("tui_render", TuiParams::default(), &shared);
@@ -303,9 +299,7 @@ mod tests {
 
     #[test]
     fn failed_render_has_only_error_shape() {
-        let shared = SharedTuiState::new(Arc::new(BrowserSession::with_test_backend(
-            FakeSessionBackend::new(),
-        )));
+        let shared = SharedTuiState::new();
 
         let result = execute("tui_render", TuiParams::default(), &shared);
         assert!(!result.available);
@@ -320,9 +314,7 @@ mod tests {
     fn shared_tool_calls_observe_the_published_state() {
         use crate::semantic::normalize::{RawSemanticNode, normalize_fixture};
 
-        let shared = SharedTuiState::new(Arc::new(BrowserSession::with_test_backend(
-            FakeSessionBackend::new(),
-        )));
+        let shared = SharedTuiState::new();
         let doc = normalize_fixture(
             DocumentMetadata {
                 document_id: "fake-tab".into(),
@@ -384,9 +376,7 @@ mod tests {
     fn attention_set_rejects_stale_and_requires_exact_ref() {
         use crate::semantic::normalize::{RawSemanticNode, normalize_fixture};
 
-        let shared = SharedTuiState::new(Arc::new(BrowserSession::with_test_backend(
-            FakeSessionBackend::new(),
-        )));
+        let shared = SharedTuiState::new();
         let doc = normalize_fixture(
             DocumentMetadata {
                 document_id: "fake-tab".into(),
@@ -456,9 +446,7 @@ mod tests {
 
     #[test]
     fn refresh_requires_the_active_companion_runtime() {
-        let shared = SharedTuiState::new(Arc::new(BrowserSession::with_test_backend(
-            FakeSessionBackend::new(),
-        )));
+        let shared = SharedTuiState::new();
 
         let result = execute("tui_refresh", TuiParams::default(), &shared);
         assert!(!result.available);
@@ -470,17 +458,14 @@ mod tests {
 
     #[test]
     fn refresh_reloads_and_publishes_a_fresh_semantic_revision() {
-        let shared = SharedTuiState::new(Arc::new(BrowserSession::with_test_backend(
-            FakeSessionBackend::new(),
-        )));
+        let shared = SharedTuiState::new();
         shared.activate_runtime();
-
-        let result = execute("tui_refresh", TuiParams::default(), &shared);
-        assert!(result.available);
-        assert!(matches!(
-            result.data,
-            Some(TuiData::Refresh { ref revision, .. }) if revision == "fake:2"
-        ));
+        let coordinator = crate::tui::PageCoordinator::new(
+            Arc::new(BrowserSession::with_test_backend(FakeSessionBackend::new())),
+            shared.clone(),
+        );
+        let result = coordinator.refresh().expect("refresh");
+        assert_eq!(result.revision, "fake:2");
         assert_eq!(
             shared
                 .active()

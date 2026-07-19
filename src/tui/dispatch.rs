@@ -644,8 +644,12 @@ mod tests {
         let mut ctl = Controller::new();
         ctl.state.publish_page(empty_doc());
         ctl.state.enter_error("history_back", "settle timeout");
-        ctl.shared
-            .fail_page_action("history_back", "settle timeout");
+        {
+            let ticket = ctl.coordinator.begin("history_back").unwrap();
+            let _ = ctl
+                .coordinator
+                .fail(ticket, "history_back", "settle timeout".into());
+        }
         let mut dispatcher = Dispatcher::new(TuiKeymap::defaults());
         dispatcher.handle_key(&mut ctl, KeySequence::chars("g").0[0].clone());
         dispatcher.handle_key(
@@ -656,7 +660,7 @@ mod tests {
             },
         );
         assert!(ctl.state.lifecycle.is_ready());
-        assert!(ctl.shared.lifecycle().is_ready());
+        assert!(ctl.coordinator.shared().lifecycle().is_ready());
         assert!(ctl.state.allows_normal_commands());
         assert_eq!(
             ctl.state.view.status_message.as_deref(),
@@ -702,7 +706,10 @@ mod tests {
         let mut ctl = Controller::new();
         ctl.state.publish_page(empty_doc());
         ctl.state.enter_error("close_tab", "no tabs");
-        ctl.shared.fail_page_action("close_tab", "no tabs");
+        {
+            let ticket = ctl.coordinator.begin("close_tab").unwrap();
+            let _ = ctl.coordinator.fail(ticket, "close_tab", "no tabs".into());
+        }
         let mut dispatcher = Dispatcher::new(TuiKeymap::defaults());
         assert_eq!(
             dispatcher.dispatch_action(&mut ctl, Action::NewTab),

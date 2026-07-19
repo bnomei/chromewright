@@ -6,6 +6,9 @@
 //! deferred until the event loop has drawn a Loading frame.
 
 use crate::semantic::{FragmentResolution, SemanticDocument, SemanticRef};
+use crate::tui::PageCoordinator;
+#[cfg(test)]
+use crate::tui::SharedTuiState;
 use crate::tui::content::{
     ContentProjection, ViewportTopAnchor, build_content_lines_with, first_visible_descendant_ref,
     focusable_refs, form_control_refs, line_index_of, rendered_block_text, search_refs,
@@ -13,9 +16,10 @@ use crate::tui::content::{
 };
 use crate::tui::driver::PageDriver;
 use crate::tui::hints::{HintMatch, LinkHint, assign_hints, match_hint};
-use crate::tui::shared::{Attention, SharedTuiState};
+use crate::tui::shared::{Attention, PageActionTicket};
 use crate::tui::state::{HintMode, InputKind, InteractionMode, Lifecycle, TuiState};
 use crate::tui::url_history::UrlHistory;
+use std::sync::Arc;
 
 /// Rows kept above a `#fragment` target when scrolling it into view.
 const FRAGMENT_VIEWPORT_TOP_MARGIN: usize = 5;
@@ -32,11 +36,11 @@ pub struct HintActivation {
 /// Orchestrates page-changing actions and pure view updates against [`TuiState`].
 ///
 /// Page mutations go through a deferred queue: claim Loading on
-/// [`SharedTuiState`], draw Loading, then [`Self::perform_pending_page_action`].
+/// shared coordination storage, draw Loading, then [`Self::perform_pending_page_action`].
 /// Pure view ops (scroll, collapse, search) never touch the browser driver.
 pub struct Controller {
     pub state: TuiState,
-    pub shared: SharedTuiState,
+    pub coordinator: Arc<PageCoordinator>,
     /// Active link hints when in Hint mode (exact `semantic_ref` targets).
     pub hints: Vec<LinkHint>,
     /// Browser work that may begin only after the event loop has successfully
@@ -51,6 +55,7 @@ pub struct Controller {
 #[derive(Debug)]
 struct PendingPageAction {
     action: String,
+    ticket: PageActionTicket,
     operation: PageOperation,
     previous_selection: Option<SemanticRef>,
     previous_scroll: usize,
@@ -134,10 +139,11 @@ impl Controller {
     /// Test-only constructor over a fake browser backend and empty shared state.
     #[cfg(test)]
     pub fn new() -> Self {
-        Self::with_shared(SharedTuiState::new(std::sync::Arc::new(
-            crate::browser::BrowserSession::with_test_backend(
+        Self::with_coordinator(Arc::new(PageCoordinator::new(
+            Arc::new(crate::browser::BrowserSession::with_test_backend(
                 crate::browser::backend::FakeSessionBackend::new(),
-            ),
+            )),
+            SharedTuiState::new(),
         )))
     }
 
@@ -148,10 +154,10 @@ impl Controller {
     }
 
     /// Production constructor: share coordination state with the companion and tools.
-    pub fn with_shared(shared: SharedTuiState) -> Self {
+    pub fn with_coordinator(coordinator: Arc<PageCoordinator>) -> Self {
         Self {
             state: TuiState::new(),
-            shared,
+            coordinator,
             hints: Vec::new(),
             pending_page_action: None,
             url_history: UrlHistory::load_default(),
@@ -168,10 +174,10 @@ impl Controller {
     }
 
     /// Seed both local state and shared coordination (tests / recovery harnesses).
-    pub fn with_state_and_shared(state: TuiState, shared: SharedTuiState) -> Self {
+    pub fn with_state_and_coordinator(state: TuiState, coordinator: Arc<PageCoordinator>) -> Self {
         Self {
             state,
-            shared,
+            coordinator,
             hints: Vec::new(),
             pending_page_action: None,
             url_history: UrlHistory::new(),
@@ -394,10 +400,13 @@ impl Controller {
         if self.pending_page_action.is_some() {
             return;
         }
-        if let Err(error) = self.shared.begin_page_action(action.clone()) {
-            self.state.enter_error(&action, error.to_string());
-            return;
-        }
+        let ticket = match self.coordinator.begin(action.clone()) {
+            Ok(ticket) => ticket,
+            Err(error) => {
+                self.state.enter_error(&action, error.to_string());
+                return;
+            }
+        };
         let prev_sel = self.state.view.selection.clone();
         let prev_scroll = self.state.view.scroll_y;
         let prev_doc = self.state.document().cloned();
@@ -409,6 +418,7 @@ impl Controller {
         self.state.enter_loading(&action);
         self.pending_page_action = Some(PendingPageAction {
             action,
+            ticket,
             operation,
             previous_selection: prev_sel,
             previous_scroll: prev_scroll,
@@ -431,7 +441,7 @@ impl Controller {
     pub fn synchronize_companion_state(&mut self) {
         // One coherent coordination read per pass: lifecycle, document, and attention
         // must describe the same publication revision.
-        let snapshot = self.shared.read_snapshot();
+        let snapshot = self.coordinator.shared().read_snapshot();
         if self.pending_page_action.is_none() {
             match snapshot.lifecycle {
                 Lifecycle::Loading { action } => self.state.enter_loading(action),
@@ -553,8 +563,11 @@ impl Controller {
         if !pending.loading_frame_drawn {
             let message = "browser action rejected before a Loading frame was rendered".to_string();
             self.state.enter_error(&pending.action, message.clone());
-            self.shared
-                .fail_page_action(pending.action.clone(), message.clone());
+            let _ = self.coordinator.shared().fail_page_action(
+                pending.ticket,
+                pending.action.clone(),
+                message.clone(),
+            );
             return Err(message);
         }
 
@@ -649,7 +662,7 @@ impl Controller {
                         // Same-doc patch path: settle + capture; scroll policy
                         // decided in finish_same_document_patch (fragment vs top).
                         driver.wait_settle().map_err(|e| e.to_string())?;
-                        let doc = Self::capture_with_metadata_barrier(driver)?;
+                        let doc = PageCoordinator::capture_with_metadata_barrier(driver)?;
                         let jump_fragment = link_fragment
                             .or_else(|| url_fragment(&doc.document.url))
                             .filter(|f| !f.is_empty());
@@ -682,7 +695,7 @@ impl Controller {
                     // wait_settle is readyState + DOM-quiet (revision/url stable)
                     // so SPA/filter mutations after input/change are in the capture.
                     driver.wait_settle().map_err(|e| e.to_string())?;
-                    let doc = Self::capture_with_metadata_barrier(driver)?;
+                    let doc = PageCoordinator::capture_with_metadata_barrier(driver)?;
                     let same_document = doc.document.document_id == before_id
                         && urls_match_for_activate(&doc.document.url, &before_url);
                     if same_document {
@@ -700,7 +713,7 @@ impl Controller {
                 }
             }
             driver.wait_settle().map_err(|e| e.to_string())?;
-            let doc = Self::capture_with_metadata_barrier(driver)?;
+            let doc = PageCoordinator::capture_with_metadata_barrier(driver)?;
             Ok(Some(PageActionOutcome::Captured(Box::new(doc))))
         })();
         match result {
@@ -710,6 +723,7 @@ impl Controller {
                     pending.previous_selection,
                     pending.previous_scroll,
                     pending.anchor_offset,
+                    pending.ticket,
                 );
                 self.refresh_history_availability(driver);
                 if let Some(mode) = pending.hint_mode_after_success {
@@ -732,6 +746,7 @@ impl Controller {
                     jump_fragment,
                     focus_after,
                     applied_field,
+                    pending.ticket,
                 );
                 self.refresh_history_availability(driver);
                 Ok(())
@@ -739,20 +754,23 @@ impl Controller {
             Ok(Some(PageActionOutcome::Retained)) => {
                 // Keep published page + selection; just leave Loading.
                 self.state.lifecycle = Lifecycle::Ready;
-                self.shared.finish_page_action_retained();
+                let _ = self.coordinator.retain(pending.ticket);
                 self.state.view.set_status("activated");
                 Ok(())
             }
             Ok(None) => {
-                self.clear_empty_session();
+                self.clear_empty_session(pending.ticket);
                 Ok(())
             }
             Err(msg) => {
                 // Retain last valid page; never publish partial update as Ready.
                 log::error!("tui page action '{}' failed: {msg}", pending.action);
                 self.state.enter_error(&pending.action, msg.clone());
-                self.shared
-                    .fail_page_action(pending.action.clone(), msg.clone());
+                let _ = self.coordinator.shared().fail_page_action(
+                    pending.ticket,
+                    pending.action.clone(),
+                    msg.clone(),
+                );
                 Err(msg)
             }
         }
@@ -760,48 +778,11 @@ impl Controller {
 
     /// Browser has zero tabs: drop retained page so chrome/content clear and
     /// lifecycle stays Ready for recovery via `t` (blank tab) or `o` (URL → new tab).
-    fn clear_empty_session(&mut self) {
+    fn clear_empty_session(&mut self, ticket: PageActionTicket) {
         self.pending_page_action = None;
         self.hints.clear();
         self.state.clear_session();
-        self.shared.clear_session();
-    }
-
-    /// Capture + post-capture metadata barrier with short retries.
-    ///
-    /// Shared by navigate-style finishes and same-document patches.
-    fn capture_with_metadata_barrier<D: PageDriver>(
-        driver: &mut D,
-    ) -> Result<SemanticDocument, String> {
-        // Capture first, then read metadata as the freshness barrier. A
-        // hydrated page can mutate between settling and capture, so a
-        // pre-capture metadata read would reject a valid later snapshot.
-        // The post-capture metadata must instead describe exactly what we
-        // captured before it can be published. Dynamic sites often keep
-        // mutating briefly after settle — retry only the metadata barrier
-        // (hard capture failures still fail closed immediately).
-        const METADATA_RETRY_ATTEMPTS: usize = 4;
-        let mut last_err = String::new();
-        for attempt in 0..METADATA_RETRY_ATTEMPTS {
-            if attempt > 0 {
-                let _ = driver.wait_settle();
-            }
-            let doc = driver.capture_semantic().map_err(|e| e.to_string())?;
-            let metadata = driver.document_metadata().map_err(|e| e.to_string())?;
-            if metadata.document_id.is_empty()
-                || metadata.revision.is_empty()
-                || metadata.ready_state != "complete"
-            {
-                last_err = "browser did not provide stable complete document metadata".into();
-                continue;
-            }
-            if !crate::semantic::capture_matches_document_metadata(&doc.document, &metadata) {
-                last_err = "semantic capture metadata changed during publication".into();
-                continue;
-            }
-            return Ok(doc);
-        }
-        Err(last_err)
+        let _ = self.coordinator.clear(ticket);
     }
 
     /// Publish a same-document recapture.
@@ -818,6 +799,7 @@ impl Controller {
         jump_fragment: Option<String>,
         focus_after: Option<SemanticRef>,
         applied_field: Option<(SemanticRef, String)>,
+        ticket: PageActionTicket,
     ) {
         let prev_scroll = self.state.view.scroll_y;
 
@@ -958,7 +940,7 @@ impl Controller {
         }
         let document = self.state.document().expect("patch published").clone();
         let selection = self.state.view.selection.clone();
-        let _ = self.shared.publish_with_selection(document, selection);
+        let _ = self.coordinator.commit(ticket, document, selection);
         self.refresh_inspect_panel();
     }
 
@@ -968,6 +950,7 @@ impl Controller {
         prev_sel: Option<SemanticRef>,
         prev_scroll: usize,
         anchor_offset: usize,
+        ticket: PageActionTicket,
     ) {
         let collapsed = self.state.view.collapsed.clone();
         let wrap = self.state.view.wrap;
@@ -1021,7 +1004,7 @@ impl Controller {
         self.hints.clear();
         let document = self.state.document().expect("capture published").clone();
         let selection = self.state.view.selection.clone();
-        let _ = self.shared.publish_with_selection(document, selection);
+        let _ = self.coordinator.commit(ticket, document, selection);
         self.refresh_inspect_panel();
     }
 
@@ -1088,7 +1071,7 @@ impl Controller {
     /// Push the current human selection into shared coordination for companion tools.
     pub fn publish_selection(&self) {
         if let Some(selection) = self.state.view.selection.clone() {
-            let _ = self.shared.set_selection(selection);
+            let _ = self.coordinator.shared().set_selection(selection);
         }
     }
 
@@ -2052,7 +2035,7 @@ impl Controller {
     /// here; only Escape after a failed page action recovers the session.
     pub fn escape(&mut self) {
         if self.state.clear_error() {
-            let _ = self.shared.clear_error();
+            let _ = self.coordinator.shared().clear_error();
         } else {
             let was_normal = matches!(self.state.mode, InteractionMode::Normal);
             self.state.mode = InteractionMode::Normal;
@@ -2399,20 +2382,24 @@ mod tests {
         let d2 = text_doc("2", "t", "two");
         let mut driver = FakePageDriver::new(vec![d1.clone(), d2]);
         let mut ctl = Controller::new();
-        ctl.shared.activate_runtime();
+        ctl.coordinator.shared().activate_runtime();
         ctl.state.publish_page(d1);
         ctl.navigate_to("https://example.com/two");
 
-        assert!(matches!(ctl.shared.lifecycle(), Lifecycle::Loading { .. }));
+        assert!(matches!(
+            ctl.coordinator.shared().lifecycle(),
+            Lifecycle::Loading { .. }
+        ));
         assert_eq!(
-            ctl.shared.refresh(),
+            ctl.coordinator.refresh(),
             Err(crate::tui::CoordinationError::RefreshInProgress)
         );
 
         render_loading_and_run(&mut ctl, &mut driver).expect("terminal navigation");
-        assert!(ctl.shared.lifecycle().is_ready());
+        assert!(ctl.coordinator.shared().lifecycle().is_ready());
         assert_eq!(
-            ctl.shared
+            ctl.coordinator
+                .shared()
                 .active()
                 .expect("shared capture")
                 .document
@@ -2432,7 +2419,10 @@ mod tests {
         let err = render_loading_and_run(&mut ctl, &mut driver).expect_err("fail");
         assert!(err.contains("network"));
         assert!(matches!(ctl.state.lifecycle, Lifecycle::Error { .. }));
-        assert!(matches!(ctl.shared.lifecycle(), Lifecycle::Error { .. }));
+        assert!(matches!(
+            ctl.coordinator.shared().lifecycle(),
+            Lifecycle::Error { .. }
+        ));
         assert_eq!(ctl.state.revision(), "1");
         assert_eq!(ctl.state.url(), "https://example.com/");
     }
@@ -3212,16 +3202,17 @@ mod tests {
         let attention = refs.last().cloned().expect("last");
 
         let mut ctl = Controller::new();
-        ctl.shared.activate_runtime();
+        ctl.coordinator.shared().activate_runtime();
         ctl.state.publish_page(document.clone());
-        ctl.shared.publish(document);
+        ctl.coordinator.shared().publish(document);
         ctl.state.view.selection = Some(selection.clone());
         ctl.state.view.viewport_height = 5;
         ctl.state.view.scroll_y = 0;
         let selection_before = ctl.state.view.selection.clone();
         let scroll_before = ctl.state.view.scroll_y;
 
-        ctl.shared
+        ctl.coordinator
+            .shared()
             .set_attention(attention.clone(), Some("look here".into()))
             .expect("attention");
         ctl.synchronize_companion_state();
@@ -3326,9 +3317,9 @@ mod tests {
             .clone();
 
         let mut ctl = Controller::new();
-        ctl.shared.activate_runtime();
+        ctl.coordinator.shared().activate_runtime();
         ctl.state.publish_page(document.clone());
-        ctl.shared.publish(document);
+        ctl.coordinator.shared().publish(document);
         // Default projection is prose — landmark chrome hidden.
         assert!(ctl.state.view.projection.is_prose());
         ctl.state.view.selection = Some(pad0.clone());
@@ -3345,7 +3336,8 @@ mod tests {
         let heading_line = line_index_of(&lines, &first_heading).expect("heading line");
         assert!(heading_line > 10, "heading should sit below padding");
 
-        ctl.shared
+        ctl.coordinator
+            .shared()
             .set_attention(section.clone(), Some("section spotlight".into()))
             .expect("attention");
         ctl.synchronize_companion_state();
@@ -3492,9 +3484,9 @@ mod tests {
 
         let mut driver = FakePageDriver::new(vec![document.clone()]);
         let mut ctl = Controller::new();
-        ctl.shared.activate_runtime();
+        ctl.coordinator.shared().activate_runtime();
         ctl.state.publish_page(document.clone());
-        ctl.shared.publish(document);
+        ctl.coordinator.shared().publish(document);
 
         // Edit first field and Tab away — writes DOM + patches, then focuses next.
         ctl.state.view.selection = Some(email.clone());
@@ -3629,9 +3621,9 @@ mod tests {
             .clone();
         let mut driver = FakePageDriver::new(vec![document.clone()]);
         let mut ctl = Controller::new();
-        ctl.shared.activate_runtime();
+        ctl.coordinator.shared().activate_runtime();
         ctl.state.publish_page(document.clone());
-        ctl.shared.publish(document);
+        ctl.coordinator.shared().publish(document);
         ctl.begin_form_edit(search.clone());
         match &mut ctl.state.mode {
             InteractionMode::Input(InputKind::Form { buffer, .. }) => {
@@ -3840,9 +3832,9 @@ mod tests {
         let mut driver = FakePageDriver::new(vec![doc.clone(), after]);
         driver.advance_page_on_capture = true;
         let mut ctl = Controller::new();
-        ctl.shared.activate_runtime();
+        ctl.coordinator.shared().activate_runtime();
         ctl.state.publish_page(doc.clone());
-        ctl.shared.publish(doc);
+        ctl.coordinator.shared().publish(doc);
         ctl.set_viewport(40, 5);
         ctl.state.view.scroll_y = 0;
         ctl.state.view.selection = Some(link.clone());
@@ -3931,9 +3923,9 @@ mod tests {
         let mut driver = FakePageDriver::new(vec![before.clone(), after]);
         driver.advance_page_on_capture = true;
         let mut ctl = Controller::new();
-        ctl.shared.activate_runtime();
+        ctl.coordinator.shared().activate_runtime();
         ctl.state.publish_page(before.clone());
-        ctl.shared.publish(before);
+        ctl.coordinator.shared().publish(before);
         ctl.set_viewport(24, 5);
 
         // Scroll so p3 is the topmost visible line; select the copy button below.

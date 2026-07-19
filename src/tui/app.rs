@@ -6,6 +6,7 @@
 //! key bindings; those come from Keymap → Action via the dispatcher.
 
 use crate::browser::BrowserSession;
+use crate::tui::PageCoordinator;
 use crate::tui::config::TuiConfig;
 use crate::tui::controller::Controller;
 use crate::tui::dispatch::{DispatchOutcome, Dispatcher, chord_from_crossterm};
@@ -82,12 +83,10 @@ fn run_tui_with_config_and_companion(
                 shared.clone(),
             ));
     }
-    shared
-        .bind_session(session.clone())
-        .map_err(|e| e.to_string())?;
+    let coordinator = Arc::new(PageCoordinator::new(session.clone(), shared.clone()));
     shared.activate_runtime();
-    let companion = crate::tui::companion::start(session.clone(), shared.clone(), path, port)?;
-    let result = run_loop(&session, shared.clone(), config, &mut terminal);
+    let companion = crate::tui::companion::start(coordinator.clone(), path, port)?;
+    let result = run_loop(coordinator, config, &mut terminal);
     shared.deactivate_runtime();
     let restore_result = terminal.restore().map_err(|e| e.to_string());
     companion.stop();
@@ -288,16 +287,15 @@ impl Drop for TerminalGuard {
 }
 
 fn run_loop(
-    session: &BrowserSession,
-    shared: SharedTuiState,
+    coordinator: Arc<PageCoordinator>,
     config: TuiConfig,
     terminal_guard: &mut TerminalGuard,
 ) -> Result<(), String> {
-    let mut controller = Controller::with_shared(shared);
+    let mut controller = Controller::with_coordinator(coordinator.clone());
     let mut dispatcher = Dispatcher::new(config.keymap);
     let theme = config.theme;
     let layout = config.layout;
-    let mut driver = SessionPageDriver::new(session);
+    let mut driver = SessionPageDriver::new(coordinator.session());
 
     // Bootstrap follows the same draw-before-browser-work lifecycle as every
     // later page transition.

@@ -24,7 +24,7 @@ use std::sync::Arc;
 #[cfg(feature = "tui")]
 use crate::tools::ToolResult as InternalToolResult;
 #[cfg(feature = "tui")]
-use crate::tui::SharedTuiState;
+use crate::tui::{PageCoordinator, SharedTuiState};
 #[cfg(feature = "tui")]
 use rmcp::model::{
     ListResourceTemplatesResult, ListResourcesResult, ReadResourceRequestParams, ReadResourceResult,
@@ -44,7 +44,7 @@ use rmcp::model::{
 pub struct BrowserServer {
     session: Arc<BrowserSession>,
     #[cfg(feature = "tui")]
-    shared: Option<SharedTuiState>,
+    coordinator: Option<Arc<PageCoordinator>>,
 }
 
 impl BrowserServer {
@@ -53,7 +53,7 @@ impl BrowserServer {
         Self {
             session: Arc::new(session),
             #[cfg(feature = "tui")]
-            shared: None,
+            coordinator: None,
         }
     }
 
@@ -62,16 +62,16 @@ impl BrowserServer {
         Self {
             session,
             #[cfg(feature = "tui")]
-            shared: None,
+            coordinator: None,
         }
     }
 
     /// Co-hosted companion server over the TUI's shared session and coordination state.
     #[cfg(feature = "tui")]
-    pub fn from_companion(session: Arc<BrowserSession>, shared: SharedTuiState) -> Self {
+    pub fn from_companion(coordinator: Arc<PageCoordinator>) -> Self {
         Self {
-            session,
-            shared: Some(shared),
+            session: coordinator.session().clone(),
+            coordinator: Some(coordinator),
         }
     }
 
@@ -123,16 +123,13 @@ impl BrowserServer {
         request: CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         #[cfg(feature = "tui")]
-        if let Some(shared) = &self.shared
+        if let Some(coordinator) = &self.coordinator
             && self.session().tool_registry().effect(request.name.as_ref())
                 == ToolEffect::BrowserMutation
-            // tui_refresh already calls SharedTuiState::refresh, which owns this same
-            // lifecycle. Exclude it here until that self-serialization is removed.
-            && request.name.as_ref() != "tui_refresh"
         {
             // Companion page mutators own the same Loading → capture → Ready|Error
             // lifecycle as terminal actions and tui_refresh.
-            return execute_companion_page_mutation(shared, self.session(), request);
+            return execute_companion_page_mutation(coordinator, request);
         }
 
         let mut context = crate::tools::ToolContext::new(self.session());
@@ -153,7 +150,7 @@ impl BrowserServer {
 
     #[cfg(feature = "tui")]
     fn companion_shared(&self) -> Option<&SharedTuiState> {
-        self.shared.as_ref()
+        self.coordinator.as_ref().map(|c| c.shared())
     }
 }
 
@@ -161,14 +158,15 @@ impl BrowserServer {
 /// settle/capture/publish Ready or Error with the last valid document retained.
 #[cfg(feature = "tui")]
 fn execute_companion_page_mutation(
-    shared: &SharedTuiState,
-    session: &BrowserSession,
+    coordinator: &PageCoordinator,
     request: CallToolRequestParams,
 ) -> Result<CallToolResult, McpError> {
     let action = request.name.to_string();
-    if let Err(error) = shared.begin_page_action(&action) {
-        return convert_result(InternalToolResult::failure(error.to_string()));
-    }
+    let ticket = match coordinator.begin(&action) {
+        Ok(ticket) => ticket,
+        Err(error) => return convert_result(InternalToolResult::failure(error.to_string())),
+    };
+    let session = coordinator.session().as_ref();
 
     let mut context = crate::tools::ToolContext::new(session);
     let params = request
@@ -181,8 +179,25 @@ fn execute_companion_page_mutation(
         .execute(request.name.as_ref(), params, &mut context)
     {
         Ok(result) if result.success => {
-            if let Err(error) = shared.complete_page_action_after_browser_work(&action) {
-                return convert_result(InternalToolResult::failure(error.to_string()));
+            let page = match coordinator.finalize_browser_mutation(ticket, &action) {
+                Ok(page) => page,
+                Err(error) => {
+                    return convert_result(InternalToolResult::failure(error.to_string()));
+                }
+            };
+            if action == "tui_refresh" {
+                return convert_result(InternalToolResult::success_with(
+                    crate::tools::tui::TuiResult {
+                        available: true,
+                        data: Some(crate::tools::tui::TuiData::Refresh {
+                            document_id: page.document_id,
+                            revision: page.revision,
+                            url: page.url,
+                            title: page.title,
+                        }),
+                        error: None,
+                    },
+                ));
             }
             convert_result(result)
         }
@@ -191,11 +206,11 @@ fn execute_companion_page_mutation(
                 .error
                 .clone()
                 .unwrap_or_else(|| format!("{action} failed"));
-            shared.fail_page_action(&action, message);
+            let _ = coordinator.fail(ticket, &action, message);
             convert_result(result)
         }
         Err(error) => {
-            shared.fail_page_action(&action, error.to_string());
+            let _ = coordinator.fail(ticket, &action, error.to_string());
             Err(mcp_internal_error(error))
         }
     }
@@ -342,7 +357,7 @@ fn server_info() -> ServerInfo {
 impl BrowserServer {
     fn server_info(&self) -> ServerInfo {
         #[cfg(feature = "tui")]
-        if self.shared.is_some() {
+        if self.coordinator.is_some() {
             return ServerInfo::new(
                 ServerCapabilities::builder()
                     .enable_tools()
@@ -406,8 +421,11 @@ mod tests {
         use std::sync::Arc;
 
         let session = Arc::new(BrowserSession::with_test_backend(FakeSessionBackend::new()));
-        let shared = SharedTuiState::new(session.clone());
-        let companion = BrowserServer::from_companion(session.clone(), shared);
+        let shared = SharedTuiState::new();
+        let companion = BrowserServer::from_companion(Arc::new(crate::tui::PageCoordinator::new(
+            session.clone(),
+            shared,
+        )));
         assert!(companion.get_info().capabilities.resources.is_some());
 
         let stdio = BrowserServer::from_shared_session(session);
@@ -421,10 +439,12 @@ mod tests {
         use std::sync::Arc;
 
         let session = Arc::new(BrowserSession::with_test_backend(FakeSessionBackend::new()));
-        let shared = SharedTuiState::new(session.clone());
+        let shared = SharedTuiState::new();
         shared.activate_runtime();
         shared.begin_page_action("navigate").expect("claim loading");
-        let server = BrowserServer::from_companion(session, shared);
+        let server = BrowserServer::from_companion(Arc::new(crate::tui::PageCoordinator::new(
+            session, shared,
+        )));
         let result = server
             .execute_tool_sync(call_tool_request("navigate", None))
             .expect("tool-local rejection");
@@ -449,14 +469,17 @@ mod tests {
         use std::sync::Arc;
 
         let session = Arc::new(BrowserSession::with_test_backend(FakeSessionBackend::new()));
-        let shared = SharedTuiState::new(session.clone());
+        let shared = SharedTuiState::new();
         shared.activate_runtime();
         // Seed a known document so resources can observe retention across the mutation.
         let before = session.extract_semantic_document().expect("seed capture");
         shared.publish(before);
         let prior_revision = shared.active().unwrap().document.revision.clone();
 
-        let server = BrowserServer::from_companion(session, shared.clone());
+        let server = BrowserServer::from_companion(Arc::new(crate::tui::PageCoordinator::new(
+            session,
+            shared.clone(),
+        )));
         let mut args = serde_json::Map::new();
         args.insert("url".into(), json!("https://example.test/next"));
         let result = server

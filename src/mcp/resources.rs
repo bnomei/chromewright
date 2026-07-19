@@ -674,13 +674,10 @@ pub fn component_uri(document_id: &str, revision: &str, semantic_ref: &str) -> S
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::browser::BrowserSession;
-    use crate::browser::backend::FakeSessionBackend;
     use crate::dom::DocumentMetadata;
     use crate::semantic::SemanticDocument;
     use crate::tui::SharedTuiState;
     use serde_json::Value;
-    use std::sync::Arc;
 
     fn empty_doc(document_id: &str, revision: &str) -> SemanticDocument {
         SemanticDocument::empty(DocumentMetadata {
@@ -695,10 +692,7 @@ mod tests {
     }
 
     fn shared() -> SharedTuiState {
-        SharedTuiState::with_retention(
-            Arc::new(BrowserSession::with_test_backend(FakeSessionBackend::new())),
-            2,
-        )
+        SharedTuiState::with_retention(2)
     }
 
     fn text_body(result: &ReadResourceResult) -> &str {

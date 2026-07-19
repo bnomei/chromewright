@@ -4,9 +4,8 @@
 //! [`SemanticDocument`]s, revision retention/eviction, human selection, agent
 //! [`Attention`], and the shared Loading → Ready | Error lifecycle. Companion
 //! tools and the terminal controller both claim page actions through this type
-//! so they cannot race the one live [`BrowserSession`].
+//! so they cannot race the one live [`crate::browser::BrowserSession`].
 
-use crate::browser::BrowserSession;
 use crate::semantic::{SemanticDocument, SemanticRef, render_outline, render_semantic_markdown};
 use crate::tui::state::Lifecycle;
 use std::collections::VecDeque;
@@ -14,7 +13,10 @@ use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
-use std::time::Duration;
+
+/// Opaque ownership token for one Loading transaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PageActionTicket(u64);
 
 /// How many historical captures (excluding the active document) to retain for
 /// revisioned MCP resources and fail-closed ref lookups.
@@ -57,6 +59,8 @@ pub enum CoordinationError {
     RefreshInProgress,
     /// Browser refresh or semantic recapture failed after Loading was claimed.
     RefreshFailed,
+    /// Completion did not own the currently active page transaction.
+    StaleTransaction,
 }
 
 impl std::fmt::Display for CoordinationError {
@@ -76,6 +80,7 @@ impl std::fmt::Display for CoordinationError {
             Self::ActionInProgress => "a TUI page action is already in progress",
             Self::RefreshInProgress => "a TUI refresh is already in progress",
             Self::RefreshFailed => "browser refresh or semantic recapture failed",
+            Self::StaleTransaction => "page action transaction is stale",
         };
         f.write_str(message)
     }
@@ -211,43 +216,42 @@ struct Inner {
     attention: Attention,
     limit: usize,
     evictions: VecDeque<Eviction>,
+    next_ticket: u64,
+    active_ticket: Option<PageActionTicket>,
 }
 
 /// Cloneable handle to the one in-process TUI/companion coordination object.
 ///
-/// Holds the optional [`BrowserSession`], published SemanticDocument history,
+/// Holds published SemanticDocument history,
 /// selection/attention, and the runtime-active gate that companion mutations
-/// require. Construct with [`Self::unbound`] when registering `tui_*` tools
-/// before the session Arc is sealed, then [`Self::bind_session`] exactly once.
+/// require. It deliberately has no browser-session access; browser work belongs
+/// to [`crate::tui::PageCoordinator`].
 #[derive(Clone)]
 pub struct SharedTuiState {
-    session: Arc<Mutex<Option<Arc<BrowserSession>>>>,
     inner: Arc<Mutex<Inner>>,
     runtime_active: Arc<AtomicBool>,
 }
 
 impl SharedTuiState {
-    /// Bound coordination with default revision retention.
-    pub fn new(session: Arc<BrowserSession>) -> Self {
-        Self::with_retention(session, DEFAULT_REVISION_RETENTION)
+    /// Empty coordination storage with default revision retention.
+    pub fn new() -> Self {
+        Self::with_retention(DEFAULT_REVISION_RETENTION)
     }
 
     /// Bound coordination with an explicit historical-capture budget.
     ///
     /// `limit` is clamped to at least 1 and counts retained pages only (not the
     /// active document).
-    pub fn with_retention(session: Arc<BrowserSession>, limit: usize) -> Self {
-        Self::with_optional_session(Some(session), limit)
+    pub fn with_retention(limit: usize) -> Self {
+        Self::with_limit(limit)
     }
 
-    /// Construct the coordination object before the BrowserSession registry is
-    /// sealed, then bind the one live session exactly once.
+    /// Alias for constructing empty coordination before the tool registry is sealed.
     pub fn unbound() -> Self {
-        Self::with_optional_session(None, DEFAULT_REVISION_RETENTION)
+        Self::new()
     }
-    fn with_optional_session(session: Option<Arc<BrowserSession>>, limit: usize) -> Self {
+    fn with_limit(limit: usize) -> Self {
         Self {
-            session: Arc::new(Mutex::new(session)),
             inner: Arc::new(Mutex::new(Inner {
                 lifecycle: Lifecycle::Ready,
                 active: None,
@@ -256,34 +260,13 @@ impl SharedTuiState {
                 attention: Attention::default(),
                 limit: limit.max(1),
                 evictions: VecDeque::new(),
+                next_ticket: 0,
+                active_ticket: None,
             })),
             runtime_active: Arc::new(AtomicBool::new(false)),
         }
     }
 
-    /// Attach the one live browser session after tool registration.
-    ///
-    /// # Errors
-    /// Returns [`CoordinationError::RuntimeRequired`] if a session is already bound
-    /// (reused as a "runtime already claimed" signal rather than inventing a new
-    /// error variant).
-    pub fn bind_session(&self, session: Arc<BrowserSession>) -> Result<(), CoordinationError> {
-        let mut current = self.session.lock().unwrap();
-        if current.is_some() {
-            return Err(CoordinationError::RuntimeRequired);
-        }
-        *current = Some(session);
-        Ok(())
-    }
-
-    /// The bound browser session, if coordination has been activated with one.
-    pub fn session(&self) -> Result<Arc<BrowserSession>, CoordinationError> {
-        self.session
-            .lock()
-            .unwrap()
-            .clone()
-            .ok_or(CoordinationError::RuntimeRequired)
-    }
     /// Mark the interactive runtime as ready to accept companion operations.
     /// Standard stdio sessions never call this, so their registry stays separate.
     pub fn activate_runtime(&self) {
@@ -310,24 +293,39 @@ impl SharedTuiState {
     /// action. Both the terminal controller and companion tools use this
     /// transition, so a second actor cannot touch the shared BrowserSession
     /// while a Loading page is awaiting capture.
-    pub fn begin_page_action(&self, action: impl Into<String>) -> Result<(), CoordinationError> {
+    pub fn begin_page_action(
+        &self,
+        action: impl Into<String>,
+    ) -> Result<PageActionTicket, CoordinationError> {
         let mut state = self.inner.lock().unwrap();
         if state.lifecycle.is_loading() {
             return Err(CoordinationError::ActionInProgress);
         }
+        state.next_ticket = state.next_ticket.wrapping_add(1).max(1);
+        let ticket = PageActionTicket(state.next_ticket);
+        state.active_ticket = Some(ticket);
         state.lifecycle = Lifecycle::Loading {
             action: action.into(),
         };
-        Ok(())
+        Ok(ticket)
     }
 
     /// Atomically expose a terminal/companion action failure while retaining
     /// the last complete semantic document.
-    pub fn fail_page_action(&self, action: impl Into<String>, message: impl Into<String>) {
-        self.inner.lock().unwrap().lifecycle = Lifecycle::Error {
+    pub fn fail_page_action(
+        &self,
+        ticket: PageActionTicket,
+        action: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Result<(), CoordinationError> {
+        let mut state = self.inner.lock().unwrap();
+        Self::validate_ticket(&state, ticket)?;
+        state.active_ticket = None;
+        state.lifecycle = Lifecycle::Error {
             action: action.into(),
             message: message.into(),
         };
+        Ok(())
     }
 
     /// End a Loading page action without publishing a new document.
@@ -335,11 +333,15 @@ impl SharedTuiState {
     /// Used when an in-page activation (clipboard copy, toggle that does not
     /// navigate) leaves document identity and URL unchanged so a full
     /// settle+recapture would only flash Loading and reset the view.
-    pub fn finish_page_action_retained(&self) {
+    pub fn finish_page_action_retained(
+        &self,
+        ticket: PageActionTicket,
+    ) -> Result<(), CoordinationError> {
         let mut state = self.inner.lock().unwrap();
-        if state.lifecycle.is_loading() {
-            state.lifecycle = Lifecycle::Ready;
-        }
+        Self::validate_ticket(&state, ticket)?;
+        state.active_ticket = None;
+        state.lifecycle = Lifecycle::Ready;
+        Ok(())
     }
 
     /// Dismiss a shared Error lifecycle back to Ready without changing the
@@ -358,12 +360,35 @@ impl SharedTuiState {
     /// Clear the published document and view-facing selection/attention after
     /// the browser has no remaining tabs. Leaves lifecycle Ready so recovery
     /// actions (new tab) can run.
-    pub fn clear_session(&self) {
+    pub fn clear_session(&self, ticket: PageActionTicket) -> Result<(), CoordinationError> {
         let mut state = self.inner.lock().unwrap();
+        Self::validate_ticket(&state, ticket)?;
         state.active = None;
         state.selection = None;
         state.attention = Attention::default();
         state.lifecycle = Lifecycle::Ready;
+        state.active_ticket = None;
+        Ok(())
+    }
+
+    fn validate_ticket(state: &Inner, ticket: PageActionTicket) -> Result<(), CoordinationError> {
+        if state.active_ticket == Some(ticket) && state.lifecycle.is_loading() {
+            Ok(())
+        } else {
+            Err(CoordinationError::StaleTransaction)
+        }
+    }
+
+    pub fn commit_page_action(
+        &self,
+        ticket: PageActionTicket,
+        document: SemanticDocument,
+        selection: Option<SemanticRef>,
+    ) -> Result<Option<Eviction>, CoordinationError> {
+        let mut state = self.inner.lock().unwrap();
+        Self::validate_ticket(&state, ticket)?;
+        state.active_ticket = None;
+        Ok(Self::publish_locked(&mut state, document, Some(selection)))
     }
 
     /// Atomically publish a complete SemanticDocument as active and transition
@@ -558,100 +583,6 @@ impl SharedTuiState {
         Ok(output.content.chars().take(limit).collect())
     }
 
-    /// Reload through the one live browser session, settle it, capture a fresh
-    /// semantic document, and publish that complete capture atomically. This
-    /// intentionally does not reuse rendering: a companion without an active
-    /// terminal runtime fails explicitly instead of mutating detached state.
-    pub fn refresh(&self) -> Result<RefreshPage, CoordinationError> {
-        if !self.runtime_active() {
-            return Err(CoordinationError::RuntimeRequired);
-        }
-
-        self.begin_page_action("refresh")
-            .map_err(|error| match error {
-                CoordinationError::ActionInProgress => CoordinationError::RefreshInProgress,
-                other => other,
-            })?;
-
-        let session = match self.session() {
-            Ok(session) => session,
-            Err(error) => {
-                self.fail_page_action("refresh", error.to_string());
-                return Err(error);
-            }
-        };
-        if let Err(error) = session
-            .evaluate("location.reload()", false)
-            .map_err(|_| CoordinationError::RefreshFailed)
-        {
-            self.fail_page_action("refresh", error.to_string());
-            return Err(error);
-        }
-        self.complete_page_action_after_browser_work("refresh")
-    }
-
-    /// After a companion (or terminal-owned) browser mutation has finished, wait
-    /// for settle, capture a fresh semantic document, and publish Ready atomically.
-    /// On failure, publishes Error while retaining the last valid document.
-    pub fn complete_page_action_after_browser_work(
-        &self,
-        action: impl Into<String>,
-    ) -> Result<RefreshPage, CoordinationError> {
-        let action = action.into();
-        if !self.lifecycle().is_loading() {
-            return Err(CoordinationError::RuntimeRequired);
-        }
-
-        let result = (|| {
-            let session = self.session()?;
-            session
-                .wait_for_document_ready_with_timeout(Duration::from_secs(15))
-                .map_err(|_| CoordinationError::RefreshFailed)?;
-            // Match TUI settle: wait for main-frame revision/url to go quiet so
-            // SPA body updates land before capture (readyState alone is too early).
-            session
-                .wait_for_dom_quiet(Duration::from_secs(4), Duration::from_millis(250))
-                .map_err(|_| CoordinationError::RefreshFailed)?;
-            // Capture before sampling the freshness barrier. Hydration may
-            // legitimately change the document after settling but before the
-            // semantic snapshot begins; only a change *after* that capture
-            // makes the snapshot unsafe to publish.
-            let document = session
-                .extract_semantic_document()
-                .map_err(|_| CoordinationError::RefreshFailed)?;
-            let metadata = session
-                .document_metadata()
-                .map_err(|_| CoordinationError::RefreshFailed)?;
-            if metadata.document_id.is_empty()
-                || metadata.revision.is_empty()
-                || metadata.ready_state != "complete"
-            {
-                return Err(CoordinationError::RefreshFailed);
-            }
-            if !crate::semantic::capture_matches_document_metadata(&document.document, &metadata) {
-                return Err(CoordinationError::RefreshFailed);
-            }
-            Ok(document)
-        })();
-
-        match result {
-            Ok(document) => {
-                let page = RefreshPage {
-                    document_id: document.document.document_id.clone(),
-                    revision: document.document.revision.clone(),
-                    url: document.document.url.clone(),
-                    title: document.document.title.clone(),
-                };
-                self.publish(document);
-                Ok(page)
-            }
-            Err(error) => {
-                self.fail_page_action(action, error.to_string());
-                Err(error)
-            }
-        }
-    }
-
     /// Human selection as an exact `semantic_ref` against the active document.
     pub fn selection(&self) -> Option<SemanticRef> {
         self.inner.lock().unwrap().selection.clone()
@@ -736,11 +667,7 @@ mod tests {
     }
 
     fn shared_with_limit(limit: usize) -> SharedTuiState {
-        shared_with_backend(FakeSessionBackend::new(), limit)
-    }
-
-    fn shared_with_backend(backend: FakeSessionBackend, limit: usize) -> SharedTuiState {
-        SharedTuiState::with_retention(Arc::new(BrowserSession::with_test_backend(backend)), limit)
+        SharedTuiState::with_retention(limit)
     }
 
     #[test]
@@ -814,17 +741,31 @@ mod tests {
             Err(CoordinationError::ActionInProgress)
         );
         shared.activate_runtime();
-        assert_eq!(shared.refresh(), Err(CoordinationError::RefreshInProgress));
+        assert_eq!(
+            crate::tui::PageCoordinator::new(
+                Arc::new(crate::browser::BrowserSession::with_test_backend(
+                    FakeSessionBackend::new()
+                )),
+                shared.clone()
+            )
+            .refresh(),
+            Err(CoordinationError::RefreshInProgress)
+        );
     }
 
     #[test]
     fn companion_refresh_publishes_the_post_capture_document_atomically() {
-        let shared =
-            shared_with_backend(FakeSessionBackend::with_semantic_capture_revision_bump(), 4);
+        let shared = shared_with_limit(4);
         shared.activate_runtime();
         shared.publish(doc("fake-tab-1", "fake:1"));
 
-        let refreshed = shared.refresh().expect("companion refresh");
+        let coordinator = crate::tui::PageCoordinator::new(
+            Arc::new(crate::browser::BrowserSession::with_test_backend(
+                FakeSessionBackend::with_semantic_capture_revision_bump(),
+            )),
+            shared.clone(),
+        );
+        let refreshed = coordinator.refresh().expect("companion refresh");
 
         assert!(shared.lifecycle().is_ready());
         let active = shared.active().expect("published capture");
@@ -839,7 +780,10 @@ mod tests {
     fn clear_error_restores_ready_without_dropping_document() {
         let shared = shared_with_limit(4);
         shared.publish(doc("tab", "ready-1"));
-        shared.fail_page_action("history_back", "settle timeout");
+        let ticket = shared.begin_page_action("history_back").unwrap();
+        shared
+            .fail_page_action(ticket, "history_back", "settle timeout")
+            .unwrap();
         assert!(matches!(shared.lifecycle(), Lifecycle::Error { .. }));
         assert!(shared.clear_error());
         assert!(shared.lifecycle().is_ready());
@@ -848,6 +792,39 @@ mod tests {
         shared.begin_page_action("navigate").expect("loading");
         assert!(!shared.clear_error());
         assert!(shared.lifecycle().is_loading());
+    }
+
+    #[test]
+    fn transaction_tickets_reject_concurrency_and_stale_completion() {
+        let shared = shared_with_limit(4);
+        let first = shared.begin_page_action("first").unwrap();
+        assert_eq!(
+            shared.begin_page_action("concurrent"),
+            Err(CoordinationError::ActionInProgress)
+        );
+        shared.finish_page_action_retained(first).unwrap();
+        let second = shared.begin_page_action("second").unwrap();
+        assert_eq!(
+            shared.commit_page_action(first, doc("tab", "stale"), None),
+            Err(CoordinationError::StaleTransaction)
+        );
+        assert_eq!(
+            shared.fail_page_action(first, "first", "late"),
+            Err(CoordinationError::StaleTransaction)
+        );
+        assert_eq!(
+            shared.finish_page_action_retained(first),
+            Err(CoordinationError::StaleTransaction)
+        );
+        assert_eq!(
+            shared.clear_session(first),
+            Err(CoordinationError::StaleTransaction)
+        );
+        assert!(matches!(shared.lifecycle(), Lifecycle::Loading { action } if action == "second"));
+        shared
+            .commit_page_action(second, doc("tab", "current"), None)
+            .unwrap();
+        assert_eq!(shared.active().unwrap().document.revision, "current");
     }
 
     #[test]

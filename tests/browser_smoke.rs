@@ -298,8 +298,12 @@ fn smoke_tui_controller_publishes_loading_then_atomic_ready_on_reload() {
     )
     .expect("failed to navigate");
     let (_guard, session) = browser.into_shared();
-    let shared = SharedTuiState::new(session.clone());
-    let mut controller = Controller::with_shared(shared.clone());
+    let shared = SharedTuiState::new();
+    let coordinator = std::sync::Arc::new(chromewright::tui::PageCoordinator::new(
+        session.clone(),
+        shared.clone(),
+    ));
+    let mut controller = Controller::with_coordinator(coordinator);
     let mut driver = SessionPageDriver::new(&session);
 
     controller.bootstrap();

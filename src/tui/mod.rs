@@ -16,6 +16,7 @@ mod companion;
 mod config;
 mod content;
 mod controller;
+mod coordinator;
 mod dispatch;
 mod driver;
 mod editor;
@@ -32,12 +33,13 @@ pub use action::Action;
 pub use app::{TuiOptions, run_tui, run_tui_with_config};
 pub use config::{TuiConfig, TuiLayout, default_config_path, example_config_toml, load_tui_config};
 pub use controller::Controller;
+pub use coordinator::PageCoordinator;
 pub use driver::{FakePageDriver, PageDriver, SessionPageDriver};
 pub use keymap::{KeyChord, KeyCode, KeyModifiers, KeySequence, TuiKeymap};
 pub use managed_headless::{BrowserSessionPolicy, ManagedHeadlessSession};
 pub use shared::{
     Attention, CoordinationError, CoordinationSnapshot, DEFAULT_REVISION_RETENTION,
-    MAX_ATTENTION_MESSAGE_CHARS, SharedTuiState,
+    MAX_ATTENTION_MESSAGE_CHARS, PageActionTicket, SharedTuiState,
 };
 pub use state::{HintMode, InputKind, InteractionMode, Lifecycle, PublishedPage, TuiState};
 pub use theme::{ThemePalette, ThemeRole, TuiTheme};

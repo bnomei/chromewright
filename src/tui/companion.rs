@@ -6,8 +6,8 @@
 //! a separate process boundary and never registers `tui_*` tools or semantic
 //! resources through this path.
 
-use crate::tui::SharedTuiState;
-use crate::{BrowserServer, BrowserSession};
+use crate::BrowserServer;
+use crate::tui::PageCoordinator;
 use axum::Router;
 use rmcp::transport::streamable_http_server::{
     StreamableHttpService, session::local::LocalSessionManager,
@@ -51,8 +51,7 @@ fn validate_http_path(path: &str) -> Result<String, String> {
 /// if the OS would otherwise allow them. The returned [`Companion`] owns the
 /// serve task until [`Companion::stop`].
 pub fn start(
-    session: Arc<BrowserSession>,
-    shared: SharedTuiState,
+    coordinator: Arc<PageCoordinator>,
     path: String,
     port: u16,
 ) -> Result<Companion, String> {
@@ -68,12 +67,7 @@ pub fn start(
     listener.set_nonblocking(true).map_err(|e| e.to_string())?;
     let listener = tokio::net::TcpListener::from_std(listener).map_err(|e| e.to_string())?;
     let service = StreamableHttpService::new(
-        move || {
-            Ok(BrowserServer::from_companion(
-                session.clone(),
-                shared.clone(),
-            ))
-        },
+        move || Ok(BrowserServer::from_companion(coordinator.clone())),
         LocalSessionManager::default().into(),
         Default::default(),
     );
@@ -110,15 +104,16 @@ impl Companion {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::BrowserSession;
     use crate::browser::backend::FakeSessionBackend;
     use crate::dom::DocumentMetadata;
     use crate::semantic::SemanticDocument;
     use crate::tools::tui::{NAMES, TuiTool};
-    use crate::tui::SharedTuiState;
+    use crate::tui::{PageCoordinator, SharedTuiState};
     use rmcp::ServerHandler;
     use std::sync::Arc;
 
-    fn active_companion_session() -> (Arc<BrowserSession>, SharedTuiState) {
+    fn active_companion_session() -> (Arc<PageCoordinator>, SharedTuiState) {
         let shared = SharedTuiState::unbound();
         let mut session = Arc::new(BrowserSession::with_test_backend(FakeSessionBackend::new()));
         let session_mut = Arc::get_mut(&mut session).expect("unique test session");
@@ -127,11 +122,11 @@ mod tests {
                 .tool_registry_mut()
                 .register(TuiTool::with_shared(name, shared.clone()));
         }
-        shared
-            .bind_session(session.clone())
-            .expect("bind shared session");
         shared.activate_runtime();
-        (session, shared)
+        (
+            Arc::new(PageCoordinator::new(session, shared.clone())),
+            shared,
+        )
     }
 
     fn probe_status(url: String) -> u16 {
@@ -189,7 +184,7 @@ mod tests {
             return;
         }
         let (session, shared) = active_companion_session();
-        let companion = start(session, shared.clone(), "/tui-mcp".into(), 0).expect("start");
+        let companion = start(session, "/tui-mcp".into(), 0).expect("start");
         let address = companion.address();
         assert!(address.ip().is_loopback());
         assert_eq!(address.ip(), IpAddr::V4(Ipv4Addr::LOCALHOST));
@@ -242,7 +237,7 @@ mod tests {
             })
             .expect("semantic document"),
         );
-        let companion = start(session, shared.clone(), "/mcp".into(), 0).expect("start");
+        let companion = start(session, "/mcp".into(), 0).expect("start");
         let url = format!("http://{}/mcp", companion.address());
 
         let (initialize, tools, resources) = tokio::task::spawn_blocking(move || {
@@ -345,15 +340,15 @@ mod tests {
         if !loopback_bind_available() {
             return;
         }
-        let (session, shared) = active_companion_session();
-        match start(session.clone(), shared.clone(), "mcp".into(), 0) {
+        let (session, _shared) = active_companion_session();
+        match start(session.clone(), "mcp".into(), 0) {
             Ok(_) => panic!("relative path must fail"),
             Err(err) => assert!(err.contains("absolute path"), "{err}"),
         }
 
         let holder = TcpListener::bind(loopback_address(0)).expect("bind holder");
         let port = holder.local_addr().unwrap().port();
-        match start(session, shared, "/mcp".into(), port) {
+        match start(session, "/mcp".into(), port) {
             Ok(_) => panic!("port conflict must fail"),
             Err(err) => assert!(
                 err.contains("failed to bind TUI MCP companion on loopback"),
@@ -366,7 +361,10 @@ mod tests {
     fn active_companion_registry_exposes_and_dispatches_all_tui_tools() {
         let (session, shared) = active_companion_session();
         for name in NAMES {
-            assert!(session.tool_registry().has(name), "missing {name}");
+            assert!(
+                session.session().tool_registry().has(name),
+                "missing {name}"
+            );
         }
 
         shared.publish(
@@ -383,6 +381,7 @@ mod tests {
 
         // Prove every registered tool dispatches against the exact shared state.
         let render = session
+            .session()
             .execute_tool("tui_render", serde_json::json!({}))
             .expect("tui_render");
         assert!(render.success);
@@ -395,17 +394,20 @@ mod tests {
         );
 
         let inspect = session
+            .session()
             .execute_tool("tui_inspect", serde_json::json!({}))
             .expect("tui_inspect");
         assert!(inspect.success);
 
         let selection_read = session
+            .session()
             .execute_tool("tui_selection_read", serde_json::json!({}))
             .expect("tui_selection_read");
         assert!(selection_read.success);
 
         // Selection update fails closed without a resolvable ref; attention is independent.
         let selection_update = session
+            .session()
             .execute_tool(
                 "tui_selection_update",
                 serde_json::json!({ "semantic_ref": "not-a-ref" }),
@@ -423,6 +425,7 @@ mod tests {
 
         // Empty published document has no components; attention requires an exact ref.
         let attention_set = session
+            .session()
             .execute_tool(
                 "tui_attention_set",
                 serde_json::json!({ "semantic_ref": "not-a-ref", "message": "focus" }),
@@ -440,6 +443,7 @@ mod tests {
         assert!(!shared.attention().is_set());
 
         let attention_read = session
+            .session()
             .execute_tool("tui_attention_read", serde_json::json!({}))
             .expect("tui_attention_read");
         assert!(attention_read.success);
@@ -452,22 +456,14 @@ mod tests {
         );
 
         let attention_clear = session
+            .session()
             .execute_tool("tui_attention_clear", serde_json::json!({}))
             .expect("tui_attention_clear");
         assert!(attention_clear.success);
         assert!(!shared.attention().is_set());
 
-        let refresh = session
-            .execute_tool("tui_refresh", serde_json::json!({}))
-            .expect("tui_refresh");
-        assert!(refresh.success);
-        assert_eq!(
-            refresh
-                .data
-                .as_ref()
-                .and_then(|data| data["data"]["revision"].as_str()),
-            Some("fake:2")
-        );
+        let refresh = session.refresh().expect("tui_refresh");
+        assert_eq!(refresh.revision, "fake:2");
         assert_eq!(
             shared.active().expect("published").document.revision,
             "fake:2"
@@ -489,7 +485,7 @@ mod tests {
             .expect("semantic document"),
         );
 
-        let companion = BrowserServer::from_companion(session.clone(), shared.clone());
+        let companion = BrowserServer::from_companion(session.clone());
         assert!(companion.get_info().capabilities.resources.is_some());
         let listed = crate::mcp::resources::list_resources(&shared);
         assert!(
@@ -499,7 +495,7 @@ mod tests {
                 .any(|resource| resource.uri == "chromewright://active/semantic.md")
         );
 
-        let stdio = BrowserServer::from_shared_session(session);
+        let stdio = BrowserServer::from_shared_session(session.session().clone());
         assert!(stdio.get_info().capabilities.resources.is_none());
         assert!(stdio.get_info().capabilities.tools.is_some());
     }
