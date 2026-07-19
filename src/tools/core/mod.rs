@@ -1091,6 +1091,31 @@ fn tool_safety_annotations(name: &str) -> ToolSafetyAnnotations {
         .unwrap_or_else(|| ToolSafetyAnnotations::mutating(true, false))
 }
 
+/// Internal execution effect owned by the tool registry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ToolEffect {
+    ReadOnly,
+    CoordinationOnly,
+    BrowserMutation,
+}
+
+fn explicit_tool_effect(name: &str) -> Option<ToolEffect> {
+    match name {
+        "tui_render" | "tui_inspect" | "tui_selection_read" | "tui_attention_read"
+        | "extract" | "get_markdown" | "inspect_node" | "read_links" | "screenshot"
+        | "snapshot" | "tab_list" | "wait" => Some(ToolEffect::ReadOnly),
+        "tui_selection_update" | "tui_attention_set" | "tui_attention_clear" => {
+            Some(ToolEffect::CoordinationOnly)
+        }
+        // Refresh performs browser capture and intentionally remains browser-mutating even
+        // while its tool implementation temporarily owns companion serialization itself.
+        "tui_refresh" | "set_viewport" | "switch_tab" | "go_back" | "go_forward" | "hover"
+        | "input" | "navigate" | "new_tab" | "scroll" | "select" | "click" | "close"
+        | "close_tab" | "evaluate" | "press_key" => Some(ToolEffect::BrowserMutation),
+        _ => None,
+    }
+}
+
 /// Name-indexed collection of registered tools with default and operator subsets.
 ///
 /// Default registries exclude operator tools (`evaluate`) and companion-only TUI tools.
@@ -1181,6 +1206,11 @@ impl ToolRegistry {
     /// Whether `name` is registered.
     pub fn has(&self, name: &str) -> bool {
         self.tools.contains_key(name)
+    }
+
+    /// Classify execution effects; unknown names fail safe as browser mutations.
+    pub(crate) fn effect(&self, name: &str) -> ToolEffect {
+        explicit_tool_effect(name).unwrap_or(ToolEffect::BrowserMutation)
     }
 
     /// Sorted list of registered MCP tool names.
@@ -1282,6 +1312,34 @@ mod tests {
             missing.is_empty(),
             "registered tools missing explicit safety annotations: {missing:?}"
         );
+    }
+
+    #[test]
+    fn registered_core_and_tui_tools_have_explicit_effects() {
+        let mut names = ToolRegistry::with_all_tools().list_names();
+        #[cfg(feature = "tui")]
+        names.extend(crate::tools::tui::NAMES.iter().map(|name| (*name).to_string()));
+        let missing: Vec<_> = names
+            .into_iter()
+            .filter(|name| explicit_tool_effect(name).is_none())
+            .collect();
+        assert!(missing.is_empty(), "tools missing explicit effects: {missing:?}");
+    }
+
+    #[test]
+    fn tool_effect_classification_preserves_serialization_policy() {
+        let registry = ToolRegistry::new();
+        for name in ["tui_selection_update", "tui_attention_set", "tui_attention_clear"] {
+            assert_eq!(registry.effect(name), ToolEffect::CoordinationOnly, "{name}");
+        }
+        for name in [
+            "tui_refresh", "set_viewport", "switch_tab", "go_back", "go_forward", "hover",
+            "input", "navigate", "new_tab", "scroll", "select", "click", "close",
+            "close_tab", "evaluate", "press_key",
+        ] {
+            assert_eq!(registry.effect(name), ToolEffect::BrowserMutation, "{name}");
+        }
+        assert_eq!(registry.effect("unknown_tool"), ToolEffect::BrowserMutation);
     }
 
     #[test]

@@ -13,7 +13,7 @@ use crate::tui::content::{
 };
 use crate::tui::driver::PageDriver;
 use crate::tui::hints::{HintMatch, LinkHint, assign_hints, match_hint};
-use crate::tui::shared::SharedTuiState;
+use crate::tui::shared::{Attention, SharedTuiState};
 use crate::tui::state::{HintMode, InputKind, InteractionMode, Lifecycle, TuiState};
 use crate::tui::url_history::UrlHistory;
 
@@ -429,12 +429,15 @@ impl Controller {
     /// completes. Agent attention is independent and is always applied without
     /// mutating human selection.
     pub fn synchronize_companion_state(&mut self) {
+        // One coherent coordination read per pass: lifecycle, document, and attention
+        // must describe the same publication revision.
+        let snapshot = self.shared.read_snapshot();
         if self.pending_page_action.is_none() {
-            match self.shared.lifecycle() {
+            match snapshot.lifecycle {
                 Lifecycle::Loading { action } => self.state.enter_loading(action),
                 Lifecycle::Error { action, message } => self.state.enter_error(action, message),
                 Lifecycle::Ready => {
-                    if let Ok(document) = self.shared.active() {
+                    if let Some(document) = snapshot.active {
                         if self.state.document().is_none_or(|current| {
                             current.document.document_id != document.document.document_id
                                 || current.document.revision != document.document.revision
@@ -471,7 +474,7 @@ impl Controller {
                 }
             }
         }
-        self.sync_attention_from_shared();
+        self.sync_attention_from_shared(snapshot.attention);
     }
 
     /// Apply agent attention from shared state: highlight + scroll into view,
@@ -479,8 +482,7 @@ impl Controller {
     ///
     /// In prose mode landmarks/lists often have no content line. Attention still
     /// paints the whole subtree and scrolls to the first visible descendant.
-    fn sync_attention_from_shared(&mut self) {
-        let attention = self.shared.attention();
+    fn sync_attention_from_shared(&mut self, attention: Attention) {
         let next = attention.semantic_ref.clone();
         let changed = self.state.view.attention != next;
         let previous_selection = self.state.view.selection.clone();

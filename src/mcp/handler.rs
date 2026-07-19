@@ -7,6 +7,8 @@
 use crate::browser::{BrowserSession, ConnectionOptions};
 use crate::mcp::{convert_result, mcp_internal_error};
 use crate::tools::ToolDescriptor;
+#[cfg(feature = "tui")]
+use crate::tools::ToolEffect;
 use log::debug;
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
@@ -122,7 +124,11 @@ impl BrowserServer {
     ) -> Result<CallToolResult, McpError> {
         #[cfg(feature = "tui")]
         if let Some(shared) = &self.shared
-            && is_serialized_page_action(request.name.as_ref())
+            && self.session().tool_registry().effect(request.name.as_ref())
+                == ToolEffect::BrowserMutation
+            // tui_refresh already calls SharedTuiState::refresh, which owns this same
+            // lifecycle. Exclude it here until that self-serialization is removed.
+            && request.name.as_ref() != "tui_refresh"
         {
             // Companion page mutators own the same Loading → capture → Ready|Error
             // lifecycle as terminal actions and tui_refresh.
@@ -148,29 +154,6 @@ impl BrowserServer {
     #[cfg(feature = "tui")]
     fn companion_shared(&self) -> Option<&SharedTuiState> {
         self.shared.as_ref()
-    }
-}
-
-/// Page-mutating tools that must not race a Loading shared BrowserSession.
-#[cfg(feature = "tui")]
-fn is_serialized_page_action(name: &str) -> bool {
-    match name {
-        // Independent collaboration and pure TUI reads stay available during Loading.
-        "tui_render"
-        | "tui_inspect"
-        | "tui_selection_read"
-        | "tui_selection_update"
-        | "tui_attention_read"
-        | "tui_attention_set"
-        | "tui_attention_clear" => false,
-        // Refresh serializes itself via SharedTuiState::begin_page_action.
-        "tui_refresh" => false,
-        "extract" | "get_markdown" | "inspect_node" | "read_links" | "screenshot" | "snapshot"
-        | "tab_list" | "wait" => false,
-        "set_viewport" | "switch_tab" | "go_back" | "go_forward" | "hover" | "input"
-        | "navigate" | "new_tab" | "scroll" | "select" | "click" | "close" | "close_tab"
-        | "evaluate" | "press_key" => true,
-        _ => true,
     }
 }
 
