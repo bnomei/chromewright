@@ -718,6 +718,43 @@ pub fn line_index_of(lines: &[ContentLine], semantic_ref: &SemanticRef) -> Optio
         .position(|l| l.semantic_ref.as_ref().is_some_and(|r| r == semantic_ref))
 }
 
+/// Top-of-viewport anchor used to restore scroll after a same-document patch.
+///
+/// `semantic_ref` is the first addressable line at or below the current top.
+/// `wrap_row` is how many display rows of that block sit above the viewport
+/// edge (0 when the block start is on-screen). After recapture, restore with
+/// `scroll_y = line_index_of(new_lines, rebound) + wrap_row`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ViewportTopAnchor {
+    pub semantic_ref: SemanticRef,
+    pub wrap_row: usize,
+}
+
+/// Capture the topmost visible addressable line for scroll-stable patches.
+///
+/// Skips non-addressable rows (prose heading spacers). When the top row is a
+/// soft-wrap continuation, walks upward to the block start and records the
+/// wrap offset so the same continuation can be restored after recapture.
+pub fn top_viewport_anchor(lines: &[ContentLine], scroll_y: usize) -> Option<ViewportTopAnchor> {
+    if lines.is_empty() {
+        return None;
+    }
+    let start = scroll_y.min(lines.len().saturating_sub(1));
+    let mut idx = start;
+    while idx < lines.len() && lines[idx].semantic_ref.is_none() {
+        idx += 1;
+    }
+    let line = lines.get(idx)?;
+    let semantic_ref = line.semantic_ref.clone()?;
+    // Distance from this component's first display row to the viewport top.
+    let block_start = line_index_of(lines, &semantic_ref).unwrap_or(idx);
+    let wrap_row = start.saturating_sub(block_start);
+    Some(ViewportTopAnchor {
+        semantic_ref,
+        wrap_row,
+    })
+}
+
 /// Collect focusable controls in document order.
 pub fn focusable_refs(document: &SemanticDocument) -> Vec<SemanticRef> {
     document
@@ -2137,5 +2174,52 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["abcd", "efgh", "ij"]
         );
+    }
+
+    #[test]
+    fn top_viewport_anchor_skips_spacers_and_records_wrap_row() {
+        let r1 = SemanticRef::from_opaque("r1");
+        let r2 = SemanticRef::from_opaque("r2");
+        let lines = vec![
+            ContentLine {
+                text: String::new(),
+                semantic_ref: None,
+                kind: None,
+                heading_level: None,
+                block_start: false,
+            },
+            ContentLine {
+                text: "hello".into(),
+                semantic_ref: Some(r1.clone()),
+                kind: Some(SemanticKind::Text),
+                heading_level: None,
+                block_start: true,
+            },
+            ContentLine {
+                text: "world continued".into(),
+                semantic_ref: Some(r1.clone()),
+                kind: Some(SemanticKind::Text),
+                heading_level: None,
+                block_start: false,
+            },
+            ContentLine {
+                text: "next".into(),
+                semantic_ref: Some(r2.clone()),
+                kind: Some(SemanticKind::Text),
+                heading_level: None,
+                block_start: true,
+            },
+        ];
+        // scroll_y=0 lands on spacer → first addressable is r1, wrap_row 0
+        let a0 = top_viewport_anchor(&lines, 0).expect("a0");
+        assert_eq!(a0.semantic_ref, r1);
+        assert_eq!(a0.wrap_row, 0);
+        // scroll_y=2 is wrap continuation of r1
+        let a2 = top_viewport_anchor(&lines, 2).expect("a2");
+        assert_eq!(a2.semantic_ref, r1);
+        assert_eq!(a2.wrap_row, 1);
+        let a3 = top_viewport_anchor(&lines, 3).expect("a3");
+        assert_eq!(a3.semantic_ref, r2);
+        assert_eq!(a3.wrap_row, 0);
     }
 }

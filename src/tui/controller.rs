@@ -8,7 +8,8 @@
 use crate::semantic::{FragmentResolution, SemanticDocument, SemanticRef};
 use crate::tui::content::{
     build_content_lines_with, first_visible_descendant_ref, focusable_refs, form_control_refs,
-    line_index_of, rendered_block_text, search_refs, subtree_refs, ContentProjection,
+    line_index_of, rendered_block_text, search_refs, subtree_refs, top_viewport_anchor,
+    ContentProjection, ViewportTopAnchor,
 };
 use crate::tui::driver::PageDriver;
 use crate::tui::hints::{HintMatch, LinkHint, assign_hints, match_hint};
@@ -76,9 +77,16 @@ enum PageOperation {
 
 /// Result of performing a deferred page operation.
 enum PageActionOutcome {
-    /// Fresh semantic capture to publish (navigation, form submit, DOM-mutating click).
+    /// Fresh semantic capture to publish (navigation, form submit, real navigation).
     Captured(Box<SemanticDocument>),
-    /// Click/focus finished without leaving the document; keep the published page.
+    /// Same-document activation: recapture DOM but restore scroll from the top
+    /// viewport line (clipboard copy, in-page toggles that flip labels).
+    Patched {
+        document: Box<SemanticDocument>,
+        top_anchor: Option<ViewportTopAnchor>,
+        previous_selection: Option<SemanticRef>,
+    },
+    /// Focus-only / no-op: keep the published page without capturing.
     Retained,
 }
 
@@ -544,11 +552,16 @@ impl Controller {
                     document,
                     semantic_ref,
                 } => {
-                    // Snapshot identity before the click so JS-only actions
-                    // (clipboard copy, type=button handlers) can skip recapture
-                    // when the page did not navigate.
+                    // Snapshot identity + top viewport line before the click so
+                    // JS-only actions (clipboard copy) can recapture without
+                    // jumping the markdown view when the page did not navigate.
                     let before_id = document.document.document_id.clone();
                     let before_url = document.document.url.clone();
+                    let top_anchor = {
+                        let lines = self.lines_for_document(&document);
+                        top_viewport_anchor(&lines, self.state.view.scroll_y)
+                    };
+                    let previous_selection = self.state.view.selection.clone();
                     let page_changing = driver
                         .activate_ref(&document, &semantic_ref, false)
                         .map_err(|e| e.to_string())?;
@@ -556,51 +569,28 @@ impl Controller {
                         // Focus-only (text inputs): nothing to settle/capture.
                         return Ok(Some(PageActionOutcome::Retained));
                     }
-                    // Prefer a cheap metadata probe over full settle+capture when
-                    // the document identity and URL are unchanged. Docs sites often
-                    // wire type=button handlers that only touch the clipboard (and
-                    // may flip a "Copied!" label, which advances revision without
-                    // leaving the page — still retain to avoid a full TUI refresh).
-                    if let Ok(meta) = driver.document_metadata()
-                        && meta.document_id == before_id
-                        && urls_match_for_activate(&meta.url, &before_url)
-                    {
-                        return Ok(Some(PageActionOutcome::Retained));
+                    let same_document = driver
+                        .document_metadata()
+                        .ok()
+                        .is_some_and(|meta| {
+                            meta.document_id == before_id
+                                && urls_match_for_activate(&meta.url, &before_url)
+                        });
+                    if same_document {
+                        // Same-doc patch path: settle + capture, restore top line.
+                        driver.wait_settle().map_err(|e| e.to_string())?;
+                        let doc = Self::capture_with_metadata_barrier(driver)?;
+                        return Ok(Some(PageActionOutcome::Patched {
+                            document: Box::new(doc),
+                            top_anchor,
+                            previous_selection,
+                        }));
                     }
                 }
             }
             driver.wait_settle().map_err(|e| e.to_string())?;
-            // Capture first, then read metadata as the freshness barrier. A
-            // hydrated page can mutate between settling and capture, so a
-            // pre-capture metadata read would reject a valid later snapshot.
-            // The post-capture metadata must instead describe exactly what we
-            // captured before it can be published. Dynamic sites often keep
-            // mutating briefly after settle — retry only the metadata barrier
-            // (hard capture failures still fail closed immediately).
-            const METADATA_RETRY_ATTEMPTS: usize = 4;
-            let mut last_err = String::new();
-            for attempt in 0..METADATA_RETRY_ATTEMPTS {
-                if attempt > 0 {
-                    let _ = driver.wait_settle();
-                }
-                let doc = driver.capture_semantic().map_err(|e| e.to_string())?;
-                let metadata = driver.document_metadata().map_err(|e| e.to_string())?;
-                if metadata.document_id.is_empty()
-                    || metadata.revision.is_empty()
-                    || metadata.ready_state != "complete"
-                {
-                    last_err =
-                        "browser did not provide stable complete document metadata".into();
-                    continue;
-                }
-                if !crate::semantic::capture_matches_document_metadata(&doc.document, &metadata) {
-                    last_err = "semantic capture metadata changed during publication".into();
-                    continue;
-                }
-                // Atomic consistency: url/title/revision come only from this document.
-                return Ok(Some(PageActionOutcome::Captured(Box::new(doc))));
-            }
-            Err(last_err)
+            let doc = Self::capture_with_metadata_barrier(driver)?;
+            Ok(Some(PageActionOutcome::Captured(Box::new(doc))))
         })();
         match result {
             Ok(Some(PageActionOutcome::Captured(doc))) => {
@@ -614,6 +604,15 @@ impl Controller {
                 if let Some(mode) = pending.hint_mode_after_success {
                     self.enter_hint_mode(mode);
                 }
+                Ok(())
+            }
+            Ok(Some(PageActionOutcome::Patched {
+                document,
+                top_anchor,
+                previous_selection,
+            })) => {
+                self.finish_same_document_patch(*document, top_anchor, previous_selection);
+                self.refresh_history_availability(driver);
                 Ok(())
             }
             Ok(Some(PageActionOutcome::Retained)) => {
@@ -645,6 +644,149 @@ impl Controller {
         self.hints.clear();
         self.state.clear_session();
         self.shared.clear_session();
+    }
+
+    /// Capture + post-capture metadata barrier with short retries.
+    ///
+    /// Shared by navigate-style finishes and same-document patches.
+    fn capture_with_metadata_barrier<D: PageDriver>(
+        driver: &mut D,
+    ) -> Result<SemanticDocument, String> {
+        // Capture first, then read metadata as the freshness barrier. A
+        // hydrated page can mutate between settling and capture, so a
+        // pre-capture metadata read would reject a valid later snapshot.
+        // The post-capture metadata must instead describe exactly what we
+        // captured before it can be published. Dynamic sites often keep
+        // mutating briefly after settle — retry only the metadata barrier
+        // (hard capture failures still fail closed immediately).
+        const METADATA_RETRY_ATTEMPTS: usize = 4;
+        let mut last_err = String::new();
+        for attempt in 0..METADATA_RETRY_ATTEMPTS {
+            if attempt > 0 {
+                let _ = driver.wait_settle();
+            }
+            let doc = driver.capture_semantic().map_err(|e| e.to_string())?;
+            let metadata = driver.document_metadata().map_err(|e| e.to_string())?;
+            if metadata.document_id.is_empty()
+                || metadata.revision.is_empty()
+                || metadata.ready_state != "complete"
+            {
+                last_err = "browser did not provide stable complete document metadata".into();
+                continue;
+            }
+            if !crate::semantic::capture_matches_document_metadata(&doc.document, &metadata) {
+                last_err = "semantic capture metadata changed during publication".into();
+                continue;
+            }
+            return Ok(doc);
+        }
+        Err(last_err)
+    }
+
+    /// Publish a same-document recapture while pinning the top visible line.
+    ///
+    /// Used after in-page button activates (clipboard copy, label toggles).
+    /// Unlike [`Self::finish_capture`], this never calls `ensure_visible` on
+    /// the selection — scroll is restored from the pre-click top viewport
+    /// anchor so the markdown view does not jump.
+    fn finish_same_document_patch(
+        &mut self,
+        doc: SemanticDocument,
+        top_anchor: Option<ViewportTopAnchor>,
+        previous_selection: Option<SemanticRef>,
+    ) {
+        let prev_scroll = self.state.view.scroll_y;
+
+        // Rebind collapse / search against the new revision.
+        let mut collapsed = std::collections::HashSet::new();
+        for old in &self.state.view.collapsed {
+            if let Ok(rebound) = doc.rebind_surviving(old) {
+                collapsed.insert(rebound);
+            }
+        }
+        let mut search_matches = Vec::new();
+        for old in &self.state.view.search_matches {
+            if let Ok(rebound) = doc.rebind_surviving(old) {
+                search_matches.push(rebound);
+            }
+        }
+        let search_index = self
+            .state
+            .view
+            .search_index
+            .min(search_matches.len().saturating_sub(1));
+
+        // Selection: rebind if the identity survives; otherwise keep none.
+        let selection = previous_selection.and_then(|prev| doc.rebind_surviving(&prev).ok());
+
+        // Attention: drop if it no longer resolves by identity.
+        let attention = self
+            .state
+            .view
+            .attention
+            .as_ref()
+            .and_then(|a| doc.rebind_surviving(a).ok());
+
+        // Staged form values: rebind keys that still exist.
+        let mut pending_form = std::collections::HashMap::new();
+        for (old_ref, value) in self.state.view.pending_form_values.drain() {
+            if let Ok(rebound) = doc.rebind_surviving(&old_ref) {
+                pending_form.insert(rebound, value);
+            }
+        }
+
+        self.state.view.collapsed = collapsed;
+        self.state.view.search_matches = search_matches;
+        self.state.view.search_index = search_index;
+        self.state.view.selection = selection;
+        self.state.view.attention = attention.clone();
+        self.state.view.attention_paint.clear();
+        self.state.view.pending_form_values = pending_form;
+        self.state.view.inspect_text = None;
+        self.state.view.inspect_title = None;
+        self.hints.clear();
+
+        self.state.publish_page(doc);
+
+        // Rebuild attention paint without scrolling (sync_attention_from_shared
+        // would move the viewport when attention is set).
+        if let (Some(reference), Some(document)) =
+            (attention.as_ref(), self.state.document())
+        {
+            self.state.view.attention_paint = subtree_refs(document, reference);
+        }
+
+        // Restore scroll from the top-of-viewport anchor (not selection).
+        let lines = self
+            .state
+            .document()
+            .map(|d| self.lines_for_document(d))
+            .unwrap_or_default();
+        let scroll_y = if let Some(anchor) = top_anchor.as_ref() {
+            if let Some(document) = self.state.document() {
+                if let Ok(rebound) = document.rebind_surviving(&anchor.semantic_ref) {
+                    if let Some(block_start) = line_index_of(&lines, &rebound) {
+                        block_start.saturating_add(anchor.wrap_row)
+                    } else {
+                        prev_scroll
+                    }
+                } else {
+                    prev_scroll
+                }
+            } else {
+                prev_scroll
+            }
+        } else {
+            prev_scroll
+        };
+        self.state.view.scroll_y = scroll_y;
+        self.state.clamp_scroll(lines.len());
+        // Intentionally no ensure_visible(selection) — that would yank the view.
+
+        let document = self.state.document().expect("patch published").clone();
+        let selection = self.state.view.selection.clone();
+        let _ = self.shared.publish_with_selection(document, selection);
+        self.refresh_inspect_panel();
     }
 
     fn finish_capture(
@@ -3002,54 +3144,91 @@ mod tests {
         );
     }
 
+    fn copy_button_node(text: &str) -> RawSemanticNode {
+        RawSemanticNode {
+            kind: "button".into(),
+            tag: Some("button".into()),
+            id: Some("copy".into()),
+            unique_id: true,
+            selector: None,
+            text: Some(text.into()),
+            href: None,
+            landmark: None,
+            heading_level: None,
+            ordered: None,
+            label: None,
+            src: None,
+            alt: None,
+            name: None,
+            value: None,
+            input_type: None,
+            placeholder: None,
+            checked: None,
+            disabled: None,
+            required: None,
+            readonly: None,
+            multiple: None,
+            button_type: Some("button".into()),
+            options: vec![],
+            children: vec![],
+        }
+    }
+
     #[test]
-    fn js_button_activate_retains_page_without_recapture() {
-        // type=button clipboard/copy controls must not flash Loading + recapture
-        // when the document identity and URL stay the same.
-        let document = normalize_fixture(
-            meta("1", "https://getkirby.com/docs/guide"),
-            vec![RawSemanticNode {
-                kind: "button".into(),
-                tag: Some("button".into()),
-                id: Some("copy".into()),
-                unique_id: true,
-                selector: None,
-                text: Some("Copy".into()),
-                href: None,
-                landmark: None,
-                heading_level: None,
-                ordered: None,
-                label: None,
-                src: None,
-                alt: None,
-                name: None,
-                value: None,
-                input_type: None,
-                placeholder: None,
-                checked: None,
-                disabled: None,
-                required: None,
-                readonly: None,
-                multiple: None,
-                button_type: Some("button".into()),
-                options: vec![],
-                children: vec![],
-            }],
-        )
-        .expect("doc");
-        let button = document
+    fn js_button_activate_patches_dom_and_keeps_top_line() {
+        // Same-document type=button (clipboard copy): recapture the flipped
+        // label but pin the topmost visible line so the markdown view does not
+        // jump toward the button.
+        let url = "https://getkirby.com/docs/guide";
+        let mut before_nodes = Vec::new();
+        for i in 0..12 {
+            before_nodes.push(raw_text(&format!("p{i}"), &format!("paragraph {i} body text")));
+        }
+        before_nodes.push(copy_button_node("Copy"));
+        let before = normalize_fixture(meta("main:1", url), before_nodes).expect("before");
+
+        let mut after_nodes = Vec::new();
+        for i in 0..12 {
+            after_nodes.push(raw_text(&format!("p{i}"), &format!("paragraph {i} body text")));
+        }
+        after_nodes.push(copy_button_node("Copied!"));
+        let after = normalize_fixture(meta("main:2", url), after_nodes).expect("after");
+
+        let top_ref = before
+            .components()
+            .find(|c| c.attrs.element_id.as_deref() == Some("p0"))
+            .unwrap()
+            .semantic_ref
+            .clone();
+        let mid_ref = before
+            .components()
+            .find(|c| c.attrs.element_id.as_deref() == Some("p3"))
+            .unwrap()
+            .semantic_ref
+            .clone();
+        let button = before
             .components()
             .find(|c| c.attrs.element_id.as_deref() == Some("copy"))
             .unwrap()
             .semantic_ref
             .clone();
-        let before_rev = document.document.revision.clone();
-        let mut driver = FakePageDriver::new(vec![document.clone()]);
+
+        let mut driver = FakePageDriver::new(vec![before.clone(), after]);
+        driver.advance_page_on_capture = true;
         let mut ctl = Controller::new();
         ctl.shared.activate_runtime();
-        ctl.state.publish_page(document.clone());
-        ctl.shared.publish(document);
+        ctl.state.publish_page(before.clone());
+        ctl.shared.publish(before);
+        ctl.set_viewport(24, 5);
+
+        // Scroll so p3 is the topmost visible line; select the copy button below.
+        let lines = ctl.content_lines();
+        let top_idx = line_index_of(&lines, &mid_ref).expect("mid line");
+        ctl.state.view.scroll_y = top_idx;
         ctl.state.view.selection = Some(button.clone());
+        let top_before = top_viewport_anchor(&lines, ctl.state.view.scroll_y)
+            .expect("top anchor")
+            .semantic_ref;
 
         ctl.activate_selection().expect("activate");
         assert!(ctl.state.lifecycle.is_loading());
@@ -3058,11 +3237,51 @@ mod tests {
             .expect("run activate");
 
         assert!(ctl.state.lifecycle.is_ready());
-        assert_eq!(ctl.state.url(), "https://getkirby.com/docs/guide");
-        assert_eq!(ctl.state.revision(), before_rev);
-        assert_eq!(ctl.state.view.selection.as_ref(), Some(&button));
-        assert_eq!(ctl.state.view.status_message.as_deref(), Some("activated"));
-        assert_eq!(driver.capture_calls, 0, "must not recapture same-document button");
+        assert_eq!(ctl.state.url(), url);
+        assert_eq!(ctl.state.revision(), "main:2");
+        assert!(
+            driver.capture_calls >= 1,
+            "same-doc button should recapture to pick up Copied!"
+        );
+        // Label updated in the published view.
+        let lines_after = ctl.content_lines();
+        assert!(
+            lines_after.iter().any(|l| l.text.contains("Copied!")),
+            "patched label missing: {:?}",
+            lines_after.iter().map(|l| &l.text).collect::<Vec<_>>()
+        );
+        // Top of viewport still the same identity (p3), not yanked to the button.
+        let top_after = top_viewport_anchor(&lines_after, ctl.state.view.scroll_y)
+            .expect("top after")
+            .semantic_ref;
+        let top_after_rebound = ctl
+            .state
+            .document()
+            .unwrap()
+            .rebind_surviving(&top_before)
+            .expect("top identity survives");
+        assert_eq!(
+            top_after, top_after_rebound,
+            "top line should stay pinned after patch"
+        );
+        // Selection rebinds to the button on the new revision.
+        let button_after = ctl
+            .state
+            .document()
+            .unwrap()
+            .rebind_surviving(&button)
+            .expect("button survives");
+        assert_eq!(ctl.state.view.selection.as_ref(), Some(&button_after));
+        // Sanity: top was not p0 (we scrolled).
+        assert_ne!(
+            ctl.state
+                .document()
+                .unwrap()
+                .rebind_surviving(&top_ref)
+                .ok()
+                .as_ref(),
+            Some(&top_after)
+        );
         assert!(
             driver
                 .activated
