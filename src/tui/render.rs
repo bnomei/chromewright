@@ -153,15 +153,10 @@ fn draw_chrome(frame: &mut Frame, area: Rect, controller: &Controller, theme: &T
         }
     };
 
-    // Right cluster: lifecycle glyph + non-Normal mode only (no wrap/structure flags).
-    // Search / Hint are shown in the footer cmdline, not here.
-    let mut right_parts: Vec<(&str, Style)> = Vec::new();
-    right_parts.push((lifecycle_glyph(&state.lifecycle), lifecycle_style));
-    let mode = state.mode_label();
-    if mode != "Normal" && mode != "Search" && mode != "Hint" && mode != "Hint+" {
-        right_parts.push((mode, theme.chrome_mode()));
-    }
-
+    // Right cluster: lifecycle glyph only. URL/IN buffers already show on the
+    // left; Search/Hint live in the footer — no redundant mode label top-right.
+    let right_parts: Vec<(&str, Style)> =
+        vec![(lifecycle_glyph(&state.lifecycle), lifecycle_style)];
     let right_plain: String = right_parts
         .iter()
         .map(|(t, _)| *t)
@@ -611,12 +606,6 @@ pub fn chrome_lines(controller: &Controller) -> Vec<String> {
     let back = if state.can_go_back { "◀" } else { "◁" };
     let fwd = if state.can_go_forward { "▶" } else { "▷" };
     let life = lifecycle_glyph(&state.lifecycle);
-    let mut flags = vec![life];
-    let mode = state.mode_label();
-    // Search / Hint are footer-only, not header chrome.
-    if mode != "Normal" && mode != "Search" && mode != "Hint" && mode != "Hint+" {
-        flags.push(mode);
-    }
     let mid = if state.title().is_empty() {
         state.url().to_string()
     } else if state.url().is_empty() {
@@ -624,7 +613,7 @@ pub fn chrome_lines(controller: &Controller) -> Vec<String> {
     } else {
         format!("{} · {}", state.url(), state.title())
     };
-    vec![format!("{tabs}{back} {fwd} {mid}  {}", flags.join(" "))]
+    vec![format!("{tabs}{back} {fwd} {mid}  {life}")]
 }
 
 #[cfg(test)]

@@ -243,7 +243,8 @@ impl TuiState {
         Self::default()
     }
 
-    /// Chrome mode label shown beside lifecycle (not a shortcut legend).
+    /// Short mode name for diagnostics/tests (not shown in header chrome).
+    #[allow(dead_code)]
     pub fn mode_label(&self) -> &'static str {
         match &self.mode {
             InteractionMode::Normal => "Normal",
