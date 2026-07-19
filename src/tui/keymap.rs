@@ -3,6 +3,11 @@
 //! Maps KeyChord sequences to named [`Action`] values. The event loop must
 //! never hard-code keys; all Normal-mode bindings go through [`TuiKeymap`] and
 //! the multi-key [`KeyResolver`]. Unknown/conflicting overlays fail startup.
+//!
+//! Defaults also include [md-tui](https://github.com/henriklovhaug/md-tui)-style
+//! aliases where they do not collide with browser commands (`s`/`S` link
+//! select, arrows, `b` history back). Browser-first keys (`f`, `h`/`l`, `t`,
+//! `o`, `q`) stay as documented.
 
 use crate::tui::action::Action;
 use std::collections::HashMap;
@@ -194,26 +199,53 @@ fn parse_key_code(token: &str) -> Result<KeyCode, KeymapError> {
 }
 
 /// Action-to-binding map. Defaults are Vimari-compatible; TOML overlays replace named actions.
+///
+/// An action may have multiple sequences (primary + aliases). Reverse lookup is
+/// unique: each sequence maps to at most one action.
 #[derive(Debug, Clone)]
 pub struct TuiKeymap {
-    /// Primary binding for each action (first wins for reverse lookup).
-    bindings: HashMap<Action, KeySequence>,
+    /// Sequences bound to each action (primary first, then aliases).
+    bindings: HashMap<Action, Vec<KeySequence>>,
     /// Reverse map from full sequences to actions.
     sequence_index: HashMap<KeySequence, Action>,
 }
 
 impl TuiKeymap {
-    /// Built-in Vimari-compatible defaults.
+    /// Built-in Vimari-compatible defaults, plus non-conflicting md-tui aliases.
     pub fn defaults() -> Self {
-        let mut map = HashMap::new();
+        let mut map: HashMap<Action, Vec<KeySequence>> = HashMap::new();
         insert(&mut map, Action::LinkHintsFollow, KeySequence::chars("f"));
+        // md-tui `s` / `S` = select link (same-tab / alt strategy).
+        insert_alias(&mut map, Action::LinkHintsFollow, KeySequence::chars("s"));
         insert(&mut map, Action::LinkHintsNewTab, KeySequence::chars("F"));
+        insert_alias(&mut map, Action::LinkHintsNewTab, KeySequence::chars("S"));
         insert(&mut map, Action::ScrollDown, KeySequence::chars("j"));
+        insert_alias(
+            &mut map,
+            Action::ScrollDown,
+            KeySequence::single(KeyCode::Down),
+        );
         insert(&mut map, Action::ScrollUp, KeySequence::chars("k"));
+        insert_alias(
+            &mut map,
+            Action::ScrollUp,
+            KeySequence::single(KeyCode::Up),
+        );
         insert(&mut map, Action::ScrollLeft, KeySequence::chars("h"));
         insert(&mut map, Action::ScrollRight, KeySequence::chars("l"));
         insert(&mut map, Action::HalfPageUp, KeySequence::chars("u"));
+        // md-tui binds Right to page-up; we alias to half-page view pan.
+        insert_alias(
+            &mut map,
+            Action::HalfPageUp,
+            KeySequence::single(KeyCode::Right),
+        );
         insert(&mut map, Action::HalfPageDown, KeySequence::chars("d"));
+        insert_alias(
+            &mut map,
+            Action::HalfPageDown,
+            KeySequence::single(KeyCode::Left),
+        );
         insert(
             &mut map,
             Action::PageSelectUp,
@@ -228,6 +260,8 @@ impl TuiKeymap {
         insert(&mut map, Action::GoBottom, KeySequence::chars("G"));
         insert(&mut map, Action::FocusFirstInput, KeySequence::chars("gi"));
         insert(&mut map, Action::HistoryBack, KeySequence::chars("H"));
+        // md-tui `b` = go back to previous file → browser history back.
+        insert_alias(&mut map, Action::HistoryBack, KeySequence::chars("b"));
         insert(&mut map, Action::HistoryForward, KeySequence::chars("L"));
         insert(&mut map, Action::Reload, KeySequence::chars("r"));
         insert(&mut map, Action::NextTab, KeySequence::chars("w"));
@@ -274,15 +308,23 @@ impl TuiKeymap {
         Self::from_bindings(map).expect("default keymap is valid")
     }
 
-    fn from_bindings(bindings: HashMap<Action, KeySequence>) -> Result<Self, KeymapError> {
+    fn from_bindings(bindings: HashMap<Action, Vec<KeySequence>>) -> Result<Self, KeymapError> {
         let mut sequence_index = HashMap::new();
-        for (action, seq) in &bindings {
-            if let Some(existing) = sequence_index.insert(seq.clone(), *action) {
-                return Err(KeymapError::ConflictingBinding {
-                    sequence: format_sequence(seq),
-                    first: existing.name().to_string(),
-                    second: action.name().to_string(),
-                });
+        for (action, seqs) in &bindings {
+            if seqs.is_empty() {
+                return Err(KeymapError::EmptyBinding);
+            }
+            for seq in seqs {
+                if seq.0.is_empty() {
+                    return Err(KeymapError::EmptyBinding);
+                }
+                if let Some(existing) = sequence_index.insert(seq.clone(), *action) {
+                    return Err(KeymapError::ConflictingBinding {
+                        sequence: format_sequence(seq),
+                        first: existing.name().to_string(),
+                        second: action.name().to_string(),
+                    });
+                }
             }
         }
         Ok(Self {
@@ -293,7 +335,8 @@ impl TuiKeymap {
 
     /// Overlay Action bindings from a TOML table of `action = "binding"`.
     ///
-    /// Only listed actions are replaced; unknown action names or conflicting
+    /// Only listed actions are replaced (primary + any aliases cleared, then
+    /// the new single binding applied). Unknown action names or conflicting
     /// sequences fail closed rather than partially applying the overlay.
     pub fn overlay_from_map(
         &self,
@@ -304,14 +347,22 @@ impl TuiKeymap {
             let action = Action::from_name(action_name)
                 .ok_or_else(|| KeymapError::UnknownAction(action_name.clone()))?;
             let sequence = KeySequence::parse(binding_spec)?;
-            bindings.insert(action, sequence);
+            bindings.insert(action, vec![sequence]);
         }
         Self::from_bindings(bindings)
     }
 
-    /// Binding for an action, if configured.
+    /// Primary (first) binding for an action, if configured.
     pub fn binding(&self, action: Action) -> Option<&KeySequence> {
-        self.bindings.get(&action)
+        self.bindings.get(&action).and_then(|v| v.first())
+    }
+
+    /// All sequences bound to an action (primary first).
+    pub fn bindings_for(&self, action: Action) -> &[KeySequence] {
+        self.bindings
+            .get(&action)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
     }
 
     /// Resolve a complete chord sequence to an action.
@@ -329,16 +380,24 @@ impl TuiKeymap {
             .any(|seq| seq.0.len() > prefix.0.len() && seq.0.starts_with(&prefix.0))
     }
 
-    /// All action→binding pairs in deterministic action-name order.
+    /// All action→binding pairs in deterministic action-name order (aliases included).
     pub fn entries(&self) -> Vec<(Action, KeySequence)> {
-        let mut entries: Vec<_> = self.bindings.iter().map(|(a, s)| (*a, s.clone())).collect();
-        entries.sort_by_key(|(a, _)| a.name());
+        let mut entries: Vec<_> = self
+            .bindings
+            .iter()
+            .flat_map(|(a, seqs)| seqs.iter().map(|s| (*a, s.clone())))
+            .collect();
+        entries.sort_by_key(|(a, s)| (a.name(), format_sequence(s)));
         entries
     }
 }
 
-fn insert(map: &mut HashMap<Action, KeySequence>, action: Action, seq: KeySequence) {
-    map.insert(action, seq);
+fn insert(map: &mut HashMap<Action, Vec<KeySequence>>, action: Action, seq: KeySequence) {
+    map.insert(action, vec![seq]);
+}
+
+fn insert_alias(map: &mut HashMap<Action, Vec<KeySequence>>, action: Action, seq: KeySequence) {
+    map.entry(action).or_default().push(seq);
 }
 
 fn format_sequence(seq: &KeySequence) -> String {
@@ -363,7 +422,15 @@ fn format_sequence(seq: &KeySequence) -> String {
                 KeyCode::Tab => s.push_str("tab"),
                 KeyCode::BackTab => s.push_str("backtab"),
                 KeyCode::Backspace => s.push_str("backspace"),
-                other => s.push_str(&format!("{other:?}")),
+                KeyCode::Up => s.push_str("up"),
+                KeyCode::Down => s.push_str("down"),
+                KeyCode::Left => s.push_str("left"),
+                KeyCode::Right => s.push_str("right"),
+                KeyCode::Home => s.push_str("home"),
+                KeyCode::End => s.push_str("end"),
+                KeyCode::PageUp => s.push_str("pageup"),
+                KeyCode::PageDown => s.push_str("pagedown"),
+                KeyCode::F(n) => s.push_str(&format!("f{n}")),
             }
             s
         })
@@ -521,6 +588,85 @@ mod tests {
             )),
             Some(Action::Quit)
         );
+    }
+
+    #[test]
+    fn defaults_include_md_tui_aliases() {
+        let km = TuiKeymap::defaults();
+        // md-tui select-link → our link hints
+        assert_eq!(
+            km.resolve_sequence(&KeySequence::chars("s")),
+            Some(Action::LinkHintsFollow)
+        );
+        assert_eq!(
+            km.resolve_sequence(&KeySequence::chars("S")),
+            Some(Action::LinkHintsNewTab)
+        );
+        // arrows
+        assert_eq!(
+            km.resolve_sequence(&KeySequence::single(KeyCode::Down)),
+            Some(Action::ScrollDown)
+        );
+        assert_eq!(
+            km.resolve_sequence(&KeySequence::single(KeyCode::Up)),
+            Some(Action::ScrollUp)
+        );
+        assert_eq!(
+            km.resolve_sequence(&KeySequence::single(KeyCode::Left)),
+            Some(Action::HalfPageDown)
+        );
+        assert_eq!(
+            km.resolve_sequence(&KeySequence::single(KeyCode::Right)),
+            Some(Action::HalfPageUp)
+        );
+        // md-tui back → history back (H remains primary)
+        assert_eq!(
+            km.resolve_sequence(&KeySequence::chars("b")),
+            Some(Action::HistoryBack)
+        );
+        assert_eq!(
+            km.resolve_sequence(&KeySequence::chars("H")),
+            Some(Action::HistoryBack)
+        );
+        // browser-first keys not stolen
+        assert_eq!(
+            km.resolve_sequence(&KeySequence::chars("f")),
+            Some(Action::LinkHintsFollow)
+        );
+        assert_eq!(
+            km.resolve_sequence(&KeySequence::chars("h")),
+            Some(Action::ScrollLeft)
+        );
+        assert_eq!(
+            km.resolve_sequence(&KeySequence::chars("t")),
+            Some(Action::NewTab)
+        );
+        assert_eq!(
+            km.resolve_sequence(&KeySequence::chars("q")),
+            Some(Action::PrevTab)
+        );
+        // zs multi-key still works alongside single-s alias
+        assert_eq!(
+            km.resolve_sequence(&KeySequence::chars("zs")),
+            Some(Action::ToggleStructure)
+        );
+        assert_eq!(km.bindings_for(Action::LinkHintsFollow).len(), 2);
+    }
+
+    #[test]
+    fn overlay_replaces_action_and_clears_aliases() {
+        let km = TuiKeymap::defaults();
+        let mut overrides = HashMap::new();
+        overrides.insert("link_hints_follow".into(), "e".into());
+        let km = km.overlay_from_map(&overrides).expect("overlay");
+        assert_eq!(
+            km.resolve_sequence(&KeySequence::chars("e")),
+            Some(Action::LinkHintsFollow)
+        );
+        // Primary and md-tui alias both removed when rebinding.
+        assert_eq!(km.resolve_sequence(&KeySequence::chars("f")), None);
+        assert_eq!(km.resolve_sequence(&KeySequence::chars("s")), None);
+        assert_eq!(km.bindings_for(Action::LinkHintsFollow).len(), 1);
     }
 
     #[test]

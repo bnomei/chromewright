@@ -16,6 +16,7 @@
 
 ### Changed
 
+- Align TUI muscle memory with [md-tui](https://github.com/henriklovhaug/md-tui) where safe: `s`/`S` link hints (aliases of `f`/`F`), arrow keys for selection and half-page pan, `b` history back; keep browser-first `f`/`h`/`l`/`t`/`o`/`q`. Keymap actions may bind multiple sequences; TOML overlay still replaces the whole action.
 - Drop the redundant `tui_query` companion alias; use `tui_render` for semantic markdown.
 - Make the TUI inspect panel a compact CSS-selector-first developer view (identity, action fields, ref/rev) without Debug/`None` noise.
 - Show the full DOM path (`main > form#x > input#y`) as the TUI inspect panel title instead of a static `inspect` label.

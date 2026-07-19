@@ -195,31 +195,33 @@ Keyboard bindings are not shown in the terminal chrome. Defaults are Vimari-comp
 
 ### Default keymap
 
+Browser-first (Vimari) defaults, with [md-tui](https://github.com/henriklovhaug/md-tui)-style aliases where they do not collide. Overlaying an action replaces **all** of its sequences (primary + aliases).
+
 | Key | Action name | Behavior |
 | --- | --- | --- |
-| `f` | `link_hints_follow` | Enter link-hint mode; follow the chosen link in the current tab, then return to Normal. |
-| `F` | `link_hints_new_tab` | Enter link-hint mode; open the chosen link in a new tab (hint mode stays open for chaining until Esc). |
-| `j` | `scroll_down` | Scroll or move selection down one block. |
-| `k` | `scroll_up` | Scroll or move selection up one block. |
-| `h` | `scroll_left` | Horizontal scroll left when content overflows. |
+| `f` / `s` | `link_hints_follow` | Enter link-hint mode; follow the chosen link in the current tab, then return to Normal. (`s` = md-tui select-link.) |
+| `F` / `S` | `link_hints_new_tab` | Enter link-hint mode; open the chosen link in a new tab (hint mode stays open for chaining until Esc). (`S` = md-tui select-link alt.) |
+| `j` / `↓` | `scroll_down` | Scroll or move selection down one block. |
+| `k` / `↑` | `scroll_up` | Scroll or move selection up one block. |
+| `h` | `scroll_left` | Horizontal scroll left when content overflows. (Not md-tui half-page; browser tables/code need pan.) |
 | `l` | `scroll_right` | Horizontal scroll right when content overflows. |
-| `u` | `half_page_up` | Pan the view half a page up (selection unchanged). |
-| `d` | `half_page_down` | Pan the view half a page down (selection unchanged). |
+| `u` / `→` | `half_page_up` | Pan the view half a page up (selection unchanged). |
+| `d` / `←` | `half_page_down` | Pan the view half a page down (selection unchanged). |
 | `Ctrl-u` | `page_select_up` | Move selection up by about half a page. |
 | `Ctrl-d` | `page_select_down` | Move selection down by about half a page. |
-| `gg` | `go_top` | Jump to the document top. |
+| `gg` | `go_top` | Jump to the document top. (Single `g` is not bound so `gi` stays available.) |
 | `G` | `go_bottom` | Jump to the document bottom. |
 | `gi` | `focus_first_input` | Focus the first form control and start editing. |
-| `H` | `history_back` | Browser history back. |
+| `H` / `b` | `history_back` | Browser history back. (`b` = md-tui back.) |
 | `L` | `history_forward` | Browser history forward. |
 | `r` | `reload` | Reload the active page. |
 | `w` | `next_tab` | Switch to the next tab. |
-| `q` | `prev_tab` | Switch to the previous tab. |
+| `q` | `prev_tab` | Switch to the previous tab. (Not quit; use `Ctrl-c`.) |
 | `x` | `close_tab` | Close the current tab. |
 | `t` | `new_tab` | Open a new tab. |
 | `o` | `open_url` | Open the URL entry prompt with an empty buffer. |
 | `O` | `edit_url` | Open the URL entry prompt prefilled with the current address (edit from the end). |
-| `/` | `search` | Start forward search by exact semantic content. |
+| `/` | `search` | Start forward search by exact semantic content. (md-tui also binds `f` to search; we keep `f` for link hints.) |
 | `n` | `search_next` | Repeat the last search forward. |
 | `N` | `search_previous` | Repeat the last search backward. |
 | `Space` | `collapse` | Collapse or expand the selected block. |

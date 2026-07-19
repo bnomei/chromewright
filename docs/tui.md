@@ -37,17 +37,19 @@ Chromewright neither restarts nor terminates that external browser. Do not use
 private to the managed session.
 
 Keyboard bindings are deliberately not shown in the terminal. Navigation defaults follow
-Vimari: `f`/`F` link hints (footer cmdline while active), `j`/`k`/`h`/`l` scrolling, `u`/`d` half pages,
-`gg`/`G` document ends, `gi` first form field (edit mode), `H`/`L` history, `r` reload,
-`w`/`q`/`x`/`t` tab actions, `o` URL entry, `/` forward search, `n` next
-match, `N` previous match, Space collapse (structure mode only), `zw` toggle soft
-word-wrap (off by default), `zs` toggle prose vs structure projection (prose by
-default; Vim-style `z`-prefix view commands), `i`
+Vimari plus non-conflicting [md-tui](https://github.com/henriklovhaug/md-tui) aliases:
+`f`/`F` (and `s`/`S`) link hints (footer cmdline while active), `j`/`k` or arrows for
+selection, `h`/`l` horizontal pan, `u`/`d` or left/right arrows half-page view pan,
+`Ctrl-u`/`Ctrl-d` selection by half page, `gg`/`G` document ends, `gi` first form field
+(edit mode), `H`/`b`/`L` history, `r` reload, `w`/`q`/`x`/`t` tab actions, `o`/`O` URL
+entry, `/` forward search, `n` next match, `N` previous match, Space collapse
+(structure mode only), `zw` toggle soft word-wrap (off by default), `zs` toggle prose
+vs structure projection (prose by default; Vim-style `z`-prefix view commands), `i`
 inspection, `y` copy (link/image URL or block text), `Y` semantic-ref copy, Tab/Shift-Tab
 focus (form fields stash typed values on Tab or Enter), Enter on a text field
 only commits the value (does not send the form), Escape cancel (and dismiss a
 failed page-action Error back to Ready while retaining the last good page), and
-Ctrl-C quit.
+Ctrl-C quit. See the README default keymap table for the full action map.
 
 Form controls render inline in the content pane. Text inputs show
 `[input name: value]` (live staged/`IN` buffer with a `█` cursor while editing).

@@ -14,21 +14,21 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Action {
-    /// `f` — enter link-hint mode; follow in current tab.
+    /// `f` / `s` — enter link-hint mode; follow in current tab.
     LinkHintsFollow,
-    /// `F` — enter link-hint mode; open target in a new tab.
+    /// `F` / `S` — enter link-hint mode; open target in a new tab.
     LinkHintsNewTab,
-    /// `j` — scroll / move selection down one block.
+    /// `j` / `↓` — scroll / move selection down one block.
     ScrollDown,
-    /// `k` — scroll / move selection up one block.
+    /// `k` / `↑` — scroll / move selection up one block.
     ScrollUp,
     /// `h` — horizontal scroll left when content overflows.
     ScrollLeft,
     /// `l` — horizontal scroll right when content overflows.
     ScrollRight,
-    /// `u` — half-page view pan up (selection unchanged).
+    /// `u` / `→` — half-page view pan up (selection unchanged).
     HalfPageUp,
-    /// `d` — half-page view pan down (selection unchanged).
+    /// `d` / `←` — half-page view pan down (selection unchanged).
     HalfPageDown,
     /// `Ctrl-u` — move selection up by about half a page.
     PageSelectUp,
@@ -40,7 +40,7 @@ pub enum Action {
     GoBottom,
     /// `gi` — focus first focusable form control.
     FocusFirstInput,
-    /// `H` — browser history back.
+    /// `H` / `b` — browser history back.
     HistoryBack,
     /// `L` — browser history forward.
     HistoryForward,
