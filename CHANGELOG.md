@@ -16,7 +16,7 @@
 
 ### Changed
 
-- TUI content theme uses a clearer ANSI-16 role ladder (H1–H6, blue links, light-cyan forms, yellow hints) inspired by md-tui’s role idea, not a 1:1 color match; optional `[theme]` keys in `tui.toml` override individual roles.
+- TUI content theme uses a clearer ANSI-16 role ladder (H1–H6, blue links, light-cyan forms, yellow hints, muted gray images) inspired by md-tui’s role idea, not a 1:1 color match; optional `[theme]` keys in `tui.toml` override individual roles.
 - TUI `f`/`F` hints cover form controls as well as links (text inputs open edit mode); multi-line/wrapped targets show a single label on the first row only.
 - Color form controls light cyan so they stay distinct from yellow `f`/`F` hint labels.
 - Default TUI soft word-wrap to on (`zw` still toggles; off disables wrap and restores horizontal pan).

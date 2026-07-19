@@ -143,7 +143,8 @@ impl ThemePalette {
         colors.insert(ThemeRole::Landmark, Color::Green);
         colors.insert(ThemeRole::Group, Color::DarkGray);
         colors.insert(ThemeRole::List, Color::DarkGray);
-        colors.insert(ThemeRole::Image, Color::Magenta);
+        // Images are low-priority chrome in the semantic view — keep them muted.
+        colors.insert(ThemeRole::Image, Color::DarkGray);
         // Browser-only roles stay distinct from each other.
         colors.insert(ThemeRole::FormControl, Color::LightCyan);
         colors.insert(ThemeRole::HintLabel, Color::Yellow);
@@ -267,7 +268,8 @@ impl TuiTheme {
 
     pub fn attention_overlay(&self) -> Style {
         // Background fill is the readable cue: fg-only was invisible on
-        // colored headings. Selection still wins via reverse when both apply.
+        // colored headings (and image lines are muted gray). Selection still
+        // wins via reverse when both apply.
         let mut style = Style::default().add_modifier(Modifier::BOLD);
         if let Some(fg) = self.palette.get(ThemeRole::AttentionFg) {
             style = style.fg(fg);
