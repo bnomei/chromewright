@@ -71,10 +71,11 @@ expands collapsed ancestors, and scrolls the target into view. Empty `#` and
 unmatched `#top` jump to the document top. Missing targets keep the prior
 selection and set status `fragment target not represented`.
 
-Content uses a terminal-native color theme (ANSI-16): headings, links,
-landmarks, and form controls are colored; selection is reverse+bold applied
-last so it stays visible over kind colors. Soft wrap (`zw`) is independent of
-theme.
+Content uses a terminal-native ANSI-16 role palette: H1 light-blue, H2 green,
+H3 magenta, H4 cyan, H5 yellow, H6 light-red; links blue; forms light-cyan;
+hints yellow. Optional `[theme]` keys in `tui.toml` override roles (ANSI names,
+`reset`, or `#rrggbb`). Selection is reverse+bold applied last. Soft wrap
+(`zw`) is independent of theme.
 
 **Prose vs structure** (`zs`): prose (default) hides landmark/list/group header
 rows and uses fully flat indent so the pane reads closer to markdown. Structure
@@ -100,10 +101,15 @@ built-ins; an explicitly requested file must parse successfully.
 reload = "ctrl-r"
 quit = "ctrl-q"
 tab_prev = "shift-tab"
+
+[theme]
+# h2 = "yellow"
+# form_control = "lightcyan"
 ```
 
-Only the listed actions are replaced. Invalid or conflicting bindings prevent
-startup rather than silently changing terminal behavior.
+Only the listed keymap actions and theme roles are replaced. Invalid or
+conflicting entries prevent startup rather than silently changing terminal
+behavior.
 
 The TUI is part of the default binary but remains isolated behind the `tui`
 Cargo feature. A server-only build can omit terminal code and dependencies with

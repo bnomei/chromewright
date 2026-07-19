@@ -1,17 +1,20 @@
-//! TOML keymap configuration: explicit `--config` path or XDG default.
+//! TOML configuration: keymap + theme overlays.
 //!
-//! Loads an Action-name overlay onto Vimari defaults. Explicit paths must exist
-//! and parse; a missing XDG default file is valid and keeps built-in bindings.
+//! Loads Action-name keymap bindings and optional `[theme]` color roles onto
+//! built-in defaults. Explicit paths must exist and parse; a missing XDG
+//! default file is valid and keeps built-ins.
 
 use crate::tui::keymap::{KeymapError, TuiKeymap};
+use crate::tui::theme::{ThemeError, ThemePalette, TuiTheme};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Loaded TUI configuration (keymap overlay only for Phase 4).
+/// Loaded TUI configuration (keymap + theme overlays).
 #[derive(Debug, Clone)]
 pub struct TuiConfig {
     pub keymap: TuiKeymap,
+    pub theme: TuiTheme,
     /// Path that was loaded, if any file was read.
     pub loaded_from: Option<PathBuf>,
 }
@@ -21,6 +24,7 @@ impl TuiConfig {
     pub fn defaults() -> Self {
         Self {
             keymap: TuiKeymap::defaults(),
+            theme: TuiTheme::new(),
             loaded_from: None,
         }
     }
@@ -70,16 +74,25 @@ fn load_from_path(path: &Path, required: bool) -> Result<TuiConfig, ConfigError>
         message: err.to_string(),
     })?;
 
-    let overrides = file.keymap.unwrap_or_default();
+    let keymap_overrides = file.keymap.unwrap_or_default();
     let keymap = TuiKeymap::defaults()
-        .overlay_from_map(&overrides)
+        .overlay_from_map(&keymap_overrides)
         .map_err(|err| ConfigError::Keymap {
+            path: path.to_path_buf(),
+            message: err.to_string(),
+        })?;
+
+    let theme_overrides = file.theme.unwrap_or_default();
+    let palette = ThemePalette::defaults()
+        .overlay_from_map(&theme_overrides)
+        .map_err(|err| ConfigError::Theme {
             path: path.to_path_buf(),
             message: err.to_string(),
         })?;
 
     Ok(TuiConfig {
         keymap,
+        theme: TuiTheme::with_palette(palette),
         loaded_from: Some(path.to_path_buf()),
     })
 }
@@ -88,6 +101,8 @@ fn load_from_path(path: &Path, required: bool) -> Result<TuiConfig, ConfigError>
 struct ConfigFile {
     #[serde(default)]
     keymap: Option<HashMap<String, String>>,
+    #[serde(default)]
+    theme: Option<HashMap<String, String>>,
 }
 
 /// Configuration load failures.
@@ -96,6 +111,7 @@ pub enum ConfigError {
     Io { path: PathBuf, message: String },
     Parse { path: PathBuf, message: String },
     Keymap { path: PathBuf, message: String },
+    Theme { path: PathBuf, message: String },
 }
 
 impl std::fmt::Display for ConfigError {
@@ -109,6 +125,9 @@ impl std::fmt::Display for ConfigError {
             }
             Self::Keymap { path, message } => {
                 write!(f, "invalid keymap in config {}: {message}", path.display())
+            }
+            Self::Theme { path, message } => {
+                write!(f, "invalid theme in config {}: {message}", path.display())
             }
         }
     }
@@ -125,15 +144,38 @@ impl From<KeymapError> for ConfigError {
     }
 }
 
+impl From<ThemeError> for ConfigError {
+    fn from(err: ThemeError) -> Self {
+        Self::Theme {
+            path: PathBuf::from("<memory>"),
+            message: err.to_string(),
+        }
+    }
+}
+
 /// Example config content for documentation / discovery (not rendered in the TUI).
 pub fn example_config_toml() -> &'static str {
-    r#"# chromewright tui keymap overlay
-# Only list actions you want to rebind. Unknown actions abort startup.
+    r#"# chromewright tui config
+# Only list keys you want to change. Unknown names abort startup.
 
 [keymap]
 # reload = "R"
 # open_url = "O"
 # quit = "ctrl-q"
+
+# Optional color roles (ANSI names, reset, or #rrggbb). Defaults already
+# use a clear heading ladder within the terminal 16-color palette.
+[theme]
+# link = "blue"
+# h1 = "lightblue"
+# h2 = "green"
+# h3 = "magenta"
+# h4 = "cyan"
+# h5 = "yellow"
+# h6 = "lightred"
+# form_control = "lightcyan"
+# hint_label = "yellow"
+# attention_bg = "magenta"
 "#
 }
 
@@ -142,12 +184,11 @@ mod tests {
     use super::*;
     use crate::tui::action::Action;
     use crate::tui::keymap::KeySequence;
+    use ratatui::style::Color;
     use std::io::Write;
 
     #[test]
     fn missing_default_uses_defaults() {
-        // Explicit None path with no forced file: always defaults when default path absent
-        // We call load with a guaranteed-missing explicit path as non-required via load_from_path.
         let path = PathBuf::from("/tmp/chromewright-tui-config-does-not-exist-xyz.toml");
         let cfg = load_from_path(&path, false).expect("missing optional");
         assert!(cfg.loaded_from.is_none());
@@ -180,6 +221,39 @@ mod tests {
             Some(Action::Reload)
         );
         assert_eq!(cfg.keymap.resolve_sequence(&KeySequence::chars("r")), None);
+    }
+
+    #[test]
+    fn theme_overlay_from_toml() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("tui.toml");
+        fs::write(
+            &path,
+            "[theme]\nh2 = \"yellow\"\nlink = \"lightblue\"\n",
+        )
+        .expect("write");
+        let cfg = load_tui_config(Some(&path)).expect("load");
+        assert_eq!(
+            cfg.theme
+                .content_style(Some(crate::semantic::SemanticKind::Heading), Some(2))
+                .fg,
+            Some(Color::Yellow)
+        );
+        assert_eq!(
+            cfg.theme
+                .content_style(Some(crate::semantic::SemanticKind::Link), None)
+                .fg,
+            Some(Color::LightBlue)
+        );
+    }
+
+    #[test]
+    fn unknown_theme_role_fails_startup() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("tui.toml");
+        fs::write(&path, "[theme]\nnot_a_role = \"blue\"\n").expect("write");
+        let err = load_tui_config(Some(&path)).expect_err("theme");
+        assert!(matches!(err, ConfigError::Theme { .. }));
     }
 
     #[test]

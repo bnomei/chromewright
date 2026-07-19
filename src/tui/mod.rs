@@ -29,6 +29,7 @@ mod theme;
 pub use action::Action;
 pub use app::{TuiOptions, run_tui, run_tui_with_config};
 pub use config::{TuiConfig, default_config_path, example_config_toml, load_tui_config};
+pub use theme::{ThemePalette, ThemeRole, TuiTheme};
 pub use controller::Controller;
 pub use driver::{FakePageDriver, PageDriver, SessionPageDriver};
 pub use keymap::{KeyChord, KeyCode, KeyModifiers, KeySequence, TuiKeymap};

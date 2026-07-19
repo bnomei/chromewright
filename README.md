@@ -172,7 +172,7 @@ chromewright --headless --user-data-dir /tmp/chromewright-profile serve
 | `--user-data-dir <DIR>` | backend default | Uses a persistent browser profile directory in launch mode. |
 | `--debug-port <PORT>` | auto-selected | Uses a specific DevTools port for a locally launched browser. |
 | `chromewright tui` | (feature `tui`, default-on) | Starts the semantic terminal browser against the same browser session. Always co-hosts a loopback MCP companion. |
-| `tui --config <PATH>` | `$XDG_CONFIG_HOME/chromewright/tui.toml` or `~/.config/chromewright/tui.toml` | TOML keymap overlay. An explicit path must exist and parse; a missing default file keeps built-in bindings. |
+| `tui --config <PATH>` | `$XDG_CONFIG_HOME/chromewright/tui.toml` or `~/.config/chromewright/tui.toml` | TOML keymap and optional `[theme]` color overlay. An explicit path must exist and parse; a missing default file keeps built-in bindings. |
 | `tui --companion-port <PORT>` | `0` (ephemeral) | Loopback port for the co-hosted streamable-HTTP MCP companion. |
 | `tui --companion-path <PATH>` | `/mcp` | HTTP path for the co-hosted companion. |
 | `--browser-session <reuse\|restart>` | `reuse` with `--headless tui` | Reuse or replace Chromewright's owned managed headless browser. Only valid with `--headless tui`. |
@@ -240,7 +240,7 @@ Hints use deterministic two-key labels from the alphabet `asdfgqwertzxcvb` (for 
 
 After navigation or a link follow settles, a URL fragment such as `#section` moves the TUI selection to the matching component (`id`, then named anchor), expands collapsed ancestors, and scrolls it into view. Unmatched fragments keep the prior selection.
 
-The content pane uses a terminal-native ANSI color theme (headings, links, landmarks, controls) with reverse-video selection applied last. Colors inherit the terminal light/dark theme.
+The content pane uses a terminal-native ANSI-16 role palette (clearer heading ladder H1–H6, blue links, light-cyan forms, yellow hints) with reverse-video selection applied last. Colors inherit the terminal light/dark theme; override individual roles under `[theme]` in `tui.toml`.
 
 Default reading mode is **prose** (markdown-like): no `▾ [main]` / `ol` / group chrome, fully flat lines. Press `zs` for **structure** (DOM-like outline). Wrap (`zw`) and structure (`zs`) are not shown in the header bar; toggle feedback appears in the status line.
 
@@ -251,15 +251,29 @@ Search follows Vim semantics: a new `/pattern` starts after the current selectio
 Bindings are replaceable by action name. `--config PATH` takes precedence; if omitted, Chromewright reads `$XDG_CONFIG_HOME/chromewright/tui.toml`, falling back to `~/.config/chromewright/tui.toml`. A missing default file keeps the built-ins; an explicitly requested file must parse successfully.
 
 ```toml
-# Only list actions you want to rebind. Unknown actions or conflicting
-# sequences abort startup rather than partially applying the overlay.
+# Only list keys you want to change. Unknown names or conflicting
+# bindings abort startup rather than partially applying the overlay.
 [keymap]
 reload = "ctrl-r"
 quit = "ctrl-q"
 tab_prev = "shift-tab"
+
+[theme]
+# Optional ANSI names, reset, or #rrggbb — defaults already use a clear ladder.
+# link = "blue"
+# h1 = "lightblue"
+# h2 = "green"
+# h3 = "magenta"
+# h4 = "cyan"
+# h5 = "yellow"
+# h6 = "lightred"
+# form_control = "lightcyan"
+# hint_label = "yellow"
 ```
 
 Binding specs accept single keys (`r`, `space`, `esc`, `enter`, `tab`), multi-key letter sequences (`gg`, `gi`), and chords with `-`, `+`, or space separators (`ctrl-c`, `C-c`, `shift-tab`). Supported named keys include `esc`, `enter`, `tab`, `backtab` / `shift-tab`, `backspace`, arrow keys, `home`, `end`, `pageup` / `pgup`, `pagedown` / `pgdn`, `space`, and function keys such as `f1`.
+
+Theme roles: `link`, `h1`–`h6`, `landmark`, `group`, `list`, `image`, `form_control`, `hint_label`, `muted`, `chrome_ready`, `chrome_loading`, `chrome_error`, `chrome_mode`, `attention_fg`, `attention_bg`.
 
 More detail on managed headless sessions, logging, and the co-hosted `tui_*` companion lives in [docs/tui.md](docs/tui.md). Source of truth for defaults: [src/tui/keymap.rs](src/tui/keymap.rs) and [src/tui/action.rs](src/tui/action.rs).
 

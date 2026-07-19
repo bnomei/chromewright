@@ -13,9 +13,14 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
-/// Draw one frame of the terminal browser.
+/// Draw one frame of the terminal browser using built-in theme defaults.
+#[allow(dead_code)] // Convenience for callers/tests that do not load a config theme.
 pub fn draw(frame: &mut Frame, controller: &Controller) {
-    let theme = TuiTheme::new();
+    draw_with_theme(frame, controller, &TuiTheme::new());
+}
+
+/// Draw one frame with an explicit theme (from `tui.toml` `[theme]` overlay).
+pub fn draw_with_theme(frame: &mut Frame, controller: &Controller, theme: &TuiTheme) {
     let area = frame.area();
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -26,9 +31,9 @@ pub fn draw(frame: &mut Frame, controller: &Controller) {
         ])
         .split(area);
 
-    draw_chrome(frame, chunks[0], controller, &theme);
-    draw_content(frame, chunks[1], controller, &theme);
-    draw_status(frame, chunks[2], controller, &theme);
+    draw_chrome(frame, chunks[0], controller, theme);
+    draw_content(frame, chunks[1], controller, theme);
+    draw_status(frame, chunks[2], controller, theme);
 
     if let Some(inspect) = &controller.state.view.inspect_text {
         let title = controller
@@ -37,7 +42,7 @@ pub fn draw(frame: &mut Frame, controller: &Controller) {
             .inspect_title
             .as_deref()
             .unwrap_or("");
-        draw_inspect_under_selection(frame, chunks[1], controller, inspect, title, &theme);
+        draw_inspect_under_selection(frame, chunks[1], controller, inspect, title, theme);
     }
 }
 

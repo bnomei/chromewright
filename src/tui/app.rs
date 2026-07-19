@@ -265,6 +265,7 @@ fn run_loop(
 ) -> Result<(), String> {
     let mut controller = Controller::with_shared(shared);
     let mut dispatcher = Dispatcher::new(config.keymap);
+    let theme = config.theme;
     let mut driver = SessionPageDriver::new(session);
 
     // Bootstrap follows the same draw-before-browser-work lifecycle as every
@@ -279,7 +280,7 @@ fn run_loop(
         controller.set_viewport(size.width as usize, content_h.max(1));
 
         terminal
-            .draw(|frame| render::draw(frame, &controller))
+            .draw(|frame| render::draw_with_theme(frame, &controller, &theme))
             .map_err(|e| e.to_string())?;
 
         // `Terminal::draw` succeeded while lifecycle is Loading, so browser
