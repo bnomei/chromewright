@@ -123,7 +123,7 @@ fn smoke_tui_operates_idless_semantic_controls_and_rejects_stale_refs() {
         .semantic_ref
         .clone();
     driver
-        .fill_control(&document, &input_ref, "user@example.com")
+        .set_control_value(&document, &input_ref, "user@example.com")
         .expect("fill id-less input");
     assert_eq!(
         common::evaluate(session, "document.querySelector('input').value")
@@ -140,7 +140,7 @@ fn smoke_tui_operates_idless_semantic_controls_and_rejects_stale_refs() {
         .semantic_ref
         .clone();
     driver
-        .fill_control(&document, &select_ref, "pro")
+        .set_control_value(&document, &select_ref, "pro")
         .expect("select id-less option");
     assert_eq!(
         common::evaluate(session, "document.querySelector('select').value")
@@ -323,9 +323,21 @@ fn smoke_tui_controller_publishes_loading_then_atomic_ready_on_reload() {
         .expect("form input")
         .semantic_ref
         .clone();
+    let submit_ref = controller
+        .state
+        .document()
+        .expect("published semantic document")
+        .components()
+        .find(|component| component.kind == chromewright::SemanticKind::Button)
+        .expect("submit button")
+        .semantic_ref
+        .clone();
+    // Stage field value, then send only via the submit button.
+    controller.commit_form_field(&input_ref, "submitted through controller");
+    controller.state.view.selection = Some(submit_ref);
     controller
-        .submit_form_input(&input_ref, "submitted through controller")
-        .expect("queue form submission");
+        .activate_selection()
+        .expect("queue submit via button");
     assert!(matches!(
         controller.state.lifecycle,
         Lifecycle::Loading { .. }

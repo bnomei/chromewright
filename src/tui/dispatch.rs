@@ -196,7 +196,9 @@ impl Dispatcher {
                 semantic_ref,
                 buffer,
             }) => {
-                let _ = controller.submit_form_input(&semantic_ref, &buffer);
+                // Enter in a text field only commits the value; form send is
+                // exclusively via Enter on a submit button.
+                controller.commit_form_field(&semantic_ref, &buffer);
                 DispatchOutcome::Redraw
             }
             _ => DispatchOutcome::Continue,
@@ -367,9 +369,10 @@ impl Dispatcher {
                 DispatchOutcome::Redraw
             }
             Action::Confirm => {
-                // Text input/textarea: edit mode.
-                // Select: cycle options locally then activate writes on submit.
-                // Checkbox/radio/button/link: click/activate (+ recapture).
+                // Text input/textarea: start edit mode.
+                // Select: cycle options (staged until submit button).
+                // Checkbox/radio: toggle. Submit button: flush staged + click.
+                // Link/other button: activate. No form submit from text fields.
                 if !controller.edit_selection_if_form() {
                     if controller.cycle_select_if_selected() {
                         // local only

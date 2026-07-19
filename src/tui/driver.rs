@@ -54,15 +54,6 @@ pub trait PageDriver {
         semantic_ref: &SemanticRef,
         text: &str,
     ) -> Result<()>;
-    /// Write text and submit the owning form (or activate a button).
-    ///
-    /// Returns whether the action is expected to change the page.
-    fn fill_control(
-        &mut self,
-        document: &SemanticDocument,
-        semantic_ref: &SemanticRef,
-        text: &str,
-    ) -> Result<bool>;
     /// Availability belongs to the active browser tab. Implementations that
     /// cannot determine it must return `(false, false)` rather than inventing
     /// local history.
@@ -232,36 +223,6 @@ impl PageDriver for SessionPageDriver<'_> {
             SemanticKind::Select => select_value(self.session, document, component, text),
             _ => Err(BrowserError::InvalidArgument(
                 "component is not a settable control".into(),
-            )),
-        }
-    }
-
-    fn fill_control(
-        &mut self,
-        document: &SemanticDocument,
-        semantic_ref: &SemanticRef,
-        text: &str,
-    ) -> Result<bool> {
-        let component = document
-            .resolve(semantic_ref)
-            .map_err(|e| BrowserError::InvalidArgument(e.to_string()))?;
-        match component.kind {
-            SemanticKind::Input | SemanticKind::Textarea => {
-                set_value_and_submit(self.session, document, component, text)?;
-                // Enter may submit; treat as potentially page-changing when type is submit
-                // or form has default submit — controller always recaptures after fill confirm.
-                Ok(true)
-            }
-            SemanticKind::Select => {
-                select_value(self.session, document, component, text)?;
-                Ok(true)
-            }
-            SemanticKind::Button => {
-                click_component(self.session, document, component, false)?;
-                Ok(true)
-            }
-            _ => Err(BrowserError::InvalidArgument(
-                "component is not a fillable control".into(),
             )),
         }
     }
@@ -445,32 +406,6 @@ fn set_value_only(
         }})()"#,
         prelude = prelude,
         text = js_string(text)
-    );
-    ensure_target_result(session.evaluate(&script, false)?)
-}
-
-fn set_value_and_submit(
-    session: &BrowserSession,
-    document: &SemanticDocument,
-    component: &crate::semantic::SemanticComponent,
-    text: &str,
-) -> Result<()> {
-    // Write first (same path as tab-away), then submit the owning form so multi-
-    // field pending values already in the DOM are included.
-    set_value_only(session, document, component, text)?;
-    let prelude = exact_target_prelude(document, component)?;
-    let script = format!(
-        r#"(function(){{
-            {prelude}
-            if (el.form) {{
-                if (typeof el.form.requestSubmit === 'function') el.form.requestSubmit();
-                else el.form.submit();
-            }} else if (el.type === 'submit' || el.tagName === 'BUTTON') {{
-                el.click();
-            }}
-            return 'ok';
-        }})()"#,
-        prelude = prelude,
     );
     ensure_target_result(session.evaluate(&script, false)?)
 }
@@ -770,16 +705,6 @@ impl PageDriver for FakePageDriver {
         self.filled
             .push((semantic_ref.as_str().to_string(), text.to_string()));
         Ok(())
-    }
-
-    fn fill_control(
-        &mut self,
-        document: &SemanticDocument,
-        semantic_ref: &SemanticRef,
-        text: &str,
-    ) -> Result<bool> {
-        self.set_control_value(document, semantic_ref, text)?;
-        Ok(true)
     }
 
     fn history_availability(&mut self) -> Result<(bool, bool)> {

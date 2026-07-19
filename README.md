@@ -230,7 +230,7 @@ Keyboard bindings are not shown in the terminal chrome. Defaults are Vimari-comp
 | `Y` | `copy_ref` | Copy the opaque `semantic_ref` (OSC 52). |
 | `Tab` | `tab_next` | Next focusable control; stashes the current form field value (multi-field). |
 | `Shift-Tab` | `tab_prev` | Previous focusable control; stashes the current form field value. |
-| `Enter` | `confirm` | Text input: start editing (inline value + `IN …`). While editing: submit (all staged fields). Checkbox/radio: toggle. Select: cycle options. Button/link: activate. |
+| `Enter` | `confirm` | Text input: start/finish editing (stages value; does not send). Checkbox/radio: toggle. Select: cycle options. **Submit button only**: write staged fields + click + recapture. Link/other: activate. |
 | `Esc` | `escape` | Leave prompt, hint, or inspect mode. After a failed page action, dismiss Error back to Ready (retained page stays) so keys work again. |
 | `Ctrl-c` | `quit` | Quit the TUI. |
 

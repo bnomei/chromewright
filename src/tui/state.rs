@@ -155,7 +155,7 @@ pub struct ViewState {
     /// Values typed into form controls this capture, not yet written/submitted.
     ///
     /// Tabbing away from a field stashes here so multi-field forms can be filled
-    /// like Chrome before Enter submits (writes all + requestSubmit + recapture).
+    /// like Chrome before Enter on a submit button sends the form.
     pub pending_form_values: HashMap<SemanticRef, String>,
 }
 

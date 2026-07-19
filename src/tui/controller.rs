@@ -60,12 +60,12 @@ enum PageOperation {
         semantic_ref: SemanticRef,
         new_tab: bool,
     },
-    /// Write every staged field value into the live DOM, then submit from `semantic_ref`.
+    /// Write every staged field value into the live DOM, then click the submit control.
     SubmitForm {
         document: SemanticDocument,
-        /// Control that receives Enter (value is also in `values` under this ref).
+        /// Submit button / `input type=submit` that is clicked after fields are written.
         semantic_ref: SemanticRef,
-        /// All field values to apply before submit (includes the active field).
+        /// All staged field values to apply before the click.
         values: Vec<(SemanticRef, String)>,
     },
     Activate {
@@ -211,26 +211,32 @@ impl Controller {
             .insert(semantic_ref.clone(), text.to_string());
     }
 
-    /// Queue form submission: write all staged field values, submit, recapture.
+    /// Commit the active text-field buffer into staged values and leave edit mode.
     ///
-    /// `text` is the active field buffer (overrides any older staged value for
-    /// that ref). After a successful capture, staged values are cleared.
-    pub fn submit_form_input(
-        &mut self,
-        semantic_ref: &SemanticRef,
-        text: &str,
-    ) -> Result<(), String> {
+    /// Does **not** submit the form. Submission is only via Enter on a submit
+    /// control ([`Self::activate_selection`] when the selection is a submit).
+    pub fn commit_form_field(&mut self, semantic_ref: &SemanticRef, text: &str) {
+        self.stash_form_field(semantic_ref, text);
+        self.state.mode = InteractionMode::Normal;
+        self.state.view.set_status("field saved (Enter on submit to send)");
+    }
+
+    /// Queue form submission: write all staged field values, click submit, recapture.
+    ///
+    /// `submit_ref` must be a submit button / `input type=submit`. Forms without
+    /// an explicit submit control are not supported.
+    pub fn submit_form_via_button(&mut self, submit_ref: &SemanticRef) -> Result<(), String> {
         let document = self
             .state
             .document()
             .cloned()
             .ok_or_else(|| "no document".to_string())?;
-        document.resolve(semantic_ref).map_err(|e| e.to_string())?;
-        // Active field wins over any earlier stash for the same ref.
-        self.state
-            .view
-            .pending_form_values
-            .insert(semantic_ref.clone(), text.to_string());
+        let component = document
+            .resolve(submit_ref)
+            .map_err(|e| e.to_string())?;
+        if !is_submit_control(component) {
+            return Err("form submit requires a submit button".into());
+        }
         let values: Vec<(SemanticRef, String)> = self
             .state
             .view
@@ -242,7 +248,7 @@ impl Controller {
             "form_submit",
             PageOperation::SubmitForm {
                 document,
-                semantic_ref: semantic_ref.clone(),
+                semantic_ref: submit_ref.clone(),
                 values,
             },
             None,
@@ -252,8 +258,8 @@ impl Controller {
 
     /// Queue activation of the currently selected exact focusable ref.
     ///
-    /// When staged form values exist (fields filled via Tab), they are written
-    /// into the live DOM before the click so submit buttons behave like Chrome.
+    /// Submit buttons flush staged field values then click. Other controls
+    /// activate without `requestSubmit` from text fields.
     pub fn activate_selection(&mut self) -> Result<(), String> {
         let document = self
             .state
@@ -269,6 +275,10 @@ impl Controller {
         let component = document.resolve(&semantic_ref).map_err(|e| e.to_string())?;
         if !component.is_focusable() {
             return Err("selected component is not focusable".into());
+        }
+        // Explicit submit control: write staged fields, then click the button.
+        if is_submit_control(component) {
+            return self.submit_form_via_button(&semantic_ref);
         }
         self.queue_page_action(
             "activate",
@@ -493,42 +503,21 @@ impl Controller {
                     semantic_ref,
                     values,
                 } => {
-                    // Write every staged field first (Chrome keeps multi-field
-                    // state in the live DOM before submit).
+                    // Write every staged field, then click the submit control
+                    // (never requestSubmit from a text field).
                     for (field_ref, field_text) in &values {
-                        if field_ref == &semantic_ref {
-                            continue;
-                        }
                         driver
                             .set_control_value(&document, field_ref, field_text)
                             .map_err(|e| e.to_string())?;
                     }
-                    let active_text = values
-                        .iter()
-                        .find(|(r, _)| r == &semantic_ref)
-                        .map(|(_, t)| t.as_str())
-                        .unwrap_or("");
                     let _ = driver
-                        .fill_control(&document, &semantic_ref, active_text)
+                        .activate_ref(&document, &semantic_ref, false)
                         .map_err(|e| e.to_string())?;
                 }
                 PageOperation::Activate {
                     document,
                     semantic_ref,
                 } => {
-                    // Flush staged multi-field values before clicking a control
-                    // (e.g. submit button) so the live form matches what the
-                    // operator typed while tabbing.
-                    let pending: Vec<(SemanticRef, String)> = self
-                        .state
-                        .view
-                        .pending_form_values
-                        .iter()
-                        .map(|(r, v)| (r.clone(), v.clone()))
-                        .collect();
-                    for (field_ref, field_text) in &pending {
-                        let _ = driver.set_control_value(&document, field_ref, field_text);
-                    }
                     let _ = driver
                         .activate_ref(&document, &semantic_ref, false)
                         .map_err(|e| e.to_string())?;
@@ -1353,7 +1342,7 @@ impl Controller {
     /// Cycle focusable controls (Tab / Shift-Tab); form fields enter edit mode.
     ///
     /// Leaving a form field stashes its buffer so multi-field values survive
-    /// until Enter submits (write-all + requestSubmit + recapture). Leaving a
+    /// until Enter on a submit button sends the form. Leaving a
     /// field for a non-form control clears Input mode so Enter cannot submit
     /// the previously focused input while a link or button is selected.
     pub fn tab_focus(&mut self, forward: bool) {
@@ -1537,10 +1526,37 @@ impl Controller {
     }
 }
 
+/// Explicit submit controls (form send only happens through these).
+fn is_submit_control(component: &crate::semantic::SemanticComponent) -> bool {
+    use crate::semantic::SemanticKind;
+    match component.kind {
+        SemanticKind::Button => {
+            let t = component
+                .attrs
+                .button_type
+                .as_deref()
+                .unwrap_or("submit")
+                .to_ascii_lowercase();
+            // HTML default for <button> is submit.
+            t == "submit" || t.is_empty()
+        }
+        SemanticKind::Input => {
+            let t = component
+                .attrs
+                .input_type
+                .as_deref()
+                .unwrap_or("text")
+                .to_ascii_lowercase();
+            t == "submit" || t == "image"
+        }
+        _ => false,
+    }
+}
+
 /// Text-like controls that open form-input mode.
 ///
 /// Checkboxes/radios toggle via activate; selects cycle via
-/// [`Controller::cycle_select_if_selected`]; buttons activate.
+/// [`Controller::cycle_select_if_selected`]; submit buttons activate/send.
 fn is_text_editable_control(component: &crate::semantic::SemanticComponent) -> bool {
     use crate::semantic::SemanticKind;
     match component.kind {
@@ -2768,12 +2784,39 @@ mod tests {
     }
 
     #[test]
-    fn multi_field_form_stashes_on_tab_and_submits_all_on_enter() {
+    fn multi_field_form_stashes_on_tab_and_submits_only_via_button() {
         let document = normalize_fixture(
             meta("1", "https://example.com/form"),
             vec![
                 form_input("email", "email", ""),
                 form_input("name", "name", ""),
+                RawSemanticNode {
+                    kind: "button".into(),
+                    tag: Some("button".into()),
+                    id: Some("go".into()),
+                    unique_id: true,
+                    selector: None,
+                    text: Some("Send".into()),
+                    href: None,
+                    landmark: None,
+                    heading_level: None,
+                    ordered: None,
+                    label: Some("Send".into()),
+                    src: None,
+                    alt: None,
+                    name: None,
+                    value: None,
+                    input_type: None,
+                    placeholder: None,
+                    checked: None,
+                    disabled: None,
+                    required: None,
+                    readonly: None,
+                    multiple: None,
+                    button_type: Some("submit".into()),
+                    options: vec![],
+                    children: vec![],
+                },
             ],
         )
         .expect("doc");
@@ -2789,6 +2832,12 @@ mod tests {
             .unwrap()
             .semantic_ref
             .clone();
+        let submit = document
+            .components()
+            .find(|c| c.attrs.element_id.as_deref() == Some("go"))
+            .unwrap()
+            .semantic_ref
+            .clone();
 
         let mut driver = FakePageDriver::new(vec![document.clone()]);
         let mut ctl = Controller::new();
@@ -2796,7 +2845,7 @@ mod tests {
         ctl.state.publish_page(document.clone());
         ctl.shared.publish(document);
 
-        // Start editing first field.
+        // Edit first field and Tab away — stash only.
         ctl.state.view.selection = Some(email.clone());
         ctl.begin_form_edit(email.clone());
         match &mut ctl.state.mode {
@@ -2805,37 +2854,49 @@ mod tests {
             }
             other => panic!("expected form input, got {other:?}"),
         }
-
-        // Tab to next field — stash without browser write yet.
         ctl.tab_focus(true);
         assert_eq!(
             ctl.state.view.pending_form_values.get(&email).map(String::as_str),
             Some("a@b.co")
         );
-        assert_eq!(ctl.state.view.selection.as_ref(), Some(&name));
+
+        // Enter on text field commits value, does NOT submit.
         match &mut ctl.state.mode {
-            InteractionMode::Input(InputKind::Form { buffer, semantic_ref }) => {
-                assert_eq!(semantic_ref, &name);
+            InteractionMode::Input(InputKind::Form { buffer, .. }) => {
                 *buffer = "Ada".into();
             }
             other => panic!("expected second form field, got {other:?}"),
         }
+        ctl.commit_form_field(&name, "Ada");
+        assert!(matches!(ctl.state.mode, InteractionMode::Normal));
+        assert!(!ctl.has_pending_page_action());
+        assert_eq!(
+            ctl.state.view.pending_form_values.get(&name).map(String::as_str),
+            Some("Ada")
+        );
+        assert!(driver.filled.is_empty(), "no DOM write until submit button");
 
-        // Enter submits: both values written, then form submit.
-        ctl.submit_form_input(&name, "Ada").expect("submit");
+        // Enter on submit button: write all staged + click.
+        ctl.state.view.selection = Some(submit.clone());
+        ctl.activate_selection().expect("submit");
         assert!(ctl.state.lifecycle.is_loading());
         ctl.acknowledge_loading_frame();
         ctl.perform_pending_page_action(&mut driver).expect("run");
 
         assert!(
             driver.filled.iter().any(|(r, v)| r == email.as_str() && v == "a@b.co"),
-            "email should be written before submit: {:?}",
+            "email written on submit: {:?}",
             driver.filled
         );
         assert!(
             driver.filled.iter().any(|(r, v)| r == name.as_str() && v == "Ada"),
-            "name should be written on submit: {:?}",
+            "name written on submit: {:?}",
             driver.filled
+        );
+        assert!(
+            driver.activated.iter().any(|(r, _)| r == submit.as_str()),
+            "submit button clicked: {:?}",
+            driver.activated
         );
         assert!(
             ctl.state.view.pending_form_values.is_empty(),
