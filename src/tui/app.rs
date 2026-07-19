@@ -316,9 +316,10 @@ fn run_loop(
                 let (vw, vh) =
                     layout.content_viewport_size(band_w, outer_h, controller.state.view.full_width);
                 controller.set_viewport(vw, vh);
+                let render_model = controller.render_model();
 
                 terminal
-                    .draw(|frame| render::draw_with_theme(frame, &controller, &theme, layout))
+                    .draw(|frame| render::draw_with_theme(frame, &render_model, &theme, layout))
                     .map_err(|e| e.to_string())?;
                 // Keep the hardware cursor hidden; form edit uses an in-band soft caret.
                 // Some backends re-show or park a block at the last cell after draw.

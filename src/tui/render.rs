@@ -1,11 +1,14 @@
 //! Terminal chrome + content rendering (no shortcut legends).
 //!
-//! Draws lifecycle/mode chrome, addressable content lines (with independent
+//! Draws an immutable, frame-local [`RenderModel`] assembled by the controller.
+//! This boundary keeps browser coordination and pending work outside rendering.
+//! It contains lifecycle/mode chrome, addressable content lines (with independent
 //! human selection vs agent attention styles), and status. Never renders key
 //! binding legends in the UI. Colors come from [`crate::tui::theme::TuiTheme`].
 
 use crate::tui::config::TuiLayout;
-use crate::tui::controller::Controller;
+use crate::tui::content::ContentLine;
+use crate::tui::hints::LinkHint;
 use crate::tui::state::{InputKind, InteractionMode, Lifecycle};
 use crate::tui::theme::TuiTheme;
 use ratatui::Frame;
@@ -21,10 +24,21 @@ pub const LOADING_SPINNER_INTERVAL: Duration = Duration::from_millis(250);
 /// Quarter-circle frames for the Loading header glyph (`◐` → `◓` → `◑` → `◒`).
 const LOADING_SPINNER_FRAMES: &[&str] = &["◐", "◓", "◑", "◒"];
 
+/// Owned inputs needed to paint one frame. It deliberately contains no browser,
+/// coordinator, history, pending operation, or mutation surface.
+#[derive(Debug, Clone)]
+pub struct RenderModel {
+    pub(crate) state: crate::tui::state::TuiState,
+    pub(crate) content_lines: Vec<ContentLine>,
+    pub(crate) hints: Vec<LinkHint>,
+    pub(crate) url_completion_ghost: Option<String>,
+    pub(crate) selected_last_line: Option<usize>,
+}
+
 /// Draw one frame of the terminal browser using built-in theme/layout defaults.
 #[allow(dead_code)] // Convenience for callers/tests that do not load a config theme.
-pub fn draw(frame: &mut Frame, controller: &Controller) {
-    draw_with_theme(frame, controller, &TuiTheme::new(), TuiLayout::defaults());
+pub fn draw(frame: &mut Frame, model: &RenderModel) {
+    draw_with_theme(frame, model, &TuiTheme::new(), TuiLayout::defaults());
 }
 
 /// Draw one frame with an explicit theme (from `tui.toml` `[theme]` overlay)
@@ -33,7 +47,7 @@ pub fn draw(frame: &mut Frame, controller: &Controller) {
 /// Header and footer stay full terminal width; only the content region is inset.
 pub fn draw_with_theme(
     frame: &mut Frame,
-    controller: &Controller,
+    model: &RenderModel,
     theme: &TuiTheme,
     layout: TuiLayout,
 ) {
@@ -51,31 +65,30 @@ pub fn draw_with_theme(
     // full content band (outside padding / max-width column).
     let band = chunks[1];
     let (content_outer, scrollbar_col) = split_scrollbar_column(band);
-    let content_area = layout.content_rect(content_outer, controller.state.view.full_width);
+    let content_area = layout.content_rect(content_outer, model.state.view.full_width);
 
-    draw_chrome(frame, chunks[0], controller, theme);
+    draw_chrome(frame, chunks[0], model, theme);
     if content_area.width > 0 && content_area.height > 0 {
-        draw_content(frame, content_area, controller, theme);
+        draw_content(frame, content_area, model, theme);
     }
     if let Some(sb) = scrollbar_col {
-        let lines = controller.content_lines();
         draw_content_scrollbar(
             frame,
             sb,
-            lines.len(),
-            controller.state.view.scroll_y,
-            controller.state.view.viewport_height.max(1),
+            model.content_lines.len(),
+            model.state.view.scroll_y,
+            model.state.view.viewport_height.max(1),
             theme,
         );
     }
-    draw_status(frame, chunks[2], controller, theme);
+    draw_status(frame, chunks[2], model, theme);
 
-    if let Some(inspect) = &controller.state.view.inspect_text
+    if let Some(inspect) = &model.state.view.inspect_text
         && content_area.width > 0
         && content_area.height > 0
     {
-        let title = controller.state.view.inspect_title.as_deref().unwrap_or("");
-        draw_inspect_under_selection(frame, content_area, controller, inspect, title, theme);
+        let title = model.state.view.inspect_title.as_deref().unwrap_or("");
+        draw_inspect_under_selection(frame, content_area, model, inspect, title, theme);
     }
 }
 
@@ -195,8 +208,8 @@ fn split_markdown_link_url(text: &str) -> Option<(&str, &str, &str)> {
 }
 
 /// Single-line browser chrome: tabs · history · location · title · lifecycle/mode (color only).
-fn draw_chrome(frame: &mut Frame, area: Rect, controller: &Controller, theme: &TuiTheme) {
-    let state = &controller.state;
+fn draw_chrome(frame: &mut Frame, area: Rect, model: &RenderModel, theme: &TuiTheme) {
+    let state = &model.state;
     let width = area.width as usize;
     if width == 0 {
         return;
@@ -238,7 +251,7 @@ fn draw_chrome(frame: &mut Frame, area: Rect, controller: &Controller, theme: &T
 
     // Search + link-hint live in the footer cmdline, not the location bar.
     // URL mode may show a dim ghost suffix from local history (Tab accepts).
-    let url_ghost = controller.url_completion_ghost();
+    let url_ghost = model.url_completion_ghost.clone();
     let (location, location_style, ghost_suffix) = match &state.mode {
         InteractionMode::Input(InputKind::Url { buffer }) => {
             (format!("URL {buffer}"), theme.chrome_mode(), url_ghost)
@@ -329,9 +342,9 @@ fn draw_chrome(frame: &mut Frame, area: Rect, controller: &Controller, theme: &T
     frame.render_widget(Paragraph::new(line), area);
 }
 
-fn draw_content(frame: &mut Frame, area: Rect, controller: &Controller, theme: &TuiTheme) {
-    let state = &controller.state;
-    let lines = controller.content_lines();
+fn draw_content(frame: &mut Frame, area: Rect, model: &RenderModel, theme: &TuiTheme) {
+    let state = &model.state;
+    let lines = &model.content_lines;
     let scroll = state.view.scroll_y;
     let height = area.height as usize;
     let width = area.width as usize;
@@ -365,7 +378,7 @@ fn draw_content(frame: &mut Frame, area: Rect, controller: &Controller, theme: &
         // multi-line / wrapped link or control), never wrap continuations.
         if line.block_start
             && let Some(ref_r) = &line.semantic_ref
-            && let Some(hint) = controller.hints.iter().find(|h| &h.semantic_ref == ref_r)
+            && let Some(hint) = model.hints.iter().find(|h| &h.semantic_ref == ref_r)
         {
             let label = format!("[{}] ", hint.label);
             spans.push(Span::styled(label, theme.hint_label()));
@@ -415,8 +428,8 @@ fn draw_content(frame: &mut Frame, area: Rect, controller: &Controller, theme: &
     frame.render_widget(Paragraph::new(text_lines).style(theme.base()), area);
 }
 
-fn draw_status(frame: &mut Frame, area: Rect, controller: &Controller, theme: &TuiTheme) {
-    let state = &controller.state;
+fn draw_status(frame: &mut Frame, area: Rect, model: &RenderModel, theme: &TuiTheme) {
+    let state = &model.state;
     let mut spans = Vec::new();
 
     // Footer cmdline: search (`/…`) or link-hint (`f …` / `F …`). Other status
@@ -585,13 +598,12 @@ fn search_status_line(
 fn draw_inspect_under_selection(
     frame: &mut Frame,
     content_area: Rect,
-    controller: &Controller,
+    model: &RenderModel,
     inspect: &str,
     title: &str,
     theme: &TuiTheme,
 ) {
-    let lines = controller.content_lines();
-    let scroll = controller.state.view.scroll_y;
+    let scroll = model.state.view.scroll_y;
     let vh = content_area.height as usize;
 
     let body_lines = inspect.lines().count().max(1);
@@ -603,12 +615,7 @@ fn draw_inspect_under_selection(
     let x = content_area.x.saturating_add(1);
 
     // Last content-line index of the selection (handles wrap continuations).
-    let last_abs = controller
-        .state
-        .view
-        .selection
-        .as_ref()
-        .and_then(|sel| Controller::last_line_index_of(&lines, sel));
+    let last_abs = model.selected_last_line;
 
     let y = if let Some(abs) = last_abs {
         if abs < scroll {
@@ -720,8 +727,8 @@ fn loading_spinner_glyph_at_ms(ms: u128) -> &'static str {
 
 /// Build chrome text for tests (no terminal). Single browser-like bar.
 #[allow(dead_code)]
-pub fn chrome_lines(controller: &Controller) -> Vec<String> {
-    let state = &controller.state;
+pub fn chrome_lines(model: &RenderModel) -> Vec<String> {
+    let state = &model.state;
     let tabs = state
         .tab_position
         .map(|(i, n)| format!("{i}/{n} "))
@@ -748,9 +755,19 @@ mod tests {
     use crate::tui::content::contains_shortcut_legend;
     use crate::tui::state::InputKind;
 
+    fn model() -> RenderModel {
+        RenderModel {
+            state: crate::tui::state::TuiState::new(),
+            content_lines: Vec::new(),
+            hints: Vec::new(),
+            url_completion_ghost: None,
+            selected_last_line: None,
+        }
+    }
+
     #[test]
     fn chrome_has_no_shortcut_legend() {
-        let mut ctl = Controller::new();
+        let mut model = model();
         let doc = SemanticDocument::empty(DocumentMetadata {
             document_id: "d".into(),
             revision: "1".into(),
@@ -760,8 +777,8 @@ mod tests {
             frames: vec![],
         })
         .unwrap();
-        ctl.state.publish_page(doc);
-        for line in chrome_lines(&ctl) {
+        model.state.publish_page(doc);
+        for line in chrome_lines(&model) {
             assert!(!contains_shortcut_legend(&line), "legend leaked: {line}");
             assert!(
                 line.contains('●'),
@@ -773,7 +790,7 @@ mod tests {
 
     #[test]
     fn chrome_shows_tab_position_left_of_history() {
-        let mut ctl = Controller::new();
+        let mut model = model();
         let doc = SemanticDocument::empty(DocumentMetadata {
             document_id: "d".into(),
             revision: "1".into(),
@@ -783,10 +800,10 @@ mod tests {
             frames: vec![],
         })
         .unwrap();
-        ctl.state.publish_page(doc);
-        ctl.state.set_tab_position(Some((2, 5)));
-        ctl.state.set_history_availability(true, false);
-        let line = &chrome_lines(&ctl)[0];
+        model.state.publish_page(doc);
+        model.state.set_tab_position(Some((2, 5)));
+        model.state.set_history_availability(true, false);
+        let line = &chrome_lines(&model)[0];
         assert!(
             line.starts_with("2/5 ◀ ▷") || line.contains("2/5 ◀"),
             "tab ordinal should sit left of history arrows: {line}"
@@ -830,40 +847,40 @@ mod tests {
 
     #[test]
     fn search_status_shows_prompt_while_typing() {
-        let mut ctl = Controller::new();
-        ctl.state.mode = InteractionMode::Input(InputKind::Search {
+        let mut model = model();
+        model.state.mode = InteractionMode::Input(InputKind::Search {
             buffer: "leo".into(),
         });
         let theme = TuiTheme::new();
-        let (text, _) = search_status_line(&ctl.state, &theme).expect("search prompt");
+        let (text, _) = search_status_line(&model.state, &theme).expect("search prompt");
         assert_eq!(text, "/leo");
     }
 
     #[test]
     fn search_status_stays_while_pattern_active() {
-        let mut ctl = Controller::new();
-        ctl.state.view.search_query = "space".into();
-        ctl.state.view.search_matches = vec![
+        let mut model = model();
+        model.state.view.search_query = "space".into();
+        model.state.view.search_matches = vec![
             SemanticRef::from_opaque("r1"),
             SemanticRef::from_opaque("r2"),
             SemanticRef::from_opaque("r3"),
         ];
-        ctl.state.view.search_index = 1;
+        model.state.view.search_index = 1;
         let theme = TuiTheme::new();
-        let (text, _) = search_status_line(&ctl.state, &theme).expect("active search");
+        let (text, _) = search_status_line(&model.state, &theme).expect("active search");
         assert_eq!(text, "/space  2/3");
     }
 
     #[test]
     fn search_status_absent_without_query() {
-        let ctl = Controller::new();
+        let model = model();
         let theme = TuiTheme::new();
-        assert!(search_status_line(&ctl.state, &theme).is_none());
+        assert!(search_status_line(&model.state, &theme).is_none());
     }
 
     #[test]
     fn escape_in_normal_clears_sticky_search_footer() {
-        let mut ctl = Controller::new();
+        let mut ctl = crate::tui::controller::Controller::new();
         ctl.state.view.search_query = "space".into();
         ctl.state.view.search_matches = vec![
             SemanticRef::from_opaque("r1"),
@@ -881,7 +898,7 @@ mod tests {
 
     #[test]
     fn escape_while_typing_search_keeps_prior_pattern() {
-        let mut ctl = Controller::new();
+        let mut ctl = crate::tui::controller::Controller::new();
         ctl.state.view.search_query = "prior".into();
         ctl.state.view.search_matches = vec![SemanticRef::from_opaque("r1")];
         ctl.state.mode = InteractionMode::Input(InputKind::Search {
@@ -921,18 +938,18 @@ mod tests {
     #[test]
     fn hint_status_shows_in_footer_not_empty() {
         use crate::tui::state::HintMode;
-        let mut ctl = Controller::new();
+        let mut model = model();
         let theme = TuiTheme::new();
-        ctl.state.mode = InteractionMode::Hint(HintMode::Follow);
-        ctl.state.view.hint_buffer.clear();
-        let (text, _) = hint_status_line(&ctl.state, &theme).expect("hint f");
+        model.state.mode = InteractionMode::Hint(HintMode::Follow);
+        model.state.view.hint_buffer.clear();
+        let (text, _) = hint_status_line(&model.state, &theme).expect("hint f");
         assert_eq!(text, "f");
-        ctl.state.view.hint_buffer = "as".into();
-        let (text, _) = hint_status_line(&ctl.state, &theme).expect("hint f as");
+        model.state.view.hint_buffer = "as".into();
+        let (text, _) = hint_status_line(&model.state, &theme).expect("hint f as");
         assert_eq!(text, "f as");
-        ctl.state.mode = InteractionMode::Hint(HintMode::NewTab);
-        ctl.state.view.hint_buffer = "aa".into();
-        let (text, _) = footer_cmdline(&ctl.state, &theme).expect("hint F");
+        model.state.mode = InteractionMode::Hint(HintMode::NewTab);
+        model.state.view.hint_buffer = "aa".into();
+        let (text, _) = footer_cmdline(&model.state, &theme).expect("hint F");
         assert_eq!(text, "F aa");
     }
 

@@ -154,6 +154,24 @@ fn urls_match_for_activate(a: &str, b: &str) -> bool {
 }
 
 impl Controller {
+    /// Snapshot the owned, read-only inputs required to paint the next frame.
+    pub fn render_model(&self) -> crate::tui::render::RenderModel {
+        let content_lines = self.content_lines();
+        let selected_last_line = self
+            .state
+            .view
+            .selection
+            .as_ref()
+            .and_then(|selection| Self::last_line_index_of(&content_lines, selection));
+        crate::tui::render::RenderModel {
+            state: self.state.clone(),
+            content_lines,
+            hints: self.hints.clone(),
+            url_completion_ghost: self.url_completion_ghost(),
+            selected_last_line,
+        }
+    }
+
     /// Test-only constructor over a fake browser backend and empty shared state.
     #[cfg(test)]
     pub fn new() -> Self {
