@@ -27,9 +27,11 @@ const FRAGMENT_VIEWPORT_TOP_MARGIN: usize = 5;
 /// Completed two-key hint target ready to activate.
 #[derive(Debug, Clone)]
 pub struct HintActivation {
+    /// Exact revision-scoped target to activate.
     pub semantic_ref: SemanticRef,
     /// Only meaningful for links (`F` opens in a new tab).
     pub new_tab: bool,
+    /// Component kind of the resolved hint target (link vs form control).
     pub kind: crate::semantic::SemanticKind,
 }
 
@@ -39,7 +41,9 @@ pub struct HintActivation {
 /// shared coordination storage, draw Loading, then [`Self::perform_pending_page_action`].
 /// Pure view ops (scroll, collapse, search) never touch the browser driver.
 pub struct Controller {
+    /// Local terminal viewport, selection, and interaction-mode state.
     pub state: TuiState,
+    /// Shared companion browser session and publication barrier.
     pub coordinator: Arc<PageCoordinator>,
     /// Active link hints when in Hint mode (exact `semantic_ref` targets).
     pub hints: Vec<LinkHint>,

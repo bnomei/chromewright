@@ -54,12 +54,19 @@ impl MarkdownPaginationMetadata {
 /// Identity and reader metadata used to construct a revision-keyed markdown cache entry.
 #[derive(Debug, Clone)]
 pub(crate) struct MarkdownCacheMetadata {
+    /// Stable document identity at extraction time.
     pub document_id: String,
+    /// Document revision token at extraction time.
     pub revision: String,
+    /// Page title retained for reader metadata responses.
     pub title: String,
+    /// Page URL required for cache hits (detects SPA `pushState` without revision bump).
     pub url: String,
+    /// Optional author byline from Readability extraction.
     pub byline: String,
+    /// Optional short excerpt from Readability extraction.
     pub excerpt: String,
+    /// Optional site name from Readability extraction.
     pub site_name: String,
 }
 
@@ -69,13 +76,21 @@ pub(crate) struct MarkdownCacheMetadata {
 /// force re-extraction. Pagination checkpoints enable efficient char-offset slicing.
 #[derive(Debug, Clone)]
 pub(crate) struct MarkdownCacheEntry {
+    /// Stable document identity at extraction time.
     pub document_id: String,
+    /// Document revision token at extraction time.
     pub revision: String,
+    /// Page title retained for reader metadata responses.
     pub title: String,
+    /// Page URL required for cache hits.
     pub url: String,
+    /// Optional author byline from Readability extraction.
     pub byline: String,
+    /// Optional short excerpt from Readability extraction.
     pub excerpt: String,
+    /// Optional site name from Readability extraction.
     pub site_name: String,
+    /// Full markdown body shared via `Arc` for cheap cloning into tool results.
     pub full_markdown: Arc<str>,
     pagination: MarkdownPaginationMetadata,
 }
@@ -122,9 +137,13 @@ pub(crate) struct SnapshotCacheScope {
     pub mode: String,
     /// Fallback mode if locality degraded during capture.
     pub fallback_mode: Option<String>,
+    /// Whether the capture preferred viewport-local interactive nodes.
     pub viewport_biased: bool,
+    /// Interactive nodes returned in this capture (after locality filtering).
     pub returned_node_count: usize,
+    /// Frames that could not be traversed (for example cross-origin).
     pub unavailable_frame_count: usize,
+    /// Total interactive count in the document when known.
     pub global_interactive_count: Option<usize>,
 }
 
@@ -134,9 +153,13 @@ pub(crate) struct SnapshotCacheScope {
 /// against a stable base; a different document identity evicts the entry on read.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SnapshotCacheEntry {
+    /// Document identity for the cached snapshot revision.
     pub document: DocumentMetadata,
+    /// YAML accessibility tree text used as the delta base.
     pub snapshot: Arc<str>,
+    /// Interactive nodes with cursors corresponding to the snapshot.
     pub nodes: Arc<[SnapshotNode]>,
+    /// How the base snapshot was scoped (mode, locality, frame failures).
     pub scope: SnapshotCacheScope,
 }
 
@@ -146,18 +169,27 @@ pub(crate) struct SnapshotCacheEntry {
 /// close. `uri` is a `file://` URL suitable for tool responses.
 #[derive(Debug, Clone)]
 pub struct ScreenshotArtifact {
+    /// Session-unique artifact id (not a filesystem path).
     pub id: String,
     /// Percent-encoded `file://` URI pointing at [`Self::path`].
     pub uri: String,
     /// Absolute filesystem path of the stored PNG.
     pub path: PathBuf,
+    /// Encoded image format for this artifact.
     pub format: ScreenshotFormat,
+    /// MIME type for tool responses (`image/png`).
     pub mime_type: &'static str,
+    /// On-disk byte length of the PNG.
     pub byte_count: usize,
+    /// Intrinsic PNG width in device pixels.
     pub width: u32,
+    /// Intrinsic PNG height in device pixels.
     pub height: u32,
+    /// Capture surface used when the artifact was created.
     pub mode: ScreenshotMode,
+    /// Tab id that produced the capture.
     pub tab_id: String,
+    /// Applied clip region, when the capture was cropped.
     pub clip: Option<ScreenshotClip>,
 }
 

@@ -40,9 +40,13 @@ pub struct ViewportEmulation {
 /// Screen orientation values accepted by viewport emulation. Serialized values are
 /// `portrait_primary`, `portrait_secondary`, `landscape_primary`, and `landscape_secondary`.
 pub enum ViewportOrientation {
+    /// Upright portrait (primary, 0°).
     PortraitPrimary,
+    /// Upside-down portrait (secondary, 180°).
     PortraitSecondary,
+    /// Landscape with top of device on the left (primary, 90°).
     LandscapePrimary,
+    /// Landscape with top of device on the right (secondary, 270°).
     LandscapeSecondary,
 }
 

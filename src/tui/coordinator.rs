@@ -55,6 +55,7 @@ impl Drop for CompanionPageTransaction {
 
 /// Result of successfully finalizing a companion browser mutation.
 pub enum FinalizeOutcome {
+    /// New page identity published to shared state after settle + capture.
     Published(RefreshPage),
 }
 
@@ -66,6 +67,7 @@ pub struct PageCoordinator {
 }
 
 impl PageCoordinator {
+    /// Bind a shared browser session to the companion publication store.
     pub fn new(session: Arc<BrowserSession>, shared: SharedTuiState) -> Self {
         Self {
             session,
@@ -80,17 +82,22 @@ impl PageCoordinator {
         }
     }
 
+    /// Shared browser session owned by the terminal and companion.
     pub fn session(&self) -> &Arc<BrowserSession> {
         &self.session
     }
+
+    /// Shared publication store for lifecycle, selection, and attention.
     pub fn shared(&self) -> &SharedTuiState {
         &self.shared
     }
 
+    /// Claim a terminal-owned page-action ticket (Loading barrier).
     pub fn begin(&self, action: impl Into<String>) -> Result<PageActionTicket, CoordinationError> {
         self.shared.begin_page_action(action)
     }
 
+    /// Claim a companion-owned page-action transaction with abandon-on-drop safety.
     pub(crate) fn begin_companion(
         &self,
         action: impl Into<String>,
@@ -125,6 +132,10 @@ impl PageCoordinator {
         }
     }
 
+    /// Capture a SemanticDocument only when metadata is complete and stable across the barrier.
+    ///
+    /// Retries a few times with settle so dynamic pages do not publish torn identity
+    /// (document_id/revision/readyState mismatch between capture and metadata probe).
     pub fn capture_with_metadata_barrier<D: PageDriver>(
         driver: &mut D,
     ) -> Result<SemanticDocument, String> {
@@ -151,6 +162,10 @@ impl PageCoordinator {
         Err(last_err)
     }
 
+    /// Settle, capture with the metadata barrier, and commit or fail the open ticket.
+    ///
+    /// Empty tab sets and settle/capture failures fail the ticket with
+    /// [`CoordinationError::RefreshFailed`] rather than leaving Loading stuck.
     pub fn finalize_browser_mutation(
         &self,
         ticket: PageActionTicket,
@@ -201,6 +216,7 @@ impl PageCoordinator {
         }
     }
 
+    /// Companion refresh: claim a ticket, reload the page, settle, and publish the new capture.
     pub fn refresh(&self) -> Result<RefreshPage, CoordinationError> {
         let transaction = self.begin_companion("refresh").map_err(|e| {
             if e == CoordinationError::ActionInProgress {
@@ -222,6 +238,7 @@ impl PageCoordinator {
         Ok(page)
     }
 
+    /// Atomically publish a successful capture for an open ticket (Ready).
     pub fn commit(
         &self,
         ticket: PageActionTicket,
@@ -232,6 +249,8 @@ impl PageCoordinator {
             .commit_page_action(ticket, document, selection)
             .map(|_| ())
     }
+
+    /// Fail an open ticket into Error while retaining the last published page.
     pub fn fail(
         &self,
         ticket: PageActionTicket,
@@ -240,9 +259,13 @@ impl PageCoordinator {
     ) -> Result<(), CoordinationError> {
         self.shared.fail_page_action(ticket, action, message)
     }
+
+    /// Finish a ticket without replacing the published document (coordination-only work).
     pub fn retain(&self, ticket: PageActionTicket) -> Result<(), CoordinationError> {
         self.shared.finish_page_action_retained(ticket)
     }
+
+    /// Clear shared session state under an open ticket (for example last tab closed).
     pub fn clear(&self, ticket: PageActionTicket) -> Result<(), CoordinationError> {
         self.shared.clear_session(ticket)
     }

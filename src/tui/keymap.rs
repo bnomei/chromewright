@@ -16,35 +16,55 @@ use std::fmt;
 /// One physical key chord used in a binding sequence.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct KeyChord {
+    /// Base key without modifiers.
     pub code: KeyCode,
+    /// Ctrl/Alt/Shift modifiers held with the key.
     pub modifiers: KeyModifiers,
 }
 
 /// Subset of keys the TUI understands (independent of crossterm for unit tests).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum KeyCode {
+    /// Printable character (case as delivered by the terminal).
     Char(char),
+    /// Escape (mode cancel / Error dismiss).
     Esc,
+    /// Enter / return.
     Enter,
+    /// Tab (form traversal / completion).
     Tab,
+    /// Shift-Tab / reverse tab.
     BackTab,
+    /// Backspace / delete backward.
     Backspace,
+    /// Arrow up.
     Up,
+    /// Arrow down.
     Down,
+    /// Arrow left.
     Left,
+    /// Arrow right.
     Right,
+    /// Home.
     Home,
+    /// End.
     End,
+    /// Page up.
     PageUp,
+    /// Page down.
     PageDown,
+    /// Function key `F1`–`F12` (and beyond if the terminal reports them).
     F(u8),
 }
 
 /// Modifier bitflags for a chord.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct KeyModifiers {
+    /// Control held.
     pub ctrl: bool,
+    /// Alt / Option / Meta held.
     pub alt: bool,
+    /// Shift held.
     pub shift: bool,
 }
 
@@ -442,12 +462,19 @@ fn format_sequence(seq: &KeySequence) -> String {
 /// Keymap configuration errors (fail startup).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KeymapError {
+    /// Binding string was empty after trim.
     EmptyBinding,
+    /// Chord text could not be parsed into a key sequence.
     InvalidBinding(String),
+    /// Action name is not a known [`Action`] variant.
     UnknownAction(String),
+    /// Two overlay bindings claim the same chord sequence.
     ConflictingBinding {
+        /// Chord sequence in display form.
         sequence: String,
+        /// First action that claimed the sequence.
         first: String,
+        /// Second action that conflicted.
         second: String,
     },
 }

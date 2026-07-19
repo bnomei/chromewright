@@ -281,8 +281,10 @@ impl ViewportResetRequest {
 /// tab-scoped capture. Clip regions require viewport mode and cannot pair with full-page.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Default)]
 pub struct ScreenshotRequest {
+    /// Viewport vs full-page capture surface.
     #[serde(default)]
     pub mode: ScreenshotMode,
+    /// Device vs CSS pixel density for the encoded image.
     #[serde(default)]
     pub scale: ScreenshotScale,
     /// When set, capture from this tab id instead of the active page target.
@@ -391,11 +393,17 @@ fn validate_optional_tab_id(tab_id: Option<&str>, label: &str) -> Result<()> {
 /// session storage and tool responses can report dimensions without re-decoding the image.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ScreenshotCapture {
+    /// Capture surface used for this PNG.
     pub mode: ScreenshotMode,
+    /// Pixel density mode used for this PNG.
     pub scale: ScreenshotScale,
+    /// Tab that produced the capture (id/title/url at capture time).
     pub tab: TabDescriptor,
+    /// Encoded image format (PNG only today).
     pub format: ScreenshotFormat,
+    /// MIME type for tool responses (`image/png`).
     pub mime_type: &'static str,
+    /// Encoded byte length before filesystem write.
     pub byte_count: usize,
     /// Intrinsic PNG width in device pixels.
     pub width: u32,
@@ -405,10 +413,13 @@ pub(crate) struct ScreenshotCapture {
     pub css_width: f64,
     /// Logical capture height in CSS pixels after clip/mode resolution.
     pub css_height: f64,
+    /// Page `devicePixelRatio` observed at capture time.
     pub device_pixel_ratio: f64,
     /// Ratio of device pixels to CSS pixels inferred from the encoded image.
     pub pixel_scale: f64,
+    /// Applied clip region, when the capture was cropped.
     pub clip: Option<ScreenshotClip>,
+    /// Raw PNG bytes prior to managed artifact storage.
     pub bytes: Vec<u8>,
 }
 

@@ -16,25 +16,45 @@ use std::fmt;
 /// Named content/chrome roles that can be overridden in TOML.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ThemeRole {
+    /// Hyperlink text.
     Link,
+    /// Heading level 1.
     H1,
+    /// Heading level 2.
     H2,
+    /// Heading level 3.
     H3,
+    /// Heading level 4.
     H4,
+    /// Heading level 5.
     H5,
+    /// Heading level 6.
     H6,
+    /// Landmark region labels.
     Landmark,
+    /// Generic group containers.
     Group,
+    /// List containers and items.
     List,
+    /// Image placeholders / alt text.
     Image,
+    /// Form controls (input, select, button, …).
     FormControl,
+    /// Two-key hint labels painted over targets.
     HintLabel,
+    /// Dim/secondary text (spacers, muted chrome).
     Muted,
+    /// Header chrome while lifecycle is Ready.
     ChromeReady,
+    /// Header chrome while lifecycle is Loading.
     ChromeLoading,
+    /// Header chrome while lifecycle is Error.
     ChromeError,
+    /// Mode indicator in chrome (Normal / Input / Hint).
     ChromeMode,
+    /// Agent attention foreground paint.
     AttentionFg,
+    /// Agent attention background paint.
     AttentionBg,
 }
 
@@ -428,7 +448,9 @@ pub fn parse_color(spec: &str) -> Result<Color, ThemeError> {
 /// Theme configuration errors (fail startup when loading TOML).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ThemeError {
+    /// TOML key is not a known [`ThemeRole`] name.
     UnknownRole(String),
+    /// Color token could not be parsed as an ANSI-16 or named color.
     InvalidColor(String),
 }
 

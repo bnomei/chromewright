@@ -707,7 +707,9 @@ pub fn line_index_of(lines: &[ContentLine], semantic_ref: &SemanticRef) -> Optio
 /// `scroll_y = line_index_of(new_lines, rebound) + wrap_row`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ViewportTopAnchor {
+    /// First addressable component at or below the current viewport top.
     pub semantic_ref: SemanticRef,
+    /// Soft-wrap rows of that block already scrolled above the viewport edge.
     pub wrap_row: usize,
 }
 

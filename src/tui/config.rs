@@ -28,7 +28,9 @@ pub const DEFAULT_CONTENT_MAX_WIDTH: u16 = 100;
 /// 100). `0` disables the cap (always full width). Toggle with `w`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TuiLayout {
+    /// Horizontal content padding applied to both left and right edges (columns).
     pub content_padding_x: u16,
+    /// Vertical content padding applied to both top and bottom edges (rows).
     pub content_padding_y: u16,
     /// Max content columns when capped (`0` = never cap).
     pub content_max_width: u16,
@@ -120,8 +122,11 @@ impl Default for TuiLayout {
 /// Loaded TUI configuration (keymap + theme + layout overlays).
 #[derive(Debug, Clone)]
 pub struct TuiConfig {
+    /// Action-name key bindings (built-ins plus TOML overlay).
     pub keymap: TuiKeymap,
+    /// Semantic color roles for content and chrome.
     pub theme: TuiTheme,
+    /// Content-pane padding and optional column width.
     pub layout: TuiLayout,
     /// Path that was loaded, if any file was read.
     pub loaded_from: Option<PathBuf>,
@@ -263,10 +268,15 @@ struct LayoutFile {
 /// Configuration load failures.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigError {
+    /// Filesystem read failure for the config path.
     Io { path: PathBuf, message: String },
+    /// TOML syntax or type parse failure.
     Parse { path: PathBuf, message: String },
+    /// Invalid keymap binding overlay.
     Keymap { path: PathBuf, message: String },
+    /// Invalid theme color role overlay.
     Theme { path: PathBuf, message: String },
+    /// Invalid layout padding/width values.
     Layout { path: PathBuf, message: String },
 }
 

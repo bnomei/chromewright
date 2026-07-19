@@ -28,10 +28,15 @@ const LOADING_SPINNER_FRAMES: &[&str] = &["◐", "◓", "◑", "◒"];
 /// coordinator, history, pending operation, or mutation surface.
 #[derive(Debug, Clone)]
 pub struct RenderModel {
+    /// Lifecycle, mode, chrome fields, and view state for this frame.
     pub(crate) state: crate::tui::state::TuiState,
+    /// Pre-flattened content lines (already projected and soft-wrapped).
     pub(crate) content_lines: Vec<ContentLine>,
+    /// Active two-key hints to paint when in Hint mode.
     pub(crate) hints: Vec<LinkHint>,
+    /// Ghost suffix for URL-bar autocomplete, when completing.
     pub(crate) url_completion_ghost: Option<String>,
+    /// Last content-line index belonging to the human selection block, when known.
     pub(crate) selected_last_line: Option<usize>,
 }
 

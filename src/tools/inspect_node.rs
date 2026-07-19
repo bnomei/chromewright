@@ -144,9 +144,12 @@ pub struct InspectNodeOutput {
 /// DOM tag, id, and class list for the inspected node.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct InspectIdentity {
+    /// Lowercase HTML tag name.
     pub tag: String,
+    /// Author `id` attribute when present.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
+    /// Class tokens on the element.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub classes: Vec<String>,
 }
@@ -155,25 +158,35 @@ pub struct InspectIdentity {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum BooleanOrMixed {
+    /// True/false ARIA state.
     Bool(bool),
+    /// Mixed indeterminate state (serialized as `"mixed"`).
     Mixed(String),
 }
 
 /// Role, name, and common ARIA state flags for the inspected node.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct InspectAccessibility {
+    /// Computed accessibility role.
     pub role: String,
+    /// Accessible name used by assistive tech and snapshot matching.
     pub name: String,
+    /// Whether the node is the document's active element.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active: Option<bool>,
+    /// ARIA checked tri-state when applicable.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub checked: Option<BooleanOrMixed>,
+    /// Whether the node is disabled for interaction.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disabled: Option<bool>,
+    /// Expanded state for disclosure widgets.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expanded: Option<bool>,
+    /// ARIA pressed tri-state when applicable.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pressed: Option<BooleanOrMixed>,
+    /// Selected state for options and similar widgets.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub selected: Option<bool>,
 }
@@ -181,12 +194,16 @@ pub struct InspectAccessibility {
 /// Form control value and editability flags when the node is form-like.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct InspectFormState {
+    /// Current form value when the node exposes one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
+    /// Placeholder text when present.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub placeholder: Option<String>,
+    /// Whether the control rejects edits.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub readonly: Option<bool>,
+    /// Whether the control is disabled.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disabled: Option<bool>,
 }
@@ -194,10 +211,15 @@ pub struct InspectFormState {
 /// Bounding box, visibility, and pointer-event readiness for actionability diagnosis.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct InspectLayout {
+    /// Axis-aligned box in CSS pixels.
     pub bounding_box: InspectBoundingBox,
+    /// Whether the element has a non-zero layout box and is not `visibility: hidden`.
     pub visible: bool,
+    /// Whether any part of the element intersects the current viewport.
     pub visible_in_viewport: bool,
+    /// Whether the element can receive pointer events at its center.
     pub receives_pointer_events: bool,
+    /// Computed `pointer-events` CSS value when collected.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pointer_events: Option<String>,
     /// CSS `cursor` property value (not a revision-scoped snapshot cursor).
@@ -208,26 +230,37 @@ pub struct InspectLayout {
 /// Axis-aligned box in CSS pixels for the inspected node.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct InspectBoundingBox {
+    /// Left edge in CSS pixels relative to the layout origin.
     pub x: f64,
+    /// Top edge in CSS pixels relative to the layout origin.
     pub y: f64,
+    /// Width in CSS pixels.
     pub width: f64,
+    /// Height in CSS pixels.
     pub height: f64,
 }
 
 /// Document URL, frame depth, and shadow-root nesting for the inspected node.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct InspectContext {
+    /// URL of the document that owns the node (may differ from the top frame).
     pub document_url: String,
+    /// Nesting depth of the frame that contains the node (0 = top frame).
     pub frame_depth: usize,
+    /// Whether the node lives inside a shadow root.
     pub inside_shadow_root: bool,
 }
 
 /// Frame, shadow, or cross-origin boundary discovered while resolving the node.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct InspectBoundary {
+    /// Boundary kind (frame, shadow, cross-origin, …).
     pub kind: String,
+    /// Availability/status token for the boundary.
     pub status: String,
+    /// Whether content beyond the boundary is readable.
     pub available: bool,
+    /// Frame URL when known.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
 }
@@ -235,25 +268,35 @@ pub struct InspectBoundary {
 /// Full-detail text, HTML, attribute, and style sections with truncation metadata.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct InspectSections {
+    /// Bounded text content of the node.
     pub text: BoundedTextSection,
+    /// Bounded outer HTML of the node.
     pub html: BoundedTextSection,
+    /// Bounded attribute map.
     pub attributes: BoundedMapSection,
+    /// Bounded computed style map for requested property names.
     pub styles: BoundedMapSection,
 }
 
 /// String payload that may be truncated against inspect size budgets.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct BoundedTextSection {
+    /// Returned text (may be shorter than `total_chars` when truncated).
     pub value: String,
+    /// Whether the value was shortened to fit budgets.
     pub truncated: bool,
+    /// Full Unicode scalar count before truncation.
     pub total_chars: usize,
 }
 
 /// Key/value map that may be truncated against inspect size budgets.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct BoundedMapSection {
+    /// Returned entries (may be fewer than `total_entries` when truncated).
     pub values: BTreeMap<String, String>,
+    /// Whether entries were dropped to fit budgets.
     pub truncated: bool,
+    /// Full entry count before truncation.
     pub total_entries: usize,
 }
 
@@ -263,29 +306,42 @@ pub struct BoundedMapSection {
 /// the browser-kernel inspect script.
 #[derive(Debug, Deserialize)]
 pub(crate) struct InspectNodeProbePayload {
+    /// Whether the in-page inspect script completed successfully.
     pub success: bool,
+    /// Stable machine code when the script reports a known failure mode.
     #[serde(default)]
     pub code: Option<String>,
+    /// Human-readable failure detail from the inspect script.
     #[serde(default)]
     pub error: Option<String>,
+    /// Interactive index of the resolved node when known.
     #[serde(default)]
     pub actionable_index: Option<usize>,
+    /// CSS selector the probe settled on after resolution.
     #[serde(default)]
     pub resolved_selector: Option<String>,
+    /// Tag/id/class identity section when resolution succeeded.
     #[serde(default)]
     pub identity: Option<InspectIdentity>,
+    /// Accessibility section when resolution succeeded.
     #[serde(default)]
     pub accessibility: Option<InspectAccessibility>,
+    /// Form state section when the node is form-like.
     #[serde(default)]
     pub form_state: Option<InspectFormState>,
+    /// Layout/geometry section when resolution succeeded.
     #[serde(default)]
     pub layout: Option<InspectLayout>,
+    /// Document/frame context when resolution succeeded.
     #[serde(default)]
     pub context: Option<InspectContext>,
+    /// Boundary info when the node is not in the top light DOM.
     #[serde(default)]
     pub boundary: Option<InspectBoundary>,
+    /// Full boundary chain when multiple frames/shadows were crossed.
     #[serde(default)]
     pub boundaries: Option<Vec<InspectBoundary>>,
+    /// Full-detail sections when the probe requested non-compact payload.
     #[serde(default)]
     pub sections: Option<InspectSections>,
 }

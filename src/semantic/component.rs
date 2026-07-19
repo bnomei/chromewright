@@ -40,11 +40,17 @@ pub enum SemanticKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LandmarkRole {
+    /// Primary page content (`<main>` / `role=main`).
     Main,
+    /// Complementary content (`<aside>` / `role=complementary`).
     Aside,
+    /// Banner region (`<header>` / `role=banner`).
     Header,
+    /// Navigation region (`<nav>` / `role=navigation`).
     Nav,
+    /// Generic section landmark (`<section>` / `role=region`).
     Section,
+    /// Contentinfo region (`<footer>` / `role=contentinfo`).
     Footer,
 }
 
@@ -101,38 +107,55 @@ impl SemanticComponent {
 /// Typed attributes retained for interaction and presentation.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SemanticAttrs {
+    /// Landmark role when `kind` is [`SemanticKind::Landmark`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub landmark: Option<LandmarkRole>,
+    /// Heading level 1–6 when `kind` is [`SemanticKind::Heading`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub heading_level: Option<u8>,
+    /// Whether a list is ordered (`<ol>`) vs unordered (`<ul>`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ordered: Option<bool>,
+    /// Link destination when `kind` is [`SemanticKind::Link`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub href: Option<String>,
+    /// Media URL when `kind` is [`SemanticKind::Image`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub src: Option<String>,
+    /// Image alternate text when present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alt: Option<String>,
+    /// Form control `name` attribute when present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Current form value or selected option value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
+    /// HTML `type` for inputs (text, checkbox, …).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_type: Option<String>,
+    /// Placeholder text shown when the control is empty.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub placeholder: Option<String>,
+    /// Checked state for checkbox/radio controls.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checked: Option<bool>,
+    /// Whether the control is disabled for interaction.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disabled: Option<bool>,
+    /// Whether the control is required for form submission.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub required: Option<bool>,
+    /// Whether the control rejects edits (`readonly`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub readonly: Option<bool>,
+    /// Whether a select/file control accepts multiple values.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub multiple: Option<bool>,
+    /// HTML button type (`submit`, `button`, `reset`, …).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub button_type: Option<String>,
+    /// Bounded option list for select controls.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub options: Vec<SelectOption>,
     /// Source HTML tag when useful for debug projections (not required for renderers).

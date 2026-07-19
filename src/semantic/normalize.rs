@@ -23,65 +23,97 @@ use std::collections::HashSet;
 /// Browser-side extraction response decoded from `extract_semantic_dom.js`.
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct SemanticCaptureResponse {
+    /// Document metadata from the live page at capture time.
     pub document: DocumentMetadata,
+    /// Top-level raw nodes before budgeted normalization.
     #[serde(default)]
     pub nodes: Vec<RawSemanticNode>,
+    /// Capture script reported truncation under resource budgets.
     #[serde(default)]
     pub truncated: bool,
+    /// Capture script error message when extraction failed partially or fully.
     #[serde(default)]
     pub error: Option<String>,
 }
 
 /// Intermediate semantic node emitted by the capture script or fixtures.
+///
+/// Fields mirror the JS capture payload; [`normalize_fixture`] / capture paths
+/// map them into typed [`SemanticComponent`] values with budgets applied.
 #[derive(Debug, Clone, Deserialize)]
 pub struct RawSemanticNode {
+    /// Kind token from capture (`landmark`, `heading`, `link`, …).
     pub kind: String,
+    /// Source HTML tag when retained.
     #[serde(default)]
     pub tag: Option<String>,
+    /// Author `id` attribute when present.
     #[serde(default)]
     pub id: Option<String>,
+    /// Whether `id` is unique in the document (author-id identity preferred when true).
     #[serde(default)]
     pub unique_id: bool,
+    /// Capture-scoped exact selector for the in-process TUI driver only.
     #[serde(default)]
     pub selector: Option<String>,
+    /// Landmark role token when `kind` is landmark.
     #[serde(default)]
     pub landmark: Option<String>,
+    /// Heading level 1–6 when `kind` is heading.
     #[serde(default)]
     pub heading_level: Option<u8>,
+    /// Whether a list is ordered.
     #[serde(default)]
     pub ordered: Option<bool>,
+    /// Primary text content before string budgets.
     #[serde(default)]
     pub text: Option<String>,
+    /// Accessible or visible label before string budgets.
     #[serde(default)]
     pub label: Option<String>,
+    /// Link destination when present.
     #[serde(default)]
     pub href: Option<String>,
+    /// Media URL when present.
     #[serde(default)]
     pub src: Option<String>,
+    /// Image alternate text when present.
     #[serde(default)]
     pub alt: Option<String>,
+    /// Form control `name` when present.
     #[serde(default)]
     pub name: Option<String>,
+    /// Form value when present.
     #[serde(default)]
     pub value: Option<String>,
+    /// HTML input `type` when present.
     #[serde(default)]
     pub input_type: Option<String>,
+    /// Placeholder text when present.
     #[serde(default)]
     pub placeholder: Option<String>,
+    /// Checked state for checkbox/radio controls.
     #[serde(default)]
     pub checked: Option<bool>,
+    /// Disabled state for controls.
     #[serde(default)]
     pub disabled: Option<bool>,
+    /// Required state for controls.
     #[serde(default)]
     pub required: Option<bool>,
+    /// Readonly state for controls.
     #[serde(default)]
     pub readonly: Option<bool>,
+    /// Multiple-value state for select/file controls.
     #[serde(default)]
     pub multiple: Option<bool>,
+    /// HTML button type when present.
     #[serde(default)]
     pub button_type: Option<String>,
+    /// Raw select options before option-count budgets.
     #[serde(default)]
     pub options: Vec<RawSelectOption>,
+    /// Nested raw children in document order.
     #[serde(default)]
     pub children: Vec<RawSemanticNode>,
 }
@@ -92,12 +124,16 @@ pub struct RawSemanticNode {
 /// [`MAX_SEMANTIC_SELECT_OPTIONS`](crate::semantic::MAX_SEMANTIC_SELECT_OPTIONS).
 #[derive(Debug, Clone, Deserialize)]
 pub struct RawSelectOption {
+    /// Option `value` attribute (may be empty).
     #[serde(default)]
     pub value: String,
+    /// Visible option label when distinct from `value`.
     #[serde(default)]
     pub label: Option<String>,
+    /// Whether this option is selected in the live control.
     #[serde(default)]
     pub selected: bool,
+    /// Whether this option is disabled in the live control.
     #[serde(default)]
     pub disabled: bool,
 }

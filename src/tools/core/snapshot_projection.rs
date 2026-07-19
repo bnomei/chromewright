@@ -41,9 +41,13 @@ pub(crate) struct SnapshotProjectionOutput {
 /// Rendered snapshot text, node list, scope metadata, and render timing.
 #[derive(Debug, Clone)]
 pub(crate) struct SnapshotProjection {
+    /// YAML accessibility tree text for the projected mode.
     pub snapshot: Arc<str>,
+    /// Interactive nodes with cursors corresponding to the snapshot text.
     pub nodes: Arc<[SnapshotNode]>,
+    /// Scope summary (mode, locality bias, frame failures, counts).
     pub scope: SnapshotScope,
+    /// Wall time spent rendering this projection, in microseconds.
     pub render_micros: u64,
 }
 

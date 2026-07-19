@@ -29,6 +29,7 @@ pub enum DispatchOutcome {
 ///
 /// Holds multi-key resolver state so sequences like `gg` and `gi` complete across events.
 pub struct Dispatcher {
+    /// Named Action bindings used for Normal-mode chords.
     pub keymap: TuiKeymap,
     resolver: KeyResolver,
 }

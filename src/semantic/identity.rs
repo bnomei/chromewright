@@ -144,7 +144,9 @@ pub(crate) struct SemanticIdentity {
 /// available. Interaction must not invent a selector from a fingerprint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub(crate) enum SemanticIdentityKind {
+    /// Unique author-supplied DOM `id` (preferred when available).
     AuthorId,
+    /// Structural fingerprint when no unique author id exists.
     Fingerprint,
 }
 
@@ -192,8 +194,11 @@ impl SemanticIdentity {
 /// Callers outside identity/resolution must treat the string form as opaque.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SemanticRefPayload {
+    /// Document identity the ref is scoped to.
     pub document_id: String,
+    /// Document revision the ref is scoped to (fail closed on mismatch).
     pub revision: String,
+    /// Author-id or fingerprint identity within that document revision.
     pub identity: SemanticIdentity,
 }
 

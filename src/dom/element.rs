@@ -81,31 +81,37 @@ pub struct AriaNode {
     pub active: Option<bool>,
 }
 
-/// Child of an AriaNode - either another AriaNode or a text string
+/// Child of an [`AriaNode`]: nested node or interleaved text from the accessibility tree.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(untagged)]
 pub enum AriaChild {
+    /// Text content adjacent to structural ARIA children.
     Text(String),
+    /// Nested accessibility node.
     Node(Box<AriaNode>),
 }
 
-/// ARIA checked state (true, false, or mixed)
+/// ARIA `checked` tri-state: boolean or the string `"mixed"`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(untagged)]
 pub enum AriaChecked {
+    /// True/false checked state.
     Bool(bool),
-    Mixed(String), // "mixed"
+    /// Mixed indeterminate state (serialized as `"mixed"`).
+    Mixed(String),
 }
 
-/// ARIA pressed state (true, false, or mixed)
+/// ARIA `pressed` tri-state: boolean or the string `"mixed"`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(untagged)]
 pub enum AriaPressed {
+    /// True/false pressed state.
     Bool(bool),
-    Mixed(String), // "mixed"
+    /// Mixed indeterminate state (serialized as `"mixed"`).
+    Mixed(String),
 }
 
-/// Box/visibility information for an element
+/// Box and viewport visibility information for an accessibility node.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct BoxInfo {
     /// Whether the element is visible (non-zero bounding box)

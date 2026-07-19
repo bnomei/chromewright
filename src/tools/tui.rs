@@ -50,24 +50,39 @@ pub struct TuiResult {
 #[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TuiData {
+    /// Rendered semantic content (markdown/outline/debug text).
     Content {
+        /// Bounded rendered text for the requested view.
         content: String,
     },
+    /// Current human selection as an exact `semantic_ref`, if any.
     Selection {
+        /// Selected component ref, or `None` when nothing is selected.
         semantic_ref: Option<String>,
     },
+    /// Agent attention pointer and optional message (Chrome is not mutated).
     Attention {
+        /// Attention target ref, or `None` when attention is cleared.
         semantic_ref: Option<String>,
+        /// Document id the attention was last bound to.
         document_id: Option<String>,
+        /// Document revision the attention was last bound to.
         revision: Option<String>,
+        /// Optional agent-facing message (bounded, never written to the page).
         message: Option<String>,
     },
+    /// Successful recapture identity after `tui_refresh`.
     Refresh {
+        /// New document id after capture.
         document_id: String,
+        /// New document revision after capture.
         revision: String,
+        /// Page URL after capture.
         url: String,
+        /// Page title after capture.
         title: String,
     },
+    /// Mutation/coordination request accepted with no additional payload.
     Acknowledged,
 }
 

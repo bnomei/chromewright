@@ -88,9 +88,13 @@ pub enum HintMode {
 /// the UI never shows metadata from a different capture than the body.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PublishedPage {
+    /// Semantic capture body (source of truth for content).
     pub document: SemanticDocument,
+    /// Chrome URL copied from the document at publish time.
     pub url: String,
+    /// Chrome title copied from the document at publish time.
     pub title: String,
+    /// Chrome revision token copied from the document at publish time.
     pub revision: String,
 }
 
@@ -144,6 +148,7 @@ pub struct ViewState {
     pub collapsed: HashSet<SemanticRef>,
     /// Forward-search matches (exact refs, document order).
     pub search_matches: Vec<SemanticRef>,
+    /// Index into `search_matches` for the current hit (wraps with n/N).
     pub search_index: usize,
     /// Last search query (for status).
     pub search_query: String,
@@ -236,16 +241,22 @@ impl ViewState {
 /// SemanticDocument (retained across Error).
 #[derive(Debug, Clone)]
 pub struct TuiState {
+    /// Page lifecycle shared with companion coordination vocabulary.
     pub lifecycle: Lifecycle,
+    /// Normal / Input / Hint interaction mode while Ready (or Error until dismissed).
     pub mode: InteractionMode,
     /// Last successfully published page (retained on Error).
     pub page: Option<PublishedPage>,
+    /// Viewport scroll, selection, collapse, search, and inspect overlays.
     pub view: ViewState,
+    /// Whether Chrome history can go back on the active tab.
     pub can_go_back: bool,
+    /// Whether Chrome history can go forward on the active tab.
     pub can_go_forward: bool,
     /// Active tab ordinal among open tabs as `(index_1based, count)`, when known.
     /// Shown in chrome as `2/5` left of the history arrows.
     pub tab_position: Option<(usize, usize)>,
+    /// Set when the user requests quit; the event loop exits after the current frame.
     pub should_quit: bool,
     /// Clipboard fallback text when OSC 52 is unavailable.
     pub clipboard_fallback: Option<String>,

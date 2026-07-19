@@ -326,6 +326,7 @@ impl ResolvedTarget {
 /// Outcome of exclusive target resolution: a live target or a structured tool failure.
 #[derive(Debug)]
 pub(crate) enum TargetResolution {
+    /// Target resolved against the current document revision (may include selector-rebound recovery).
     Resolved(ResolvedTarget),
     /// Soft failure already shaped as a tool result (invalid target, stale handle, etc.).
     Failure(ToolResult),
@@ -1092,10 +1093,16 @@ fn tool_safety_annotations(name: &str) -> ToolSafetyAnnotations {
 }
 
 /// Internal execution effect owned by the tool registry.
+///
+/// The companion coordinator uses this to decide whether a tool needs a browser
+/// mutation transaction, shared-state coordination only, or neither.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ToolEffect {
+    /// No browser or companion page mutation (reads, waits, snapshots).
     ReadOnly,
+    /// Updates shared TUI selection/attention without mutating the page.
     CoordinationOnly,
+    /// Mutates browser state or forces a capture that must serialize through the coordinator.
     BrowserMutation,
 }
 

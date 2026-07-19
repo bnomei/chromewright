@@ -198,9 +198,13 @@ fn bound_attention_message(message: Option<String>) -> Result<Option<String>, Co
 /// Atomically published metadata for a successful companion-triggered refresh.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RefreshPage {
+    /// Document id after settle + capture.
     pub document_id: String,
+    /// Document revision after settle + capture.
     pub revision: String,
+    /// Page URL after capture.
     pub url: String,
+    /// Page title after capture.
     pub title: String,
 }
 
@@ -693,10 +697,15 @@ impl SharedTuiState {
 /// Consistent read of lifecycle, document, selection, and attention.
 #[derive(Debug, Clone)]
 pub struct CoordinationSnapshot {
+    /// Shared page lifecycle (Ready / Loading / Error).
     pub lifecycle: Lifecycle,
+    /// Currently published SemanticDocument, if any.
     pub active: Option<SemanticDocument>,
+    /// Human selection as an exact `semantic_ref`, if any.
     pub selection: Option<SemanticRef>,
+    /// Agent attention pointer and optional message.
     pub attention: Attention,
+    /// Bounded ring of previously published documents for revisioned resources.
     pub retained: Vec<SemanticDocument>,
 }
 

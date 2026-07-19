@@ -172,12 +172,18 @@ const FOCUS_AFTER_JS: &str = r#"
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum FocusAfter {
+    /// Focus resolved to a revision-scoped cursor in the current document.
     Cursor {
+        /// Cursor for follow-up interaction tools.
         cursor: Cursor,
     },
+    /// Compact ARIA identity when a full cursor could not be minted.
     Summary {
+        /// HTML tag of the focused element.
         tag: String,
+        /// Computed accessibility role.
         role: String,
+        /// Accessible name when available.
         #[serde(skip_serializing_if = "Option::is_none")]
         name: Option<String>,
     },

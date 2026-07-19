@@ -71,6 +71,7 @@ pub trait PageDriver {
 
 /// Production driver over a shared [`BrowserSession`].
 pub struct SessionPageDriver<'a> {
+    /// Shared session borrowed for the duration of the driver call.
     pub session: &'a BrowserSession,
 }
 

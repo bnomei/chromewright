@@ -36,8 +36,11 @@ pub struct SemanticJsonProjection {
     pub document_id: String,
     /// Capture revision token.
     pub revision: String,
+    /// Page URL at capture time.
     pub url: String,
+    /// Page title at capture time.
     pub title: String,
+    /// Document `readyState` at capture time.
     pub ready_state: String,
     /// Total components in the tree.
     pub component_count: usize,
@@ -54,14 +57,19 @@ pub struct OutlineEntry {
     pub kind: String,
     /// Opaque fail-closed ref for this entry.
     pub semantic_ref: SemanticRef,
+    /// Landmark role name when `kind` is landmark.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub landmark: Option<String>,
+    /// Heading level when `kind` is heading.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub heading_level: Option<u8>,
+    /// Accessible or visible label when present.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// Primary text content when present.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
+    /// Link destination when the entry is a link.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub href: Option<String>,
     /// Whether the entry is keyboard-focusable in later TUI phases.
@@ -71,9 +79,13 @@ pub struct OutlineEntry {
 /// Outline projection over a document.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct OutlineProjection {
+    /// Capture document id.
     pub document_id: String,
+    /// Capture revision token.
     pub revision: String,
+    /// Page URL at capture time.
     pub url: String,
+    /// Page title at capture time.
     pub title: String,
     /// Ordered outline rows (landmarks, headings, lists, focusables).
     pub entries: Vec<OutlineEntry>,
@@ -82,7 +94,9 @@ pub struct OutlineProjection {
 /// Single-component projection (exact ref) including nested children.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ComponentProjection {
+    /// Document id the component was resolved against.
     pub document_id: String,
+    /// Document revision the component was resolved against.
     pub revision: String,
     /// Exact `semantic_ref` that was resolved (fail-closed).
     pub semantic_ref: SemanticRef,
@@ -93,29 +107,44 @@ pub struct ComponentProjection {
 /// One debug node with safe model metadata (kind, tag, attrs, depth, ref).
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct DebugNode {
+    /// Depth in the semantic tree walk.
     pub depth: usize,
+    /// Component kind name.
     pub kind: String,
+    /// Opaque fail-closed ref for this node.
     pub semantic_ref: SemanticRef,
+    /// Accessible or visible label when present.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// Primary text content when present.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
+    /// Source HTML tag when retained for debug.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tag: Option<String>,
+    /// Kind-specific attributes (same model as the full tree).
     #[serde(default, skip_serializing_if = "SemanticAttrs::is_empty")]
     pub attrs: SemanticAttrs,
+    /// Whether the node is keyboard-focusable.
     pub focusable: bool,
+    /// Direct child count (flat debug rows omit nested children arrays).
     pub child_count: usize,
 }
 
 /// Bounded debug projection of the full tree in document order.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct DebugProjection {
+    /// Capture document id.
     pub document_id: String,
+    /// Capture revision token.
     pub revision: String,
+    /// Page URL at capture time.
     pub url: String,
+    /// Page title at capture time.
     pub title: String,
+    /// Document `readyState` at capture time.
     pub ready_state: String,
+    /// Total components in the tree.
     pub component_count: usize,
     /// Flat depth-first debug rows (no nested children arrays).
     pub nodes: Vec<DebugNode>,
