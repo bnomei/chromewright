@@ -7,9 +7,9 @@
 
 use crate::semantic::{FragmentResolution, SemanticDocument, SemanticRef};
 use crate::tui::content::{
-    build_content_lines_with, first_visible_descendant_ref, focusable_refs, form_control_refs,
-    line_index_of, rendered_block_text, search_refs, subtree_refs, top_viewport_anchor,
-    ContentProjection, ViewportTopAnchor,
+    ContentProjection, ViewportTopAnchor, build_content_lines_with, first_visible_descendant_ref,
+    focusable_refs, form_control_refs, line_index_of, rendered_block_text, search_refs,
+    subtree_refs, top_viewport_anchor,
 };
 use crate::tui::driver::PageDriver;
 use crate::tui::hints::{HintMatch, LinkHint, assign_hints, match_hint};
@@ -131,6 +131,7 @@ fn urls_match_for_activate(a: &str, b: &str) -> bool {
 }
 
 impl Controller {
+    /// Test-only constructor over a fake browser backend and empty shared state.
     #[cfg(test)]
     pub fn new() -> Self {
         Self::with_shared(SharedTuiState::new(std::sync::Arc::new(
@@ -140,6 +141,7 @@ impl Controller {
         )))
     }
 
+    /// Production builds must use [`Self::with_shared`]; this panics if called.
     #[cfg(not(test))]
     pub fn new() -> Self {
         panic!("Controller::new requires a shared TUI runtime")
@@ -321,9 +323,7 @@ impl Controller {
             .document()
             .cloned()
             .ok_or_else(|| "no document".to_string())?;
-        let component = document
-            .resolve(submit_ref)
-            .map_err(|e| e.to_string())?;
+        let component = document.resolve(submit_ref).map_err(|e| e.to_string())?;
         if !is_submit_control(component) {
             return Err("form submit requires a submit button".into());
         }
@@ -449,11 +449,8 @@ impl Controller {
                             let width = self.state.view.viewport_width.max(1);
                             let content_line_of =
                                 move |document: &SemanticDocument, r: &SemanticRef| {
-                                    let lines = build_content_lines_with(
-                                        document,
-                                        &collapsed,
-                                        projection,
-                                    );
+                                    let lines =
+                                        build_content_lines_with(document, &collapsed, projection);
                                     let lines = if wrap {
                                         crate::tui::content::wrap_content_lines(&lines, width)
                                     } else {
@@ -642,13 +639,10 @@ impl Controller {
                         // Focus-only (text inputs): nothing to settle/capture.
                         return Ok(Some(PageActionOutcome::Retained));
                     }
-                    let same_document = driver
-                        .document_metadata()
-                        .ok()
-                        .is_some_and(|meta| {
-                            meta.document_id == before_id
-                                && urls_match_for_activate(&meta.url, &before_url)
-                        });
+                    let same_document = driver.document_metadata().ok().is_some_and(|meta| {
+                        meta.document_id == before_id
+                            && urls_match_for_activate(&meta.url, &before_url)
+                    });
                     if same_document {
                         // Same-doc patch path: settle + capture; scroll policy
                         // decided in finish_same_document_patch (fragment vs top).
@@ -870,9 +864,8 @@ impl Controller {
         }
 
         let focus_after_rebound = focus_after.and_then(|r| doc.rebind_surviving(&r).ok());
-        let applied_rebound = applied_field.and_then(|(r, v)| {
-            doc.rebind_surviving(&r).ok().map(|nr| (nr, v))
-        });
+        let applied_rebound =
+            applied_field.and_then(|(r, v)| doc.rebind_surviving(&r).ok().map(|nr| (nr, v)));
 
         self.state.view.collapsed = collapsed;
         self.state.view.search_matches = search_matches;
@@ -889,9 +882,7 @@ impl Controller {
 
         // Rebuild attention paint without scrolling (sync_attention_from_shared
         // would move the viewport when attention is set).
-        if let (Some(reference), Some(document)) =
-            (attention.as_ref(), self.state.document())
-        {
+        if let (Some(reference), Some(document)) = (attention.as_ref(), self.state.document()) {
             self.state.view.attention_paint = subtree_refs(document, reference);
         }
 
@@ -956,10 +947,7 @@ impl Controller {
             }
         }
 
-        if self
-            .state
-            .document()
-            .is_some_and(|d| d.truncated)
+        if self.state.document().is_some_and(|d| d.truncated)
             && self.state.view.status_message.is_none()
         {
             self.state
@@ -1061,20 +1049,17 @@ impl Controller {
                 let lines = self.lines_for_document(document);
                 // Prefer the target's own line; otherwise the first visible
                 // descendant (prose hides pure containers).
-                let (select_ref, line_idx) =
-                    if let Some(idx) = line_index_of(&lines, &target) {
-                        (target, idx)
-                    } else if let Some(desc) =
-                        first_visible_descendant_ref(document, &target, &lines)
-                    {
-                        let idx = line_index_of(&lines, &desc).unwrap_or(0);
-                        (desc, idx)
-                    } else {
-                        self.state
-                            .view
-                            .set_status("fragment target not represented");
-                        return;
-                    };
+                let (select_ref, line_idx) = if let Some(idx) = line_index_of(&lines, &target) {
+                    (target, idx)
+                } else if let Some(desc) = first_visible_descendant_ref(document, &target, &lines) {
+                    let idx = line_index_of(&lines, &desc).unwrap_or(0);
+                    (desc, idx)
+                } else {
+                    self.state
+                        .view
+                        .set_status("fragment target not represented");
+                    return;
+                };
 
                 self.state.view.selection = Some(select_ref);
                 self.scroll_line_with_top_margin(
@@ -1215,7 +1200,6 @@ fn link_href_fragment(component: &crate::semantic::SemanticComponent) -> Option<
 
 // Re-open Controller impl block for pure view operations.
 impl Controller {
-
     // --- Pure view operations (no driver) ---
 
     /// Flatten the active SemanticDocument into addressable content lines.
@@ -1558,17 +1542,14 @@ impl Controller {
         };
         match doc.resolve(sel) {
             Ok(c) => {
-                let text = crate::tui::content::format_inspect_panel(
-                    c,
-                    doc.document.revision.as_str(),
-                );
+                let text =
+                    crate::tui::content::format_inspect_panel(c, doc.document.revision.as_str());
                 let title = crate::tui::content::format_inspect_dom_path(doc, c);
                 self.state.view.inspect_text = Some(text);
                 self.state.view.inspect_title = Some(title);
             }
             Err(e) => {
-                self.state.view.inspect_text =
-                    Some(format!("inspect failed: {e}"));
+                self.state.view.inspect_text = Some(format!("inspect failed: {e}"));
                 self.state.view.inspect_title = None;
             }
         }
@@ -2342,8 +2323,7 @@ mod tests {
     #[test]
     fn edit_url_prefills_current_address() {
         let mut ctl = Controller::new();
-        ctl.state
-            .publish_page(text_doc("1", "t", "one"));
+        ctl.state.publish_page(text_doc("1", "t", "one"));
         assert_eq!(ctl.state.url(), "https://example.com/");
         ctl.enter_url_edit();
         match &ctl.state.mode {
@@ -2617,11 +2597,7 @@ mod tests {
         // Simulate finish_capture body: reconcile then apply fragment.
         let collapsed = ctl.state.view.collapsed.clone();
         let content_line_of = move |document: &SemanticDocument, r: &SemanticRef| {
-            let lines = build_content_lines_with(
-                document,
-                &collapsed,
-                ContentProjection::Prose,
-            );
+            let lines = build_content_lines_with(document, &collapsed, ContentProjection::Prose);
             line_index_of(&lines, r)
         };
         ctl.state.reconcile_after_capture(
@@ -2954,7 +2930,11 @@ mod tests {
         ctl.toggle_structure();
         assert!(ctl.state.view.projection.is_prose());
         assert_eq!(ctl.state.view.selection.as_ref(), Some(&text_ref));
-        assert!(!ctl.content_lines().iter().any(|l| l.text.contains("[main]")));
+        assert!(
+            !ctl.content_lines()
+                .iter()
+                .any(|l| l.text.contains("[main]"))
+        );
         // Collapse disabled in prose.
         ctl.toggle_collapse();
         assert_eq!(
@@ -3077,10 +3057,7 @@ mod tests {
     fn inspect_follows_selection_until_escape() {
         let doc = normalize_fixture(
             meta("1", "https://example.com/"),
-            vec![
-                raw_text("a", "first"),
-                raw_text("b", "second"),
-            ],
+            vec![raw_text("a", "first"), raw_text("b", "second")],
         )
         .expect("doc");
         let refs = doc.semantic_refs();
@@ -3091,14 +3068,20 @@ mod tests {
         ctl.inspect_selection();
         assert!(ctl.state.view.inspect_follow);
         let first = ctl.state.view.inspect_text.clone().expect("inspect open");
-        assert!(first.contains("\"first\"") || first.contains("first"), "{first}");
+        assert!(
+            first.contains("\"first\"") || first.contains("first"),
+            "{first}"
+        );
         assert!(first.contains("rev="), "{first}");
         assert!(!first.contains("Some("), "{first}");
         ctl.scroll_down();
         assert_eq!(ctl.state.view.selection.as_ref(), Some(&refs[1]));
         let second = ctl.state.view.inspect_text.clone().expect("still open");
         assert_ne!(first, second);
-        assert!(second.contains("\"second\"") || second.contains("second"), "{second}");
+        assert!(
+            second.contains("\"second\"") || second.contains("second"),
+            "{second}"
+        );
         let title = ctl
             .state
             .view
@@ -3262,64 +3245,64 @@ mod tests {
             roots.push(raw_text(&format!("pad-{index}"), &format!("pad {index}")));
         }
         roots.push(RawSemanticNode {
-                    kind: "landmark".into(),
-                    tag: Some("section".into()),
-                    id: Some("block".into()),
-                    unique_id: true,
-                    selector: None,
-                    text: None,
-                    href: None,
-                    landmark: Some("section".into()),
-                    heading_level: None,
-                    ordered: None,
-                    label: None,
-                    src: None,
-                    alt: None,
-                    name: None,
-                    value: None,
-                    input_type: None,
-                    placeholder: None,
-                    checked: None,
-                    disabled: None,
-                    required: None,
-                    readonly: None,
-                    multiple: None,
-                    button_type: None,
-                    options: vec![],
-                    children: {
-                        let mut kids = Vec::new();
-                        for index in 0..30 {
-                            kids.push(RawSemanticNode {
-                                kind: "heading".into(),
-                                tag: Some("h2".into()),
-                                id: Some(format!("h-{index}")),
-                                unique_id: true,
-                                selector: None,
-                                text: Some(format!("Heading {index}")),
-                                href: None,
-                                landmark: None,
-                                heading_level: Some(2),
-                                ordered: None,
-                                label: Some(format!("Heading {index}")),
-                                src: None,
-                                alt: None,
-                                name: None,
-                                value: None,
-                                input_type: None,
-                                placeholder: None,
-                                checked: None,
-                                disabled: None,
-                                required: None,
-                                readonly: None,
-                                multiple: None,
-                                button_type: None,
-                                options: vec![],
-                                children: vec![],
-                            });
-                        }
-                        kids
-                    },
-                });
+            kind: "landmark".into(),
+            tag: Some("section".into()),
+            id: Some("block".into()),
+            unique_id: true,
+            selector: None,
+            text: None,
+            href: None,
+            landmark: Some("section".into()),
+            heading_level: None,
+            ordered: None,
+            label: None,
+            src: None,
+            alt: None,
+            name: None,
+            value: None,
+            input_type: None,
+            placeholder: None,
+            checked: None,
+            disabled: None,
+            required: None,
+            readonly: None,
+            multiple: None,
+            button_type: None,
+            options: vec![],
+            children: {
+                let mut kids = Vec::new();
+                for index in 0..30 {
+                    kids.push(RawSemanticNode {
+                        kind: "heading".into(),
+                        tag: Some("h2".into()),
+                        id: Some(format!("h-{index}")),
+                        unique_id: true,
+                        selector: None,
+                        text: Some(format!("Heading {index}")),
+                        href: None,
+                        landmark: None,
+                        heading_level: Some(2),
+                        ordered: None,
+                        label: Some(format!("Heading {index}")),
+                        src: None,
+                        alt: None,
+                        name: None,
+                        value: None,
+                        input_type: None,
+                        placeholder: None,
+                        checked: None,
+                        disabled: None,
+                        required: None,
+                        readonly: None,
+                        multiple: None,
+                        button_type: None,
+                        options: vec![],
+                        children: vec![],
+                    });
+                }
+                kids
+            },
+        });
         let document = normalize_fixture(meta("1", "https://example.com/"), roots).expect("doc");
         let section = document
             .components()
@@ -3523,7 +3506,11 @@ mod tests {
         ctl.tab_focus(true);
         assert!(ctl.has_pending_page_action(), "tab-away queues apply_field");
         assert_eq!(
-            ctl.state.view.pending_form_values.get(&email).map(String::as_str),
+            ctl.state
+                .view
+                .pending_form_values
+                .get(&email)
+                .map(String::as_str),
             Some("a@b.co")
         );
         ctl.acknowledge_loading_frame();
@@ -3653,8 +3640,7 @@ mod tests {
         ctl.commit_form_field(&search, "portfolio");
         assert!(ctl.has_pending_page_action());
         ctl.acknowledge_loading_frame();
-        ctl.perform_pending_page_action(&mut driver)
-            .expect("apply");
+        ctl.perform_pending_page_action(&mut driver).expect("apply");
         assert!(matches!(ctl.state.mode, InteractionMode::Normal));
         assert_eq!(
             ctl.state.view.status_message.as_deref(),
@@ -3861,8 +3847,7 @@ mod tests {
 
         ctl.activate_selection().expect("activate hash link");
         ctl.acknowledge_loading_frame();
-        ctl.perform_pending_page_action(&mut driver)
-            .expect("run");
+        ctl.perform_pending_page_action(&mut driver).expect("run");
 
         assert!(ctl.state.lifecycle.is_ready());
         let heading_after = ctl
@@ -3904,14 +3889,20 @@ mod tests {
         let url = "https://getkirby.com/docs/guide";
         let mut before_nodes = Vec::new();
         for i in 0..12 {
-            before_nodes.push(raw_text(&format!("p{i}"), &format!("paragraph {i} body text")));
+            before_nodes.push(raw_text(
+                &format!("p{i}"),
+                &format!("paragraph {i} body text"),
+            ));
         }
         before_nodes.push(copy_button_node("Copy"));
         let before = normalize_fixture(meta("main:1", url), before_nodes).expect("before");
 
         let mut after_nodes = Vec::new();
         for i in 0..12 {
-            after_nodes.push(raw_text(&format!("p{i}"), &format!("paragraph {i} body text")));
+            after_nodes.push(raw_text(
+                &format!("p{i}"),
+                &format!("paragraph {i} body text"),
+            ));
         }
         after_nodes.push(copy_button_node("Copied!"));
         let after = normalize_fixture(meta("main:2", url), after_nodes).expect("after");
@@ -4005,10 +3996,7 @@ mod tests {
             Some(&top_after)
         );
         assert!(
-            driver
-                .activated
-                .iter()
-                .any(|(r, _)| r == button.as_str()),
+            driver.activated.iter().any(|(r, _)| r == button.as_str()),
             "button was clicked: {:?}",
             driver.activated
         );

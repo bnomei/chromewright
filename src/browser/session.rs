@@ -77,8 +77,11 @@ pub(crate) enum SessionOrigin {
 /// Snapshot of one browser tab for `tab_list` and tab-management tools.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TabInfo {
+    /// Stable backend tab id for `switch_tab` / `close_tab` (not a positional index).
     pub id: String,
+    /// Tab title from the browser target.
     pub title: String,
+    /// Tab URL from the browser target.
     pub url: String,
     /// Whether this tab is the session's active page target.
     pub active: bool,
@@ -89,8 +92,11 @@ pub struct TabInfo {
 pub struct ClosedTabSummary {
     /// Zero-based index of the closed tab in the pre-close tab list.
     pub index: usize,
+    /// Stable id of the closed tab.
     pub id: String,
+    /// Title captured at close time.
     pub title: String,
+    /// URL captured at close time.
     pub url: String,
     /// Active tab after close, when one remains.
     pub active_tab: Option<TabInfo>,

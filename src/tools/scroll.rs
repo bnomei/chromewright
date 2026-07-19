@@ -42,12 +42,14 @@ pub struct ViewportAfter {
 /// Document action result with scrolled delta and post-scroll viewport metrics.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ScrollOutput {
+    /// Document identity after the scroll (cache may be invalidated).
     #[serde(flatten)]
     pub result: DocumentActionResult,
     /// Actual pixels scrolled (may be less than requested near edges).
     pub scrolled: i64,
     /// Whether the viewport is at the bottom after scrolling.
     pub is_at_bottom: bool,
+    /// Human-readable scroll outcome for agent transcripts.
     pub message: String,
     /// Preferred post-scroll metrics field.
     #[serde(skip_serializing_if = "Option::is_none")]

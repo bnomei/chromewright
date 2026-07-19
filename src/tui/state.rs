@@ -25,10 +25,12 @@ pub enum Lifecycle {
 }
 
 impl Lifecycle {
+    /// True while a page-changing action owns the UI (blocks Normal keys).
     pub fn is_loading(&self) -> bool {
         matches!(self, Self::Loading { .. })
     }
 
+    /// True when the published page is settled and Normal commands may run.
     pub fn is_ready(&self) -> bool {
         matches!(self, Self::Ready)
     }
@@ -190,10 +192,12 @@ impl Default for ViewState {
 }
 
 impl ViewState {
+    /// Set the transient footer/status line (search feedback, action messages).
     pub fn set_status(&mut self, msg: impl Into<String>) {
         self.status_message = Some(msg.into());
     }
 
+    /// Clear the transient footer/status line.
     pub fn clear_status(&mut self) {
         self.status_message = None;
     }
@@ -264,6 +268,7 @@ impl Default for TuiState {
 }
 
 impl TuiState {
+    /// Empty Ready state with no published page.
     pub fn new() -> Self {
         Self::default()
     }
@@ -281,10 +286,12 @@ impl TuiState {
         }
     }
 
+    /// True when URL, search, or form editing owns the keyboard.
     pub fn is_input_mode(&self) -> bool {
         matches!(self.mode, InteractionMode::Input(_))
     }
 
+    /// True when two-key link/hint selection owns the keyboard.
     pub fn is_hint_mode(&self) -> bool {
         matches!(self.mode, InteractionMode::Hint(_))
     }
@@ -298,14 +305,17 @@ impl TuiState {
         matches!(self.mode, InteractionMode::Normal) && self.lifecycle.is_ready()
     }
 
+    /// Published page URL, or empty when no page is available.
     pub fn url(&self) -> &str {
         self.page.as_ref().map(|p| p.url.as_str()).unwrap_or("")
     }
 
+    /// Published page title, or empty when no page is available.
     pub fn title(&self) -> &str {
         self.page.as_ref().map(|p| p.title.as_str()).unwrap_or("")
     }
 
+    /// Published document revision token, or empty when no page is available.
     pub fn revision(&self) -> &str {
         self.page
             .as_ref()

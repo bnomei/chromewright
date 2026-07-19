@@ -1,4 +1,8 @@
 //! Opaque, fail-closed `semantic_ref` identities scoped to a document revision.
+//!
+//! Tokens are mintable only at capture time. Consumers treat the string as opaque;
+//! only document resolution may decode. Never retarget by text similarity when a
+//! ref is missing or the revision drifted.
 
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;

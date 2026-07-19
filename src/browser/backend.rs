@@ -55,8 +55,11 @@ fn session_close_result(total_tabs: usize, failures: Vec<String>) -> Result<()> 
 /// Backend-neutral tab identity used by `SessionBackend` list/activate/close paths.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TabDescriptor {
+    /// Stable target id from the CDP backend.
     pub id: String,
+    /// Tab title as reported by the backend.
     pub title: String,
+    /// Tab URL as reported by the backend.
     pub url: String,
 }
 

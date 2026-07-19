@@ -99,10 +99,14 @@ pub struct ExtractContentTool;
 /// Document result carrying extracted content, format label, and character length.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ExtractOutput {
+    /// Document identity after extraction.
     #[serde(flatten)]
     pub result: DocumentResult,
+    /// Extracted text or HTML (size-limited before return).
     pub content: String,
+    /// Content format label (`text` or `html`).
     pub format: String,
+    /// Character length of `content`.
     pub length: usize,
 }
 

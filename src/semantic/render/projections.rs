@@ -1,4 +1,8 @@
 //! Semantic JSON, outline, component, and debug projections.
+//!
+//! Structured views of a single [`SemanticDocument`] for agents and the TUI.
+//! Outline is landmark/heading biased; debug exposes tree depth and kinds without
+//! driving the browser.
 
 use crate::semantic::component::{SemanticAttrs, SemanticComponent, SemanticKind};
 use crate::semantic::document::SemanticDocument;

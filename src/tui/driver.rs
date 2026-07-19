@@ -75,6 +75,7 @@ pub struct SessionPageDriver<'a> {
 }
 
 impl<'a> SessionPageDriver<'a> {
+    /// Drive page actions through an existing shared session borrow.
     pub fn new(session: &'a BrowserSession) -> Self {
         Self { session }
     }
@@ -204,7 +205,10 @@ impl PageDriver for SessionPageDriver<'_> {
                     .as_deref()
                     .unwrap_or("text")
                     .to_ascii_lowercase();
-                if matches!(t.as_str(), "checkbox" | "radio" | "submit" | "button" | "reset") {
+                if matches!(
+                    t.as_str(),
+                    "checkbox" | "radio" | "submit" | "button" | "reset"
+                ) {
                     // Toggle / activate — may not navigate; controller still recaptures.
                     click_component(self.session, document, component, false)?;
                     Ok(true)
@@ -581,6 +585,7 @@ impl Default for FakePageDriver {
 }
 
 impl FakePageDriver {
+    /// Test driver seeded with an ordered list of capture pages.
     pub fn new(pages: Vec<SemanticDocument>) -> Self {
         Self {
             pages,

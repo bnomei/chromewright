@@ -68,10 +68,14 @@ pub struct SwitchTabTool;
 /// Selected and active tab summaries after a successful switch.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SwitchTabOutput {
+    /// Document identity of the newly active tab.
     #[serde(flatten)]
     pub result: DocumentActionResult,
+    /// Tab that was selected by `tab_id`.
     pub tab: TabSummary,
+    /// Active tab after switch (normally the same as `tab`).
     pub active_tab: TabSummary,
+    /// Human-readable outcome for agent transcripts.
     pub message: String,
 }
 

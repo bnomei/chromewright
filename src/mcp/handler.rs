@@ -1,4 +1,8 @@
 //! rmcp `ServerHandler` that dispatches registered browser tools on a shared session.
+//!
+//! Tools share one [`BrowserSession`] lifecycle. Companion builds
+//! (`from_companion`) also expose the bounded TUI resource catalog; standard
+//! stdio/`serve` servers stay tools-only even when the `tui` feature is compiled.
 
 use crate::browser::{BrowserSession, ConnectionOptions};
 use crate::mcp::{convert_result, mcp_internal_error};

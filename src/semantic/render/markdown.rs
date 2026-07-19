@@ -1,4 +1,8 @@
 //! Semantic Markdown projection from a normalized [`SemanticDocument`].
+//!
+//! Walks the component tree only (no browser or HTML). Preserves opaque
+//! `semantic_ref` markers where the projection contract includes them and
+//! truncates under shared render budgets.
 
 use crate::semantic::component::{SemanticComponent, SemanticKind};
 use crate::semantic::document::SemanticDocument;

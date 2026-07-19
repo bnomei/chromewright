@@ -29,11 +29,16 @@ pub struct NewTabTool;
 /// New and active tab summaries with the normalized URL that was opened.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct NewTabOutput {
+    /// Document identity of the new active tab.
     #[serde(flatten)]
     pub result: DocumentActionResult,
+    /// The newly opened managed tab.
     pub tab: TabSummary,
+    /// Active tab after open (normally the same as `tab`).
     pub active_tab: TabSummary,
+    /// Normalized URL loaded in the new tab.
     pub url: String,
+    /// Human-readable outcome for agent transcripts.
     pub message: String,
 }
 

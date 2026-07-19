@@ -1,4 +1,8 @@
 //! Element targeting input and resolution metadata for MCP tools.
+//!
+//! [`PublicTarget`] is the exclusive MCP input (selector or revision-scoped
+//! cursor). [`TargetEnvelope`] reports how resolution ran, including stale-cursor
+//! recovery. [`TargetStatus`] classifies post-mutation continuity for agents.
 
 use crate::dom::{Cursor, NodeRef};
 use schemars::{JsonSchema, Schema, SchemaGenerator};

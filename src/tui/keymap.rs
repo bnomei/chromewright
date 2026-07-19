@@ -49,18 +49,21 @@ pub struct KeyModifiers {
 }
 
 impl KeyModifiers {
+    /// No modifiers held.
     pub const NONE: Self = Self {
         ctrl: false,
         alt: false,
         shift: false,
     };
 
+    /// Control only (platform Ctrl / equivalent).
     pub const CTRL: Self = Self {
         ctrl: true,
         alt: false,
         shift: false,
     };
 
+    /// Shift only.
     pub const SHIFT: Self = Self {
         ctrl: false,
         alt: false,
@@ -73,6 +76,7 @@ impl KeyModifiers {
 pub struct KeySequence(pub Vec<KeyChord>);
 
 impl KeySequence {
+    /// One unmodified key as a complete sequence.
     pub fn single(code: KeyCode) -> Self {
         Self(vec![KeyChord {
             code,
@@ -80,6 +84,7 @@ impl KeySequence {
         }])
     }
 
+    /// One key with explicit modifiers as a complete sequence.
     pub fn with_modifiers(code: KeyCode, modifiers: KeyModifiers) -> Self {
         Self(vec![KeyChord { code, modifiers }])
     }
@@ -226,11 +231,7 @@ impl TuiKeymap {
             KeySequence::single(KeyCode::Down),
         );
         insert(&mut map, Action::ScrollUp, KeySequence::chars("k"));
-        insert_alias(
-            &mut map,
-            Action::ScrollUp,
-            KeySequence::single(KeyCode::Up),
-        );
+        insert_alias(&mut map, Action::ScrollUp, KeySequence::single(KeyCode::Up));
         insert(&mut map, Action::ScrollLeft, KeySequence::chars("h"));
         insert(&mut map, Action::ScrollRight, KeySequence::chars("l"));
         insert(&mut map, Action::HalfPageUp, KeySequence::chars("u"));
@@ -285,11 +286,7 @@ impl TuiKeymap {
         );
         // Vim-style z-prefix view commands.
         insert(&mut map, Action::ToggleWrap, KeySequence::chars("zw"));
-        insert(
-            &mut map,
-            Action::ToggleStructure,
-            KeySequence::chars("zs"),
-        );
+        insert(&mut map, Action::ToggleStructure, KeySequence::chars("zs"));
         insert(&mut map, Action::Inspect, KeySequence::chars("i"));
         insert(&mut map, Action::CopyBlock, KeySequence::chars("y"));
         insert(&mut map, Action::CopyRef, KeySequence::chars("Y"));
@@ -366,10 +363,7 @@ impl TuiKeymap {
 
     /// All sequences bound to an action (primary first).
     pub fn bindings_for(&self, action: Action) -> &[KeySequence] {
-        self.bindings
-            .get(&action)
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
+        self.bindings.get(&action).map(Vec::as_slice).unwrap_or(&[])
     }
 
     /// Resolve a complete chord sequence to an action.
@@ -486,14 +480,17 @@ pub struct KeyResolver {
 
 #[allow(dead_code)]
 impl KeyResolver {
+    /// Empty resolver with no pending chords.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Drop partial multi-key input (timeout, Escape, mode change).
     pub fn clear(&mut self) {
         self.pending.clear();
     }
 
+    /// Chords accumulated toward a multi-key binding, if any.
     pub fn pending(&self) -> &[KeyChord] {
         &self.pending
     }

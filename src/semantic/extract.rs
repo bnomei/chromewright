@@ -1,4 +1,8 @@
 //! Capture a semantic document from the shared browser session.
+//!
+//! Runs the embedded semantic DOM script, then normalizes under resource budgets.
+//! Independent of ARIA `DomTree` / `snapshot` extraction. Main-frame only; iframe
+//! content is out of scope for this capture path.
 
 use crate::browser::BrowserSession;
 use crate::dom::DocumentMetadata;

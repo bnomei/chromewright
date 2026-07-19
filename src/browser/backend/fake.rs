@@ -1,4 +1,7 @@
 //! Deterministic in-memory `SessionBackend` for unit tests without a live browser.
+//!
+//! Implements the full CDP-facing surface with fixed tabs, script results, and
+//! screenshot bytes so tool, cache, and recovery tests never require Chrome.
 
 use super::{
     ScreenshotCapture, ScreenshotImageMetrics, ScreenshotRequest, ScreenshotScale,

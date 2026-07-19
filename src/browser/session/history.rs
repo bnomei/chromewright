@@ -1,4 +1,8 @@
 //! History navigation with document-settle polling for back and forward tools.
+//!
+//! After CDP history moves, waits until the URL changes (or a short grace period)
+//! and `readyState === complete`. Callers still enforce `allow_unsafe` when the
+//! landing scheme is non-web and must revert rejected destinations.
 
 use super::BrowserSession;
 use crate::error::{BrowserError, Result};

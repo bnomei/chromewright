@@ -1,4 +1,7 @@
 //! Resource budgets for semantic document capture and normalization.
+//!
+//! Validators fail closed with [`BrowserError::ResourceLimitExceeded`] before an
+//! oversized tree, string, or option list enters a [`SemanticDocument`].
 
 use crate::error::{BrowserError, Result};
 

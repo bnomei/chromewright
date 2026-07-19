@@ -105,9 +105,12 @@ pub struct SelectTool;
 /// Targeted action result with the chosen value and visible selected text.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SelectOutput {
+    /// Document + before/after target continuity after selection.
     #[serde(flatten)]
     pub result: TargetedActionResult,
+    /// Option `value` that was selected.
     pub value: String,
+    /// Visible option label when available.
     pub selected_text: Option<String>,
 }
 

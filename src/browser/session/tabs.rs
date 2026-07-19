@@ -1,4 +1,8 @@
 //! Tab listing, activation, and managed-tab ownership in launch and attach modes.
+//!
+//! Launch mode seeds managed tabs from the process it owns. Attach mode starts
+//! with an empty managed set so pre-existing user tabs are never closed as
+//! session-owned unless the agent opens them through chromewright tools.
 
 use super::{BrowserSession, ClosedTabSummary, ManagedTabsCloseSummary, TabInfo};
 use crate::browser::backend::TabDescriptor;

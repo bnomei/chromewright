@@ -1,4 +1,8 @@
 //! MCP tool that lists open tabs with stable `tab_id` values for switch/close flows.
+//!
+//! Returns ordered [`TabSummary`] rows so agents can call `switch_tab` / `close_tab`
+//! without relying on ephemeral indices alone. Attach-degraded sessions still list
+//! tabs when the active page target is lost.
 
 use crate::error::Result;
 use crate::tools::{TabSummary, Tool, ToolContext, ToolResult};
@@ -16,9 +20,13 @@ pub struct TabListTool;
 /// Ordered tab summaries with active tab, count, and human-readable summary text.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct TabListOutput {
+    /// All open tabs in backend order with stable `tab_id` values.
     pub tabs: Vec<TabSummary>,
+    /// Currently active tab when the session has a resolvable page target.
     pub active_tab: Option<TabSummary>,
+    /// Number of tabs listed (`tabs.len()`).
     pub count: usize,
+    /// Short human-readable overview for agent transcripts.
     pub summary: String,
 }
 

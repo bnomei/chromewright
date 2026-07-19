@@ -31,6 +31,7 @@ pub struct CloseOutput {
     pub scope: String,
     /// Session origin label (`launch` vs connected/attach).
     pub session_origin: String,
+    /// Human-readable summary of what was closed or left open.
     pub message: String,
 }
 

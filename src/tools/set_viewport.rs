@@ -104,15 +104,21 @@ pub struct SetViewportTool;
 /// Applied emulation (or reset) with post-change viewport metrics for the target tab.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SetViewportOutput {
+    /// Document identity for the emulated tab (not necessarily the prior active tab).
     #[serde(flatten)]
     pub result: DocumentActionResult,
+    /// Tab that received the set/reset operation.
     pub tab_id: String,
+    /// True when CDP emulation was cleared rather than applied.
     pub reset: bool,
+    /// Active emulation after set; omitted after a successful reset.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub emulation: Option<ViewportEmulation>,
+    /// Measured layout metrics after the CDP operation.
     pub viewport_metrics_after: ViewportMetrics,
     /// Compatibility alias for `viewport_metrics_after`.
     pub viewport_after: ViewportMetrics,
+    /// Human-readable outcome for agent transcripts.
     pub message: String,
 }
 

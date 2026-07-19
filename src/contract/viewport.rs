@@ -1,4 +1,8 @@
 //! Viewport emulation requests and post-operation metrics for breakpoint testing.
+//!
+//! [`ViewportEmulationRequest`] applies CDP device metrics; large canvases need
+//! `allow_large_viewport`. Successful set/reset invalidates session snapshot
+//! caches so locality-biased reads do not reuse stale viewport bases.
 
 /// Measured viewport size and device pixel ratio after emulation or reset.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
@@ -48,14 +52,20 @@ pub enum ViewportOrientation {
 /// Session snapshot caches are invalidated after a successful apply.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ViewportEmulationRequest {
+    /// Emulated layout width in CSS pixels (validated against size caps).
     pub width: u32,
+    /// Emulated layout height in CSS pixels (validated against size caps).
     pub height: u32,
+    /// Device scale factor for CDP `Emulation.setDeviceMetricsOverride` (default 1.0).
     #[serde(default = "ViewportEmulationRequest::default_device_scale_factor")]
     pub device_scale_factor: f64,
+    /// When true, request a mobile metrics profile from CDP.
     #[serde(default)]
     pub mobile: bool,
+    /// When true, enable touch emulation for pointer events.
     #[serde(default)]
     pub touch: bool,
+    /// Optional screen orientation override.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub orientation: Option<ViewportOrientation>,
     /// When set, emulate on this tab; otherwise use the active page target.

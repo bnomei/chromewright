@@ -419,9 +419,13 @@ pub type ElementNode = AriaNode;
 /// Axis-aligned layout box in CSS pixels (legacy geometry helper; snapshots use [`BoxInfo`]).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct BoundingBox {
+    /// Left edge in CSS pixels.
     pub x: f64,
+    /// Top edge in CSS pixels.
     pub y: f64,
+    /// Width in CSS pixels.
     pub width: f64,
+    /// Height in CSS pixels.
     pub height: f64,
 }
 

@@ -1,4 +1,7 @@
 //! Normalized semantic component tree for TUI and shared renderers.
+//!
+//! Each [`SemanticComponent`] carries an opaque [`SemanticRef`], kind, text, and
+//! typed attrs. Renderers and the TUI consume only this model — never raw HTML.
 
 use crate::semantic::identity::SemanticRef;
 use serde::{Deserialize, Serialize};

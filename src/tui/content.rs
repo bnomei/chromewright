@@ -22,8 +22,11 @@ pub type FormValueOverlay = HashMap<SemanticRef, String>;
 /// component is addressable; structural padding lines may omit it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContentLine {
+    /// Display text for this row (may include structure chrome in Structure mode).
     pub text: String,
+    /// Selection/copy/hint identity when the line maps to an addressable component.
     pub semantic_ref: Option<SemanticRef>,
+    /// Component kind for theming and interaction (link, input, heading, …).
     pub kind: Option<SemanticKind>,
     /// Heading level 1–6 when `kind` is Heading (for theme hierarchy).
     pub heading_level: Option<u8>,
@@ -43,10 +46,12 @@ pub enum ContentProjection {
 }
 
 impl ContentProjection {
+    /// True when landmark/list chrome is hidden (reading mode).
     pub fn is_prose(self) -> bool {
         matches!(self, Self::Prose)
     }
 
+    /// True when DOM-like structure chrome and indent are shown.
     pub fn is_structure(self) -> bool {
         matches!(self, Self::Structure)
     }
@@ -264,22 +269,11 @@ fn push_component(
             if projection.is_structure() {
                 let role = landmark_name(component);
                 let marker = if is_collapsed { "▸" } else { "▾" };
-                push_line(
-                    lines,
-                    format!("{indent}{marker} [{role}]"),
-                    component,
-                    true,
-                );
+                push_line(lines, format!("{indent}{marker} [{role}]"), component, true);
             }
             // Prose: omit landmark chrome; still walk children (collapse only in structure).
             if projection.is_prose() || !is_collapsed {
-                push_siblings(
-                    &component.children,
-                    depth + 1,
-                    collapsed,
-                    projection,
-                    lines,
-                );
+                push_siblings(&component.children, depth + 1, collapsed, projection, lines);
             }
         }
         SemanticKind::Group => {
@@ -289,13 +283,7 @@ fn push_component(
                 push_line(lines, format!("{indent}[{label}]"), component, true);
             }
             if projection.is_prose() || !is_collapsed {
-                push_siblings(
-                    &component.children,
-                    depth + 1,
-                    collapsed,
-                    projection,
-                    lines,
-                );
+                push_siblings(&component.children, depth + 1, collapsed, projection, lines);
             }
         }
         SemanticKind::Heading => {
@@ -329,10 +317,7 @@ fn push_component(
                 let marker = if is_collapsed { "▸" } else { "▾" };
                 push_line(
                     lines,
-                    format!(
-                        "{indent}{marker} {}",
-                        if ordered { "ol" } else { "ul" }
-                    ),
+                    format!("{indent}{marker} {}", if ordered { "ol" } else { "ul" }),
                     component,
                     true,
                 );
@@ -357,13 +342,7 @@ fn push_component(
                         );
                         let item_collapsed = collapsed.contains(&child.semantic_ref);
                         if projection.is_prose() || !item_collapsed {
-                            push_siblings(
-                                &child.children,
-                                depth + 1,
-                                collapsed,
-                                projection,
-                                lines,
-                            );
+                            push_siblings(&child.children, depth + 1, collapsed, projection, lines);
                         }
                         index += 1;
                         let _ = next; // list items use sibling walk only for nested non-items
@@ -382,13 +361,7 @@ fn push_component(
                 true,
             );
             if projection.is_prose() || !is_collapsed {
-                push_siblings(
-                    &component.children,
-                    depth + 1,
-                    collapsed,
-                    projection,
-                    lines,
-                );
+                push_siblings(&component.children, depth + 1, collapsed, projection, lines);
             }
         }
         SemanticKind::Link => {
@@ -649,12 +622,17 @@ fn select_display_label(component: &SemanticComponent) -> Option<String> {
 }
 
 fn select_label_for_value(component: &SemanticComponent, value: &str) -> Option<String> {
-    component.attrs.options.iter().find(|o| o.value == value).map(|o| {
-        o.label
-            .clone()
-            .filter(|l| !l.is_empty())
-            .unwrap_or_else(|| o.value.clone())
-    })
+    component
+        .attrs
+        .options
+        .iter()
+        .find(|o| o.value == value)
+        .map(|o| {
+            o.label
+                .clone()
+                .filter(|l| !l.is_empty())
+                .unwrap_or_else(|| o.value.clone())
+        })
 }
 
 fn display_text(component: &SemanticComponent) -> String {
@@ -1025,7 +1003,10 @@ pub fn truncate_inspect_dom_path(path: &str, max_chars: usize) -> String {
         }
         if used + add > budget && kept.is_empty() {
             // Single segment still too long: hard clip the leaf.
-            return format!("{ellipsis} {}", clip_inspect(part, budget.saturating_sub(1)));
+            return format!(
+                "{ellipsis} {}",
+                clip_inspect(part, budget.saturating_sub(1))
+            );
         }
         kept.push(part);
         used += add;
@@ -1119,7 +1100,12 @@ fn inspect_kind_token(component: &SemanticComponent) -> &'static str {
 }
 
 fn inspect_kind_needed(component: &SemanticComponent) -> bool {
-    let tag = component.attrs.tag.as_deref().unwrap_or("").to_ascii_lowercase();
+    let tag = component
+        .attrs
+        .tag
+        .as_deref()
+        .unwrap_or("")
+        .to_ascii_lowercase();
     // No tag → identity already used the kind fallback; do not double-annotate.
     if tag.is_empty() {
         return false;
@@ -1556,9 +1542,16 @@ mod tests {
         )
         .expect("doc");
         let lines = build_content_lines_with(&doc, &HashSet::new(), ContentProjection::Prose);
-        let joined = lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join("\n");
+        let joined = lines
+            .iter()
+            .map(|l| l.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(joined.contains("a@b.co"), "{joined}");
-        assert!(joined.contains("Email") || joined.contains("email"), "{joined}");
+        assert!(
+            joined.contains("Email") || joined.contains("email"),
+            "{joined}"
+        );
         assert!(joined.contains("☑") || joined.contains("Agree"), "{joined}");
 
         // Overlay live edit value
@@ -1572,7 +1565,11 @@ mod tests {
             Some(&overlay),
             Some(&email),
         );
-        let joined = lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join("\n");
+        let joined = lines
+            .iter()
+            .map(|l| l.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(joined.contains("live@x"), "{joined}");
         // Soft caret is a trailing space inside the brackets while editing.
         assert!(
@@ -1587,7 +1584,6 @@ mod tests {
 
     #[test]
     fn copy_y_on_link_returns_resolved_href() {
-
         let doc = normalize_fixture(
             meta(),
             vec![RawSemanticNode {
@@ -2163,7 +2159,11 @@ mod tests {
             "prose hides list chrome"
         );
         assert!(prose.iter().any(|l| l.text.contains("# Title")));
-        assert!(prose.iter().any(|l| l.text.contains("- one") || l.text.contains("one")));
+        assert!(
+            prose
+                .iter()
+                .any(|l| l.text.contains("- one") || l.text.contains("one"))
+        );
         // Fully flat: no leading indent spaces on prose lines.
         assert!(prose.iter().all(|l| !l.text.starts_with(' ')));
     }
@@ -2179,10 +2179,7 @@ mod tests {
         };
         let wrapped = wrap_content_lines(std::slice::from_ref(&line), 4);
         assert_eq!(
-            wrapped
-                .iter()
-                .map(|l| l.text.as_str())
-                .collect::<Vec<_>>(),
+            wrapped.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(),
             vec!["abcd", "efgh", "ij"]
         );
     }

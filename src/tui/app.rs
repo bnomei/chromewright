@@ -23,8 +23,8 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use std::io::{self, Stdout, Write};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -313,11 +313,8 @@ fn run_loop(
             // padding + optional max-width for the markdown viewport.
             let outer_h = size.height.saturating_sub(2);
             let band_w = size.width.saturating_sub(1).max(1); // scrollbar column
-            let (vw, vh) = layout.content_viewport_size(
-                band_w,
-                outer_h,
-                controller.state.view.full_width,
-            );
+            let (vw, vh) =
+                layout.content_viewport_size(band_w, outer_h, controller.state.view.full_width);
             controller.set_viewport(vw, vh);
 
             terminal

@@ -102,6 +102,8 @@ impl RevisionId {
         }
         Ok(Self(value.to_owned()))
     }
+
+    /// Borrow the validated revision token.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -126,6 +128,8 @@ impl DocumentId {
         }
         Ok(Self(value.to_owned()))
     }
+
+    /// Borrow the validated document id token.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -134,7 +138,9 @@ impl DocumentId {
 /// Record that a historical capture left retention and must fail closed on lookup.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Eviction {
+    /// Document id of the dropped capture.
     pub document_id: String,
+    /// Revision of the dropped capture.
     pub revision: String,
 }
 
@@ -144,13 +150,18 @@ pub struct Eviction {
 /// validated it. Cleared when the reference no longer resolves after a publish.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Attention {
+    /// Exact component ref under attention, when set.
     pub semantic_ref: Option<SemanticRef>,
+    /// Document that validated the ref (must match active/retained capture).
     pub document_id: Option<String>,
+    /// Revision that validated the ref.
     pub revision: Option<String>,
+    /// Optional agent message shown with the highlight.
     pub message: Option<String>,
 }
 
 impl Attention {
+    /// True when a `semantic_ref` is currently highlighted.
     pub fn is_set(&self) -> bool {
         self.semantic_ref.is_some()
     }

@@ -19,6 +19,7 @@ pub struct UrlHistory {
 }
 
 impl UrlHistory {
+    /// Empty in-memory history (no disk load).
     pub fn new() -> Self {
         Self::default()
     }
@@ -136,6 +137,7 @@ impl UrlHistory {
             .map(|s| (*s).to_string())
     }
 
+    /// Most-recent-first URLs retained in memory (test inspection).
     #[cfg(test)]
     pub fn entries(&self) -> &[String] {
         &self.entries
@@ -191,7 +193,10 @@ mod tests {
         h.record("https://a.example/");
         assert_eq!(
             h.entries(),
-            &["https://a.example/".to_string(), "https://b.example/".to_string()]
+            &[
+                "https://a.example/".to_string(),
+                "https://b.example/".to_string()
+            ]
         );
     }
 

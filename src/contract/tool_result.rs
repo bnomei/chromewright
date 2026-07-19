@@ -1,4 +1,8 @@
 //! Internal tool execution result before MCP envelope conversion.
+//!
+//! Tool-local failures keep `success = false` with structured `data` so the MCP
+//! adapter can emit a normal `CallToolResult` error body. Infrastructure faults
+//! bypass this type and become MCP internal errors.
 
 use serde_json::Value;
 use std::collections::HashMap;

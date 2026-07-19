@@ -1,4 +1,8 @@
 //! Normalize browser-side semantic capture payloads into `SemanticDocument`.
+//!
+//! Maps raw JS extraction nodes into typed components, mints `semantic_ref`
+//! identities, enforces depth/count/string budgets, and drops or truncates
+//! overflow according to capture flags rather than panicking.
 
 use crate::dom::DocumentMetadata;
 use crate::error::{BrowserError, Result};

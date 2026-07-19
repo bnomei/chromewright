@@ -1,4 +1,7 @@
 //! Output budgets shared by semantic renderers.
+//!
+//! Caps total characters in Markdown/JSON/outline projections so long-lived TUI
+//! and MCP consumers never retain unbounded rendered strings.
 
 use crate::semantic::identity::SemanticRefError;
 use std::fmt;
@@ -26,6 +29,7 @@ pub struct RenderedOutput {
 }
 
 impl RenderedOutput {
+    /// Assemble a bounded projection labeled with source document identity.
     pub(crate) fn new(
         content: String,
         truncated: bool,

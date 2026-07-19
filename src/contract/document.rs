@@ -1,4 +1,8 @@
 //! Document and snapshot result envelopes shared by read and mutation tools.
+//!
+//! These types are the cross-tool serialized shape for identity (`document`),
+//! snapshot locality (`scope` / `SnapshotMode`), and post-mutation target
+//! continuity (`TargetedActionResult`). Prefer them over tool-local duplicates.
 
 use crate::contract::{TargetEnvelope, TargetStatus, ViewportMetrics};
 use crate::dom::{DocumentMetadata, SnapshotNode};

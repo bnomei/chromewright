@@ -61,19 +61,28 @@ pub enum ScreenshotScale {
 /// CSS-space rectangle used when mode is `region`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct ScreenshotRegion {
+    /// Left edge in CSS pixels relative to the layout origin.
     pub x: f64,
+    /// Top edge in CSS pixels relative to the layout origin.
     pub y: f64,
+    /// Capture width in CSS pixels (validated against size caps).
     pub width: f64,
+    /// Capture height in CSS pixels (validated against size caps).
     pub height: f64,
 }
 
 /// Clip actually applied to the capture, including coordinate space labeling.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct ScreenshotClip {
+    /// Coordinate space label (for example CSS vs device pixels).
     pub coordinate_space: String,
+    /// Applied left edge in the labeled coordinate space.
     pub x: f64,
+    /// Applied top edge in the labeled coordinate space.
     pub y: f64,
+    /// Applied width in the labeled coordinate space.
     pub width: f64,
+    /// Applied height in the labeled coordinate space.
     pub height: f64,
 }
 
@@ -112,16 +121,22 @@ pub struct ScreenshotTool;
 /// Artifact path/URI and capture metrics for a managed screenshot.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ScreenshotOutput {
+    /// Capture surface that was requested (viewport, full page, element, region).
     pub mode: ScreenshotMode,
+    /// Pixel scale mode used for the capture.
     pub scale: ScreenshotScale,
+    /// Tab that was captured when a `tab_id` was supplied or resolved.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tab_id: Option<String>,
     /// Session-scoped URI handle for the managed artifact.
     pub artifact_uri: String,
     /// Absolute path inside the session-managed store (not caller-chosen).
     pub artifact_path: String,
+    /// Image format label (PNG).
     pub format: String,
+    /// MIME type of the artifact bytes.
     pub mime_type: String,
+    /// Encoded image size in bytes (enforced by screenshot resource limits).
     pub byte_count: usize,
     /// Image width in pixels.
     pub width: u32,
@@ -131,6 +146,7 @@ pub struct ScreenshotOutput {
     pub css_width: f64,
     /// Capture height in CSS pixels.
     pub css_height: f64,
+    /// Page `devicePixelRatio` at capture time.
     pub device_pixel_ratio: f64,
     /// Effective pixel scale applied to the capture.
     pub pixel_scale: f64,

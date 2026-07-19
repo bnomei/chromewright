@@ -99,16 +99,21 @@ pub struct HoverTool;
 /// Lightweight identity of the element that received the hover.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct HoverElement {
+    /// Element tag name at hover time.
     pub tag_name: String,
+    /// Element `id` attribute when present.
     pub id: String,
+    /// Element `class` attribute when present.
     pub class_name: String,
 }
 
 /// Targeted action result plus the hovered element's identity.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct HoverOutput {
+    /// Document + before/after target continuity after hover.
     #[serde(flatten)]
     pub result: TargetedActionResult,
+    /// DOM identity summary of the hovered node.
     pub element: HoverElement,
 }
 

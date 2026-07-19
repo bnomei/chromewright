@@ -193,9 +193,12 @@ struct FocusSummary {
 /// Document action result with the pressed key and optional focus-after hint.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PressKeyOutput {
+    /// Document identity after the key event.
     #[serde(flatten)]
     pub result: DocumentActionResult,
+    /// Key that was dispatched (as requested by the tool input).
     pub key: String,
+    /// Focused element after the press when a lightweight probe succeeds.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub focus_after: Option<FocusAfter>,
 }

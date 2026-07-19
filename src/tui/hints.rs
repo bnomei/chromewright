@@ -27,9 +27,10 @@ pub fn is_hintable_component(component: &SemanticComponent) -> bool {
         return false;
     }
     match component.kind {
-        SemanticKind::Link | SemanticKind::Textarea | SemanticKind::Select | SemanticKind::Button => {
-            true
-        }
+        SemanticKind::Link
+        | SemanticKind::Textarea
+        | SemanticKind::Select
+        | SemanticKind::Button => true,
         SemanticKind::Input => {
             let t = component
                 .attrs
@@ -306,10 +307,7 @@ mod tests {
         let hints = assign_hints(&wrapped, 0, 50, &targets);
         assert_eq!(hints.len(), 2, "link + input, not one hint per wrap row");
         assert_eq!(
-            hints
-                .iter()
-                .filter(|h| h.semantic_ref == link_ref)
-                .count(),
+            hints.iter().filter(|h| h.semantic_ref == link_ref).count(),
             1,
             "multi-line link must get a single hint"
         );

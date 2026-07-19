@@ -1,4 +1,8 @@
 //! Bounded semantic document with revision-scoped reference index.
+//!
+//! Resolution of `semantic_ref` values is fail-closed against this capture's
+//! document id and revision. Fragment jumps (`#id`) map to components without
+//! rebinding across navigations.
 
 use crate::dom::DocumentMetadata;
 use crate::error::{BrowserError, Result};
@@ -420,7 +424,7 @@ fn accumulate_attr_text(
         ("button_type", attrs.button_type.as_deref()),
         ("tag", attrs.tag.as_deref()),
         ("element_id", attrs.element_id.as_deref()),
-        ] {
+    ] {
         if let Some(value) = value {
             validate_semantic_string(field, value)?;
             *total_text += value.chars().count();
@@ -652,8 +656,8 @@ mod tests {
         heading.attrs.element_id = Some("sec".into());
         heading.attrs.heading_level = Some(2);
 
-        let doc = SemanticDocument::from_components(meta("doc-a", "rev-1"), vec![heading])
-            .expect("doc");
+        let doc =
+            SemanticDocument::from_components(meta("doc-a", "rev-1"), vec![heading]).expect("doc");
         match doc.resolve_fragment("sec") {
             FragmentResolution::Target(r) => {
                 assert_eq!(r, doc.semantic_refs()[0]);
@@ -677,8 +681,8 @@ mod tests {
     fn from_components_truncated_sets_flag() {
         let full = SemanticDocument::from_components(meta("d", "r"), vec![]).expect("full");
         assert!(!full.truncated);
-        let partial =
-            SemanticDocument::from_components_truncated(meta("d", "r"), vec![], true).expect("partial");
+        let partial = SemanticDocument::from_components_truncated(meta("d", "r"), vec![], true)
+            .expect("partial");
         assert!(partial.truncated);
     }
 }

@@ -114,9 +114,12 @@ pub struct InputTool;
 /// Targeted action result echoing the text typed and whether clear was requested.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct InputOutput {
+    /// Document + before/after target continuity after typing.
     #[serde(flatten)]
     pub result: TargetedActionResult,
+    /// Text that was typed into the control.
     pub text: String,
+    /// Whether existing content was cleared before typing.
     pub clear: bool,
 }
 

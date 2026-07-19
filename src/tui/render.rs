@@ -865,8 +865,10 @@ mod tests {
     fn escape_in_normal_clears_sticky_search_footer() {
         let mut ctl = Controller::new();
         ctl.state.view.search_query = "space".into();
-        ctl.state.view.search_matches =
-            vec![SemanticRef::from_opaque("r1"), SemanticRef::from_opaque("r2")];
+        ctl.state.view.search_matches = vec![
+            SemanticRef::from_opaque("r1"),
+            SemanticRef::from_opaque("r2"),
+        ];
         ctl.state.view.search_index = 1;
         ctl.state.mode = InteractionMode::Normal;
         let theme = TuiTheme::new();

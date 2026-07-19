@@ -34,8 +34,10 @@ pub struct TuiParams {
 pub struct TuiResult {
     /// Whether the companion runtime handled the request (false when TUI is not co-hosted).
     pub available: bool,
+    /// Typed success payload when `available` is true and the tool succeeded.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<TuiData>,
+    /// Failure reason when the companion is unavailable or the tool failed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }

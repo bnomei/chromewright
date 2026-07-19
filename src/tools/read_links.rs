@@ -32,9 +32,12 @@ pub struct ReadLinksTool;
 /// Document result with collected links and total count.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ReadLinksOutput {
+    /// Document identity for the page that was scanned.
     #[serde(flatten)]
     pub result: DocumentResult,
+    /// Bounded list of anchors with raw and resolved URLs.
     pub links: Vec<Link>,
+    /// Number of links returned (`links.len()` after budgets).
     pub count: usize,
 }
 

@@ -39,6 +39,7 @@ pub enum ThemeRole {
 }
 
 impl ThemeRole {
+    /// Config/TOML key for this role (`link`, `h1`, `chrome_ready`, …).
     pub fn name(self) -> &'static str {
         match self {
             Self::Link => "link",
@@ -64,6 +65,7 @@ impl ThemeRole {
         }
     }
 
+    /// Parse a config/TOML role name; unknown names return `None`.
     pub fn from_name(name: &str) -> Option<Self> {
         match name {
             "link" => Some(Self::Link),
@@ -159,10 +161,12 @@ impl ThemePalette {
         Self { colors }
     }
 
+    /// Color assigned to `role`, if configured.
     pub fn get(&self, role: ThemeRole) -> Option<Color> {
         self.colors.get(&role).copied()
     }
 
+    /// Override the color for one semantic role.
     pub fn set(&mut self, role: ThemeRole, color: Color) {
         self.colors.insert(role, color);
     }
@@ -174,8 +178,8 @@ impl ThemePalette {
     ) -> Result<Self, ThemeError> {
         let mut next = self.clone();
         for (name, spec) in overrides {
-            let role = ThemeRole::from_name(name)
-                .ok_or_else(|| ThemeError::UnknownRole(name.clone()))?;
+            let role =
+                ThemeRole::from_name(name).ok_or_else(|| ThemeError::UnknownRole(name.clone()))?;
             let color = parse_color(spec)?;
             next.set(role, color);
         }
@@ -196,16 +200,19 @@ impl Default for TuiTheme {
 }
 
 impl TuiTheme {
+    /// Default palette mapped onto chrome and content style helpers.
     pub fn new() -> Self {
         Self {
             palette: ThemePalette::defaults(),
         }
     }
 
+    /// Build a theme from an explicit palette (config overlays, tests).
     pub fn with_palette(palette: ThemePalette) -> Self {
         Self { palette }
     }
 
+    /// Borrow the underlying role → color map.
     pub fn palette(&self) -> &ThemePalette {
         &self.palette
     }
@@ -222,34 +229,42 @@ impl TuiTheme {
         Style::default()
     }
 
+    /// Header mode/status glyph when Ready.
     pub fn chrome_mode(&self) -> Style {
         self.fg(ThemeRole::ChromeMode).add_modifier(Modifier::BOLD)
     }
 
+    /// Header/status style for Ready lifecycle.
     pub fn chrome_ready(&self) -> Style {
         self.fg(ThemeRole::ChromeReady)
     }
 
+    /// Header/status style for Loading lifecycle.
     pub fn chrome_loading(&self) -> Style {
         self.fg(ThemeRole::ChromeLoading)
     }
 
+    /// Header/status style for Error lifecycle.
     pub fn chrome_error(&self) -> Style {
         self.fg(ThemeRole::ChromeError).add_modifier(Modifier::BOLD)
     }
 
+    /// Soft chrome accents (wrap indicators, secondary chrome).
     pub fn chrome_wrap(&self) -> Style {
         self.fg(ThemeRole::Group)
     }
 
+    /// History affordance when back/forward is available.
     pub fn chrome_hist_enabled(&self) -> Style {
         self.fg(ThemeRole::ChromeReady)
     }
 
+    /// History affordance when back/forward is unavailable.
     pub fn chrome_hist_disabled(&self) -> Style {
         self.muted()
     }
 
+    /// Dim text for secondary content (images, disabled chrome).
     pub fn muted(&self) -> Style {
         self.fg(ThemeRole::Muted)
     }
@@ -265,18 +280,22 @@ impl TuiTheme {
         Style::default().bg(Color::Gray).fg(Color::Gray)
     }
 
+    /// Footer/status style for error messages.
     pub fn status_error(&self) -> Style {
         self.chrome_error()
     }
 
+    /// Footer/status style for in-flight actions.
     pub fn status_loading(&self) -> Style {
         self.chrome_loading()
     }
 
+    /// Footer/status style for success/ready feedback.
     pub fn status_ok(&self) -> Style {
         self.chrome_ready()
     }
 
+    /// Agent attention highlight over content lines.
     pub fn attention_overlay(&self) -> Style {
         // Background fill is the readable cue: fg-only was invisible on
         // colored headings (and image lines are muted gray). Selection still

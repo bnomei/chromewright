@@ -34,23 +34,32 @@ fn default_detail() -> InspectDetail {
 }
 
 /// Selector or cursor target, detail level, and optional computed style names to probe.
+///
+/// MCP clients send a tagged [`PublicTarget`]; deserialization expands it into the
+/// exclusive fields below for shared resolution.
 #[derive(Debug, Clone, Serialize)]
 pub struct InspectNodeParams {
+    /// CSS selector target (exclusive with cursor/index/node_ref).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub selector: Option<String>,
 
+    /// Interactive index target (legacy path; prefer cursor).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub index: Option<usize>,
 
+    /// Revision-scoped node reference from a prior snapshot.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node_ref: Option<NodeRef>,
 
+    /// Preferred revision-scoped cursor handoff from snapshot/inspect.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor: Option<Cursor>,
 
+    /// Compact vs full section payload (default compact).
     #[serde(default = "default_detail")]
     pub detail: InspectDetail,
 
+    /// Optional computed style property names to include in the layout section.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub style_names: Vec<String>,
 }
@@ -106,18 +115,28 @@ pub struct InspectNodeTool;
 /// Full inspect payload: target envelope, identity, a11y, form, layout, and optional sections.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct InspectNodeOutput {
+    /// Document identity at probe time.
     #[serde(flatten)]
     pub result: DocumentActionResult,
+    /// Resolved target including recovery status and follow-up handles.
     pub target: TargetEnvelope,
+    /// Tag, id, and class identity of the probed node.
     pub identity: InspectIdentity,
+    /// Accessibility role/name and related a11y fields.
     pub accessibility: InspectAccessibility,
+    /// Form control state when the node is an input-like element.
     pub form_state: InspectFormState,
+    /// Geometry and optional computed styles.
     pub layout: InspectLayout,
+    /// Surrounding DOM/context summary for agent reasoning.
     pub context: InspectContext,
+    /// Frame/document boundary information when the node is not in the main frame.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub boundary: Option<InspectBoundary>,
+    /// Extra detail sections when `detail` is not compact.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sections: Option<InspectSections>,
+    /// Field names omitted or shortened by resource limits.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub truncated_fields: Vec<String>,
 }

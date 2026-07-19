@@ -37,8 +37,10 @@ pub struct NavigateTool;
 /// Document action result with the normalized URL that was opened.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct NavigateOutput {
+    /// Document identity after navigation settled.
     #[serde(flatten)]
     pub result: DocumentActionResult,
+    /// Normalized URL that was opened (after safety checks).
     pub url: String,
 }
 

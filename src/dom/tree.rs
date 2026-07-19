@@ -15,45 +15,73 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 /// Revision-scoped reference to an actionable node in a snapshot.
+///
+/// Stale when `document_id` or `revision` no longer match the live page; tools
+/// fail closed or apply policy-gated rebinding rather than guessing by index alone.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct NodeRef {
+    /// Stable identity for the navigated document (not a URL).
     pub document_id: String,
+    /// Document revision token; changes invalidate cursors and cached snapshots.
     pub revision: String,
+    /// Index within the actionable node list for this revision.
     pub index: usize,
 }
 
 /// Reusable handoff payload for a resolved actionable node.
+///
+/// Produced by `snapshot` / inspect paths. Prefer the cursor over a bare CSS
+/// selector for follow-up interaction so tools can detect revision drift.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct Cursor {
+    /// Revision-scoped node identity for stale detection.
     pub node_ref: NodeRef,
+    /// Best-effort CSS selector captured at resolution time.
     pub selector: String,
+    /// Interactive index within the snapshot that produced this cursor.
     pub index: usize,
+    /// Accessibility role at capture time (diagnostic / display).
     pub role: String,
+    /// Accessible name at capture time (diagnostic / display).
     pub name: String,
 }
 
 /// Metadata about an iframe encountered during extraction.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
 pub struct FrameMetadata {
+    /// Frame ordinal in extraction order when known.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub index: Option<usize>,
+    /// Availability: same-origin extracted, cross-origin skipped, or error detail.
     pub status: String,
+    /// Frame URL when readable.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    /// Nested document id when the frame contributed nodes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub document_id: Option<String>,
+    /// Nested document revision when the frame contributed nodes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub revision: Option<String>,
 }
 
 /// Metadata for the extracted document.
+///
+/// Carried on nearly every tool envelope so agents can detect navigation and
+/// revision drift without a separate probe.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
 pub struct DocumentMetadata {
+    /// Stable identity for this navigated document (not a URL).
     pub document_id: String,
+    /// Revision token; main frame and optional iframe suffixes may be joined with `|`.
     pub revision: String,
+    /// Current page URL after the operation.
     pub url: String,
+    /// Document title from the page.
     pub title: String,
+    /// Browser `document.readyState` at capture time.
     pub ready_state: String,
+    /// Iframe availability summary from the last extraction, when any were seen.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub frames: Vec<FrameMetadata>,
 }
@@ -61,10 +89,15 @@ pub struct DocumentMetadata {
 /// Agent-facing summary of one actionable node in the current snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct SnapshotNode {
+    /// Full handoff cursor for follow-up tools.
     pub cursor: Cursor,
+    /// Same node identity as `cursor.node_ref` for compact references.
     pub node_ref: NodeRef,
+    /// Interactive index within this snapshot's actionable list.
     pub index: usize,
+    /// Accessibility role shown in the YAML tree.
     pub role: String,
+    /// Accessible name shown in the YAML tree.
     pub name: String,
 }
 

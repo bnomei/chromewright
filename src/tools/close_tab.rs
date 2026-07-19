@@ -23,9 +23,13 @@ pub struct CloseTabTool;
 /// Closed tab summary plus the tab that became active afterward.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CloseTabOutput {
+    /// Action label (`close_tab`) for agent transcripts.
     pub action: String,
+    /// Tab that was closed.
     pub closed_tab: TabSummary,
+    /// Successor active tab when one remains.
     pub active_tab: Option<TabSummary>,
+    /// Human-readable outcome for agent transcripts.
     pub message: String,
 }
 

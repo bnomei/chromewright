@@ -67,17 +67,28 @@ pub struct GetMarkdownTool;
 /// Paginated Markdown page plus document metadata and Readability fields.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct GetMarkdownOutput {
+    /// Document identity envelope for the extracted page.
     #[serde(flatten)]
     pub result: DocumentResult,
+    /// One page of main-content Markdown (char-offset slice of the full body).
     pub markdown: String,
+    /// Readability title (may differ slightly from live `document.title`).
     pub title: String,
+    /// Page URL used as part of the markdown cache key.
     pub url: String,
+    /// 1-based page index within the paginated full extraction.
     pub current_page: usize,
+    /// Total pages after applying the tool's page-size budget.
     pub total_pages: usize,
+    /// True when further pages remain after `current_page`.
     pub has_more_pages: bool,
+    /// Character length of this page's `markdown` slice.
     pub length: usize,
+    /// Author/byline when Readability supplies one.
     pub byline: String,
+    /// Short excerpt when Readability supplies one.
     pub excerpt: String,
+    /// Site name when Readability supplies one.
     pub site_name: String,
 }
 

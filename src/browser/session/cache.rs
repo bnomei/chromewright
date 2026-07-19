@@ -1,4 +1,9 @@
 //! Revision-keyed markdown and snapshot caches plus managed screenshot artifact storage.
+//!
+//! Markdown hits require matching document id, revision, and URL so SPA
+//! `pushState` without a revision bump still forces re-extraction. Snapshot
+//! entries baseline delta mode. Screenshots stay in a private per-session
+//! directory with a fixed retention cap; callers never choose output paths.
 
 use super::BrowserSession;
 use crate::browser::backend::{
@@ -157,6 +162,7 @@ pub struct ScreenshotArtifact {
 }
 
 impl ScreenshotArtifact {
+    /// Read stored PNG bytes from the managed path (tests only; panics on IO failure).
     #[cfg(test)]
     pub(crate) fn bytes(&self) -> Arc<[u8]> {
         Arc::<[u8]>::from(

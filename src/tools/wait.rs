@@ -329,16 +329,23 @@ pub struct WaitTool;
 /// Elapsed wait result with optional before/after target envelopes and status.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WaitOutput {
+    /// Document identity after the wait completed.
     #[serde(flatten)]
     pub result: DocumentActionResult,
+    /// Condition name that succeeded (`navigation_settled`, actionability, …).
     pub condition: String,
+    /// Wall time spent polling before success.
     pub elapsed_ms: u64,
+    /// Target resolved when the wait started (target waits only).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_before: Option<TargetEnvelope>,
+    /// Target after predicates held (target waits only).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_after: Option<TargetEnvelope>,
+    /// Continuity classification after a target wait succeeds.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_status: Option<TargetStatus>,
+    /// Baseline revision supplied for `revision_changed` waits.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub since_revision: Option<String>,
 }
