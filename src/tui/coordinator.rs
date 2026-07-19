@@ -4,7 +4,34 @@ use crate::browser::BrowserSession;
 use crate::semantic::{SemanticDocument, SemanticRef};
 use crate::tui::driver::{PageDriver, SessionPageDriver};
 use crate::tui::shared::{CoordinationError, PageActionTicket, RefreshPage, SharedTuiState};
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex};
+
+#[derive(Debug)]
+struct CompanionRequests {
+    state: Mutex<CompanionRequestState>,
+    drained: Condvar,
+}
+
+#[derive(Debug)]
+struct CompanionRequestState {
+    accepting: bool,
+    active: usize,
+}
+
+/// Keeps one accepted companion tool request counted until its blocking work ends.
+pub(crate) struct CompanionRequestGuard {
+    requests: Arc<CompanionRequests>,
+}
+
+impl Drop for CompanionRequestGuard {
+    fn drop(&mut self) {
+        let mut state = self.requests.state.lock().unwrap();
+        state.active = state.active.saturating_sub(1);
+        if state.active == 0 {
+            self.requests.drained.notify_all();
+        }
+    }
+}
 
 /// Result of successfully finalizing a companion browser mutation.
 pub enum FinalizeOutcome {
@@ -16,11 +43,22 @@ pub enum FinalizeOutcome {
 pub struct PageCoordinator {
     session: Arc<BrowserSession>,
     shared: SharedTuiState,
+    companion_requests: Arc<CompanionRequests>,
 }
 
 impl PageCoordinator {
     pub fn new(session: Arc<BrowserSession>, shared: SharedTuiState) -> Self {
-        Self { session, shared }
+        Self {
+            session,
+            shared,
+            companion_requests: Arc::new(CompanionRequests {
+                state: Mutex::new(CompanionRequestState {
+                    accepting: true,
+                    active: 0,
+                }),
+                drained: Condvar::new(),
+            }),
+        }
     }
 
     pub fn session(&self) -> &Arc<BrowserSession> {
@@ -39,6 +77,27 @@ impl PageCoordinator {
         action: impl Into<String>,
     ) -> Result<PageActionTicket, CoordinationError> {
         self.shared.begin_companion_page_action(action)
+    }
+
+    /// Count a companion tool request before it can be queued on the blocking pool.
+    pub(crate) fn begin_companion_request(&self) -> Option<CompanionRequestGuard> {
+        let mut state = self.companion_requests.state.lock().unwrap();
+        if !state.accepting {
+            return None;
+        }
+        state.active += 1;
+        Some(CompanionRequestGuard {
+            requests: self.companion_requests.clone(),
+        })
+    }
+
+    /// Reject new requests and wait until every previously accepted worker exits.
+    pub(crate) fn drain_companion_requests(&self) {
+        let mut state = self.companion_requests.state.lock().unwrap();
+        state.accepting = false;
+        while state.active != 0 {
+            state = self.companion_requests.drained.wait(state).unwrap();
+        }
     }
 
     pub fn capture_with_metadata_barrier<D: PageDriver>(
@@ -159,5 +218,45 @@ impl PageCoordinator {
     }
     pub fn clear(&self, ticket: PageActionTicket) -> Result<(), CoordinationError> {
         self.shared.clear_session(ticket)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::browser::backend::FakeSessionBackend;
+    use std::sync::mpsc;
+    use std::thread;
+
+    #[test]
+    fn companion_request_drain_waits_for_accepted_workers_and_closes_gate() {
+        let coordinator = Arc::new(PageCoordinator::new(
+            Arc::new(BrowserSession::with_test_backend(FakeSessionBackend::new())),
+            SharedTuiState::new(),
+        ));
+        let request = coordinator
+            .begin_companion_request()
+            .expect("request accepted before shutdown");
+        let (started_tx, started_rx) = mpsc::channel();
+        let (drained_tx, drained_rx) = mpsc::channel();
+        let draining = coordinator.clone();
+        let join = thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            draining.drain_companion_requests();
+            drained_tx.send(()).unwrap();
+        });
+
+        started_rx.recv().expect("drain started");
+        while coordinator.begin_companion_request().is_some() {
+            thread::yield_now();
+        }
+        assert!(drained_rx.try_recv().is_err(), "drain must wait for worker");
+        drop(request);
+        drained_rx.recv().expect("drain completed");
+        join.join().expect("drain thread");
+        assert!(
+            coordinator.begin_companion_request().is_none(),
+            "shutdown gate must remain closed"
+        );
     }
 }

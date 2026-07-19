@@ -278,9 +278,25 @@ impl ServerHandler for BrowserServer {
         #[cfg(feature = "tokio")]
         {
             let server = self.clone();
+            #[cfg(feature = "tui")]
+            let companion_request = server
+                .coordinator
+                .as_ref()
+                .map(|coordinator| coordinator.begin_companion_request());
             async move {
+                #[cfg(feature = "tui")]
+                let companion_request = match companion_request {
+                    Some(Some(request)) => Some(request),
+                    Some(None) => return Err(mcp_internal_error("TUI companion is shutting down")),
+                    None => None,
+                };
                 join_blocking_tool_result(
-                    tokio::task::spawn_blocking(move || server.execute_tool_sync(request)).await,
+                    tokio::task::spawn_blocking(move || {
+                        #[cfg(feature = "tui")]
+                        let _companion_request = companion_request;
+                        server.execute_tool_sync(request)
+                    })
+                    .await,
                 )
             }
         }

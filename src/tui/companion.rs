@@ -21,6 +21,7 @@ use std::sync::Arc;
 /// before the terminal restores raw mode.
 pub struct Companion {
     task: tokio::task::JoinHandle<()>,
+    coordinator: Arc<PageCoordinator>,
     #[cfg_attr(not(test), allow(dead_code))]
     address: SocketAddr,
     #[cfg_attr(not(test), allow(dead_code))]
@@ -67,7 +68,10 @@ pub fn start(
     listener.set_nonblocking(true).map_err(|e| e.to_string())?;
     let listener = tokio::net::TcpListener::from_std(listener).map_err(|e| e.to_string())?;
     let service = StreamableHttpService::new(
-        move || Ok(BrowserServer::from_companion(coordinator.clone())),
+        {
+            let coordinator = coordinator.clone();
+            move || Ok(BrowserServer::from_companion(coordinator.clone()))
+        },
         LocalSessionManager::default().into(),
         Default::default(),
     );
@@ -77,6 +81,7 @@ pub fn start(
     });
     Ok(Companion {
         task,
+        coordinator,
         address,
         path,
     })
@@ -95,9 +100,11 @@ impl Companion {
         &self.path
     }
 
-    /// Abort the serve task so the loopback listener becomes unreachable.
-    pub fn stop(self) {
+    /// Stop accepting requests, close the listener, then drain accepted tool workers.
+    pub async fn stop(self) {
         self.task.abort();
+        let _ = self.task.await;
+        self.coordinator.drain_companion_requests();
     }
 }
 
@@ -205,7 +212,7 @@ mod tests {
         assert_ne!(configured_status, 404, "configured path must be routed");
         assert_eq!(wrong_status, 404, "unconfigured path must not be routed");
 
-        companion.stop();
+        companion.stop().await;
         for _ in 0..40 {
             if std::net::TcpStream::connect(address).is_err() {
                 break;
@@ -331,7 +338,7 @@ mod tests {
         assert!(resource_uris.contains(&"chromewright://active/semantic.md"));
         assert!(resource_uris.contains(&"chromewright://tui/attention.json"));
 
-        companion.stop();
+        companion.stop().await;
         shared.deactivate_runtime();
     }
 
