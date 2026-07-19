@@ -839,7 +839,7 @@ impl Controller {
         }
     }
 
-    /// Toggle soft word-wrap. Off by default; enabling clears horizontal pan.
+    /// Toggle soft word-wrap. On by default; enabling clears horizontal pan.
     pub fn toggle_wrap(&mut self) {
         self.state.view.wrap = !self.state.view.wrap;
         if self.state.view.wrap {
@@ -2175,15 +2175,9 @@ mod tests {
         let mut ctl = Controller::new();
         ctl.state.publish_page(doc);
         ctl.set_viewport(20, 10);
-        assert!(!ctl.state.view.wrap);
-        let unwrapped = ctl.content_lines().len();
-        ctl.state.view.scroll_x = 12;
-        ctl.toggle_wrap();
+        // Wrap is on by default.
         assert!(ctl.state.view.wrap);
-        assert_eq!(ctl.state.view.scroll_x, 0);
-        assert_eq!(ctl.state.view.status_message.as_deref(), Some("wrap: on"));
         let wrapped = ctl.content_lines().len();
-        assert!(wrapped > unwrapped);
         assert!(
             ctl.content_lines()
                 .iter()
@@ -2194,7 +2188,14 @@ mod tests {
         ctl.toggle_wrap();
         assert!(!ctl.state.view.wrap);
         assert_eq!(ctl.state.view.status_message.as_deref(), Some("wrap: off"));
-        assert_eq!(ctl.content_lines().len(), unwrapped);
+        let unwrapped = ctl.content_lines().len();
+        assert!(wrapped > unwrapped);
+        ctl.state.view.scroll_x = 12;
+        ctl.toggle_wrap();
+        assert!(ctl.state.view.wrap);
+        assert_eq!(ctl.state.view.scroll_x, 0);
+        assert_eq!(ctl.state.view.status_message.as_deref(), Some("wrap: on"));
+        assert_eq!(ctl.content_lines().len(), wrapped);
     }
 
     #[test]

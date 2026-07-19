@@ -66,7 +66,7 @@ pub enum Action {
     SearchPrevious,
     /// `Space` — collapse / expand selected block.
     Collapse,
-    /// `zw` — toggle soft word-wrap of content lines (off by default).
+    /// `zw` — toggle soft word-wrap of content lines (on by default).
     ToggleWrap,
     /// `zs` — toggle prose vs structure content projection (prose by default).
     ToggleStructure,

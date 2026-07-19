@@ -43,7 +43,7 @@ selection, `h`/`l` horizontal pan, `u`/`d` or left/right arrows half-page view p
 `Ctrl-u`/`Ctrl-d` selection by half page, `gg`/`G` document ends, `gi` first form field
 (edit mode), `H`/`b`/`L` history, `r` reload, `w`/`q`/`x`/`t` tab actions, `o`/`O` URL
 entry, `/` forward search, `n` next match, `N` previous match, Space collapse
-(structure mode only), `zw` toggle soft word-wrap (off by default), `zs` toggle prose
+(structure mode only), `zw` toggle soft word-wrap (on by default), `zs` toggle prose
 vs structure projection (prose by default; Vim-style `z`-prefix view commands), `i`
 inspection, `y` copy (link/image URL or block text), `Y` semantic-ref copy, Tab/Shift-Tab
 focus (form fields stash typed values on Tab or Enter), Enter on a text field

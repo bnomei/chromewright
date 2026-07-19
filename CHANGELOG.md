@@ -9,13 +9,14 @@
   headless Chrome sessions, and exact fail-closed id-less element interaction.
 - Add the co-hosted loopback MCP companion with the complete `tui_*` tool
   family and bounded active/revisioned semantic resources.
-- Add TUI soft word-wrap toggled with `zw` (`toggle_wrap`), off by default; wrap reflows content lines to the viewport and disables horizontal pan while active.
+- Add TUI soft word-wrap toggled with `zw` (`toggle_wrap`), on by default; wrap reflows content lines to the viewport and disables horizontal pan while active.
 - Add terminal-native TUI color theme for headings, links, landmarks, controls, chrome lifecycle, and selection overlays.
 - Move TUI selection to in-page fragment targets (`#id`) after capture, including named anchors and `#top`.
 - Add prose (default) vs structure content projection toggled with `zs`; prose hides landmark/list/group chrome, flattens indent, disables collapse, and rebinds hidden container selection to the first visible descendant.
 
 ### Changed
 
+- Default TUI soft word-wrap to on (`zw` still toggles; off disables wrap and restores horizontal pan).
 - Show the active tab ordinal in the TUI header as `2/5` immediately left of the history arrows.
 - Align TUI muscle memory with [md-tui](https://github.com/henriklovhaug/md-tui) where safe: `s`/`S` link hints (aliases of `f`/`F`), arrow keys for selection and half-page pan, `b` history back; keep browser-first `f`/`h`/`l`/`t`/`o`/`q`. Keymap actions may bind multiple sequences; TOML overlay still replaces the whole action.
 - Drop the redundant `tui_query` companion alias; use `tui_render` for semantic markdown.

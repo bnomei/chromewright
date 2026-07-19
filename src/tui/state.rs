@@ -112,7 +112,7 @@ impl PublishedPage {
 /// Human selection and agent attention are independent exact refs. Collapse and
 /// search match lists also store exact refs so recapture can rebind survivors
 /// without fuzzy identity.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ViewState {
     /// Vertical scroll offset in content lines.
     pub scroll_y: usize,
@@ -122,7 +122,7 @@ pub struct ViewState {
     pub viewport_height: usize,
     /// Viewport width in columns.
     pub viewport_width: usize,
-    /// Soft-wrap long content lines to the viewport width (off by default).
+    /// Soft-wrap long content lines to the viewport width (on by default).
     pub wrap: bool,
     /// Content projection: prose (default) hides structural chrome; structure shows it.
     pub projection: ContentProjection,
@@ -157,6 +157,32 @@ pub struct ViewState {
     /// Tabbing away from a field stashes here so multi-field forms can be filled
     /// like Chrome before Enter on a submit button sends the form.
     pub pending_form_values: HashMap<SemanticRef, String>,
+}
+
+impl Default for ViewState {
+    fn default() -> Self {
+        Self {
+            scroll_y: 0,
+            scroll_x: 0,
+            viewport_height: 0,
+            viewport_width: 0,
+            wrap: true,
+            projection: ContentProjection::default(),
+            selection: None,
+            attention: None,
+            attention_paint: HashSet::new(),
+            collapsed: HashSet::new(),
+            search_matches: Vec::new(),
+            search_index: 0,
+            search_query: String::new(),
+            inspect_text: None,
+            inspect_title: None,
+            inspect_follow: false,
+            status_message: None,
+            hint_buffer: String::new(),
+            pending_form_values: HashMap::new(),
+        }
+    }
 }
 
 impl ViewState {

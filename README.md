@@ -225,7 +225,7 @@ Browser-first (Vimari) defaults, with [md-tui](https://github.com/henriklovhaug/
 | `n` | `search_next` | Repeat the last search forward. |
 | `N` | `search_previous` | Repeat the last search backward. |
 | `Space` | `collapse` | Collapse or expand the selected block. |
-| `zw` | `toggle_wrap` | Toggle soft word-wrap (off by default). When on, long lines wrap to the viewport and `h`/`l` horizontal pan is disabled. |
+| `zw` | `toggle_wrap` | Toggle soft word-wrap (on by default). When on, long lines wrap to the viewport and `h`/`l` horizontal pan is disabled. |
 | `zs` | `toggle_structure` | Toggle prose (default) vs structure projection. Prose hides landmark/list/group chrome and flattens indent; structure shows DOM-like containers. Collapse (`Space`) only works in structure mode. |
 | `i` | `inspect` | Open a compact inspect panel under the selected block; title is the full DOM path (`main > … > tag#id`), body has action fields and ref/rev; follows selection until Esc. |
 | `y` | `copy_block` | Copy selection: link/image URL (resolved), otherwise rendered block text (OSC 52). |
