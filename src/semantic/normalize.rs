@@ -108,14 +108,10 @@ pub fn normalize_capture(response: SemanticCaptureResponse) -> Result<SemanticDo
         )));
     }
 
-    if response.truncated {
-        return Err(BrowserError::resource_limit_exceeded(
-            "semantic_capture",
-            "semantic capture exceeded internal size bounds and was truncated",
-            "bounded complete capture",
-            "truncated capture",
-        ));
-    }
+    // Truncation is no longer a hard failure: large pages (DuckDuckGo, news
+    // sites) often hit MAX_COMPONENTS while still returning a usable prefix.
+    // Callers surface `document.truncated` as status instead of Error.
+    let was_truncated = response.truncated;
 
     let document = response.document;
     let scope = document_scope_from_url(&document.url);
@@ -134,7 +130,7 @@ pub fn normalize_capture(response: SemanticCaptureResponse) -> Result<SemanticDo
         1,
     )?;
 
-    SemanticDocument::from_components(document, roots)
+    SemanticDocument::from_components_truncated(document, roots, was_truncated)
 }
 
 /// Build a document from fixture-style raw nodes and explicit metadata.

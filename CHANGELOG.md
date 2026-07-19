@@ -56,6 +56,7 @@
 
 ### Fixed
 
+- Large-page semantic capture (e.g. duckduckgo.com) no longer fails navigation with `resource-semantic_capture`; truncated trees are published with status `capture truncated (page exceeded semantic bounds)`.
 - Esc in Normal mode clears sticky TUI `/search` footer (`/{query}  n/m`); Esc while typing `/…` still only cancels the prompt and keeps the prior pattern for `n`/`N`.
 - Semantic capture skips effectively hidden nodes (`display:none`, `visibility:hidden`, `[hidden]`, `aria-hidden`) so client-side filters like Holmes on builtwithkirby.com update the markdown list after search, not only the input value/URL.
 - TUI settle after navigate/reload/field apply waits for navigation completion and a quiet main-frame revision so the semantic body matches the updated URL (was capturing stale DOM while the address bar already moved).

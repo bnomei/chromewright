@@ -956,6 +956,16 @@ impl Controller {
             }
         }
 
+        if self
+            .state
+            .document()
+            .is_some_and(|d| d.truncated)
+            && self.state.view.status_message.is_none()
+        {
+            self.state
+                .view
+                .set_status("capture truncated (page exceeded semantic bounds)");
+        }
         let document = self.state.document().expect("patch published").clone();
         let selection = self.state.view.selection.clone();
         let _ = self.shared.publish_with_selection(document, selection);
@@ -1007,6 +1017,11 @@ impl Controller {
             }
             // Remember successful navigations for URL-bar Tab completion.
             self.url_history.record(&document.document.url);
+            if document.truncated {
+                self.state
+                    .view
+                    .set_status("capture truncated (page exceeded semantic bounds)");
+            }
         }
         // Drop stale inspect text; sticky follow rebuilds for the new selection.
         self.state.view.inspect_text = None;

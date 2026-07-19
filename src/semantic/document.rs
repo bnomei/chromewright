@@ -52,6 +52,11 @@ pub struct SemanticDocument {
     pub document: DocumentMetadata,
     /// Top-level semantic components in document order.
     pub roots: Vec<SemanticComponent>,
+    /// True when the browser-side extractor hit size bounds and returned a
+    /// partial tree. Callers may still publish/use the document; surface a
+    /// status so operators know the view is incomplete (e.g. large SPAs).
+    #[serde(default)]
+    pub truncated: bool,
     /// Precomputed index from opaque refs to depth-first component positions.
     #[serde(skip)]
     ref_index: HashMap<SemanticRef, Vec<usize>>,
@@ -64,7 +69,17 @@ impl SemanticDocument {
     /// Build a document from metadata and already-normalized roots, assigning refs and indexes.
     pub fn from_components(
         document: DocumentMetadata,
+        roots: Vec<SemanticComponent>,
+    ) -> Result<Self> {
+        Self::from_components_truncated(document, roots, false)
+    }
+
+    /// Like [`Self::from_components`], but records whether the browser capture
+    /// was truncated at extractor bounds.
+    pub fn from_components_truncated(
+        document: DocumentMetadata,
         mut roots: Vec<SemanticComponent>,
+        truncated: bool,
     ) -> Result<Self> {
         validate_document_metadata_strings(&document)?;
 
@@ -89,6 +104,7 @@ impl SemanticDocument {
         Ok(Self {
             document,
             roots,
+            truncated,
             ref_index,
             identity_index,
         })
@@ -655,5 +671,14 @@ mod tests {
             doc.resolve_fragment("%73ec"),
             FragmentResolution::Target(_)
         ));
+    }
+
+    #[test]
+    fn from_components_truncated_sets_flag() {
+        let full = SemanticDocument::from_components(meta("d", "r"), vec![]).expect("full");
+        assert!(!full.truncated);
+        let partial =
+            SemanticDocument::from_components_truncated(meta("d", "r"), vec![], true).expect("partial");
+        assert!(partial.truncated);
     }
 }
