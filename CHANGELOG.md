@@ -45,6 +45,7 @@
 
 ### Added
 
+- Loading header glyph spins through `◐◓◑◒` every 250 ms (background paint while CDP work blocks; full redraw while companion Loading).
 - Amp-style right-edge content scrollbar: solid block track/thumb (no line glyphs), outside the padded/capped markdown column.
 
 ### Changed

@@ -13,6 +13,13 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use std::time::{Duration, Instant};
+
+/// How often the Loading lifecycle glyph advances one quarter-turn.
+pub const LOADING_SPINNER_INTERVAL: Duration = Duration::from_millis(250);
+
+/// Quarter-circle frames for the Loading header glyph (`◐` → `◓` → `◑` → `◒`).
+const LOADING_SPINNER_FRAMES: &[&str] = &["◐", "◓", "◑", "◒"];
 
 /// Draw one frame of the terminal browser using built-in theme/layout defaults.
 #[allow(dead_code)] // Convenience for callers/tests that do not load a config theme.
@@ -683,14 +690,32 @@ fn truncate(s: &str, width: usize) -> String {
 /// Single-character lifecycle marker for the header (color carries the rest).
 ///
 /// - Ready: `●`
-/// - Loading: `◐`
+/// - Loading: spinning quarter-circle (`◐◓◑◒`), 250 ms per frame
 /// - Error: `✕`
 fn lifecycle_glyph(lifecycle: &Lifecycle) -> &'static str {
     match lifecycle {
         Lifecycle::Ready => "●",
-        Lifecycle::Loading { .. } => "◐",
+        Lifecycle::Loading { .. } => loading_spinner_glyph(Instant::now()),
         Lifecycle::Error { .. } => "✕",
     }
+}
+
+/// Loading spinner frame for `now` (wall clock; advances every
+/// [`LOADING_SPINNER_INTERVAL`]).
+pub fn loading_spinner_glyph(now: Instant) -> &'static str {
+    loading_spinner_glyph_at_ms(spinner_clock_ms(now))
+}
+
+fn spinner_clock_ms(now: Instant) -> u128 {
+    // Process-local origin so the sequence is stable for the TUI lifetime.
+    static ORIGIN: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    let origin = ORIGIN.get_or_init(Instant::now);
+    now.duration_since(*origin).as_millis()
+}
+
+fn loading_spinner_glyph_at_ms(ms: u128) -> &'static str {
+    let idx = (ms / LOADING_SPINNER_INTERVAL.as_millis()) as usize % LOADING_SPINNER_FRAMES.len();
+    LOADING_SPINNER_FRAMES[idx]
 }
 
 /// Build chrome text for tests (no terminal). Single browser-like bar.
@@ -774,11 +799,12 @@ mod tests {
     #[test]
     fn lifecycle_glyphs_are_single_chars() {
         assert_eq!(lifecycle_glyph(&Lifecycle::Ready), "●");
-        assert_eq!(
-            lifecycle_glyph(&Lifecycle::Loading {
-                action: "navigate".into()
-            }),
-            "◐"
+        let loading = lifecycle_glyph(&Lifecycle::Loading {
+            action: "navigate".into(),
+        });
+        assert!(
+            LOADING_SPINNER_FRAMES.contains(&loading),
+            "loading should be a spinner frame, got {loading}"
         );
         assert_eq!(
             lifecycle_glyph(&Lifecycle::Error {
@@ -787,9 +813,19 @@ mod tests {
             }),
             "✕"
         );
-        for g in ["●", "◐", "✕"] {
+        for g in LOADING_SPINNER_FRAMES.iter().chain(["●", "✕"].iter()) {
             assert_eq!(g.chars().count(), 1);
         }
+    }
+
+    #[test]
+    fn loading_spinner_advances_every_250ms() {
+        assert_eq!(loading_spinner_glyph_at_ms(0), "◐");
+        assert_eq!(loading_spinner_glyph_at_ms(249), "◐");
+        assert_eq!(loading_spinner_glyph_at_ms(250), "◓");
+        assert_eq!(loading_spinner_glyph_at_ms(500), "◑");
+        assert_eq!(loading_spinner_glyph_at_ms(750), "◒");
+        assert_eq!(loading_spinner_glyph_at_ms(1000), "◐");
     }
 
     #[test]

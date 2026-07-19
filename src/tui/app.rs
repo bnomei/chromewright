@@ -10,20 +10,23 @@ use crate::tui::config::TuiConfig;
 use crate::tui::controller::Controller;
 use crate::tui::dispatch::{DispatchOutcome, Dispatcher, chord_from_crossterm};
 use crate::tui::driver::SessionPageDriver;
-use crate::tui::render;
+use crate::tui::render::{self, LOADING_SPINNER_INTERVAL, loading_spinner_glyph};
 use crate::tui::shared::SharedTuiState;
-use crossterm::cursor::{Hide, Show};
+use crossterm::cursor::{Hide, MoveTo, Show};
 use crossterm::event::{self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyEventKind};
 use crossterm::execute;
+use crossterm::style::{Color as CtColor, Print, ResetColor, SetForegroundColor};
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use std::io::{self, Stdout};
+use std::io::{self, Stdout, Write};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::thread;
+use std::time::{Duration, Instant};
 
 /// Entry options for `chromewright tui`: keymap overlay and companion bind settings.
 #[derive(Debug, Clone, Default)]
@@ -303,7 +306,10 @@ fn run_loop(
         // work may now start. No action is executed in the key dispatcher.
         if controller.has_pending_page_action() {
             controller.acknowledge_loading_frame();
+            // Keep the header Loading glyph spinning while CDP work blocks.
+            let spinner = LoadingSpinnerGuard::start(size.width);
             let _ = controller.perform_pending_page_action(&mut driver);
+            drop(spinner);
             continue;
         }
 
@@ -311,7 +317,14 @@ fn run_loop(
             break;
         }
 
-        if event::poll(Duration::from_millis(100)).map_err(|e| e.to_string())? {
+        // While Loading (e.g. companion-driven), wake often enough to advance
+        // the spinner; otherwise a calmer 100 ms poll is fine.
+        let poll_for = if controller.state.lifecycle.is_loading() {
+            LOADING_SPINNER_INTERVAL
+        } else {
+            Duration::from_millis(100)
+        };
+        if event::poll(poll_for).map_err(|e| e.to_string())? {
             match event::read().map_err(|e| e.to_string())? {
                 Event::Key(key)
                     if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat =>
@@ -334,6 +347,56 @@ fn run_loop(
     }
 
     Ok(())
+}
+
+/// Background spinner for the header Loading glyph while CDP work blocks.
+///
+/// Ratatui cannot redraw during `perform_pending_page_action`, so this paints
+/// only the lifecycle cell (top-right) every [`LOADING_SPINNER_INTERVAL`].
+struct LoadingSpinnerGuard {
+    stop: Arc<AtomicBool>,
+    join: Option<thread::JoinHandle<()>>,
+}
+
+impl LoadingSpinnerGuard {
+    fn start(term_width: u16) -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&stop);
+        let join = thread::spawn(move || {
+            // Lifecycle glyph is the last cell of the header row (y = 0).
+            let x = term_width.saturating_sub(1);
+            let mut last = "";
+            while !flag.load(Ordering::Relaxed) {
+                let glyph = loading_spinner_glyph(Instant::now());
+                if glyph != last {
+                    // Match theme chrome_loading (ANSI yellow).
+                    let _ = execute!(
+                        io::stdout(),
+                        MoveTo(x, 0),
+                        SetForegroundColor(CtColor::Yellow),
+                        Print(glyph),
+                        ResetColor
+                    );
+                    let _ = io::stdout().flush();
+                    last = glyph;
+                }
+                thread::sleep(LOADING_SPINNER_INTERVAL);
+            }
+        });
+        Self {
+            stop,
+            join: Some(join),
+        }
+    }
+}
+
+impl Drop for LoadingSpinnerGuard {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.join.take() {
+            let _ = handle.join();
+        }
+    }
 }
 
 #[cfg(test)]
