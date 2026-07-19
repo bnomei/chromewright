@@ -277,18 +277,10 @@ fn draw_content(frame: &mut Frame, area: Rect, controller: &Controller, theme: &
         }
 
         let style = theme.line_style(line.kind, line.heading_level, selected, agent_attention);
-        let is_form_control = matches!(
-            line.kind,
-            Some(
-                crate::semantic::SemanticKind::Input
-                    | crate::semantic::SemanticKind::Textarea
-                    | crate::semantic::SemanticKind::Select
-                    | crate::semantic::SemanticKind::Button
-            )
-        );
-        // Pad attention / selected form rows to the full viewport width so the
-        // reverse or magenta bar is a solid strip (not a gap after short values).
-        if agent_attention || (selected && is_form_control) {
+        // Pad attention rows to the full viewport width so the magenta bar is a
+        // solid strip. Do **not** full-width-pad form controls — that left a long
+        // reverse trail and odd trailing cells without bg.
+        if agent_attention {
             let used: usize = spans
                 .iter()
                 .map(|s| s.content.chars().count())

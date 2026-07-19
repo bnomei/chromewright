@@ -21,7 +21,7 @@
 ### Changed
 
 - Enter on a text field (and Tab-away / blur) writes the value into the live DOM and same-document patches so live-search/filter UIs work without a submit button. Typing stays local until complete; submit buttons still send full multi-field forms.
-- Pad selected form control rows (and edit cursor) so reverse-video fills the field while editing.
+- Form control selection uses reverse only on the field text (no full-width pad or extra edit spaces that left a long bar / empty non-bg cell).
 - TUI content theme uses a clearer ANSI-16 role ladder (H1–H6, blue links, light-cyan forms, yellow hints, muted gray images) inspired by md-tui’s role idea, not a 1:1 color match; optional `[theme]` keys in `tui.toml` override individual roles.
 - Underline only the URL inside markdown-style link lines (`[label](url)`), not the whole link row.
 - TUI `f`/`F` hints cover form controls as well as links (text inputs open edit mode); multi-line/wrapped targets show a single label on the first row only.
