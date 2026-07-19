@@ -299,9 +299,9 @@ impl TuiTheme {
     pub fn content_style(&self, kind: Option<SemanticKind>, heading_level: Option<u8>) -> Style {
         match kind {
             Some(SemanticKind::Heading) => self.heading(heading_level.unwrap_or(2)),
-            Some(SemanticKind::Link) => self
-                .fg(ThemeRole::Link)
-                .add_modifier(Modifier::UNDERLINED),
+            // Link color only; underline is applied to the URL span in render
+            // (`[label](url)`), not the whole line.
+            Some(SemanticKind::Link) => self.fg(ThemeRole::Link),
             Some(SemanticKind::Image) => self.fg(ThemeRole::Image),
             Some(SemanticKind::Landmark) => {
                 self.fg(ThemeRole::Landmark).add_modifier(Modifier::BOLD)
@@ -466,11 +466,12 @@ mod tests {
     }
 
     #[test]
-    fn link_is_blue_underlined() {
+    fn link_is_blue_without_full_line_underline() {
         let theme = TuiTheme::new();
         let link = theme.content_style(Some(SemanticKind::Link), None);
         assert_eq!(link.fg, Some(Color::Blue));
-        assert!(link.add_modifier.contains(Modifier::UNDERLINED));
+        // Underline is applied only to the URL span in render, not the whole line.
+        assert!(!link.add_modifier.contains(Modifier::UNDERLINED));
     }
 
     #[test]

@@ -46,6 +46,47 @@ pub fn draw_with_theme(frame: &mut Frame, controller: &Controller, theme: &TuiTh
     }
 }
 
+/// Split a markdown-style link line so only the URL is underlined.
+///
+/// Expects content shaped like `[label](url)` (optional indent). When the
+/// pattern is missing (wrap continuations, odd capture), falls back to a
+/// single non-underlined span with `base`.
+fn link_line_spans(text: &str, base: Style) -> Vec<Span<'static>> {
+    use ratatui::style::Modifier;
+    if let Some((prefix, url, suffix)) = split_markdown_link_url(text) {
+        let url_style = base.add_modifier(Modifier::UNDERLINED);
+        let mut out = Vec::with_capacity(3);
+        if !prefix.is_empty() {
+            out.push(Span::styled(prefix.to_string(), base));
+        }
+        if !url.is_empty() {
+            out.push(Span::styled(url.to_string(), url_style));
+        }
+        if !suffix.is_empty() {
+            out.push(Span::styled(suffix.to_string(), base));
+        }
+        if out.is_empty() {
+            out.push(Span::styled(text.to_string(), base));
+        }
+        out
+    } else {
+        // No `](url)` segment visible — keep link color without underline.
+        vec![Span::styled(text.to_string(), base)]
+    }
+}
+
+/// Locate `](url)` in a link display line. Returns `(before_url, url, after_url)`.
+fn split_markdown_link_url(text: &str) -> Option<(&str, &str, &str)> {
+    let open = text.find("](")?;
+    let url_start = open + 2;
+    let rest = text.get(url_start..)?;
+    let close_rel = rest.find(')')?;
+    let url = &rest[..close_rel];
+    let suffix = &rest[close_rel..]; // includes `)`
+    let prefix = &text[..url_start]; // includes `](`
+    Some((prefix, url, suffix))
+}
+
 /// Single-line browser chrome: tabs · history · location · title · lifecycle/mode (color only).
 fn draw_chrome(frame: &mut Frame, area: Rect, controller: &Controller, theme: &TuiTheme) {
     let state = &controller.state;
@@ -232,7 +273,12 @@ fn draw_content(frame: &mut Frame, area: Rect, controller: &Controller, theme: &
                 text.push_str(&" ".repeat(width - used));
             }
         }
-        spans.push(Span::styled(text, style));
+        // Links: underline only the URL inside `](…)` so labels stay clean.
+        if line.kind == Some(crate::semantic::SemanticKind::Link) {
+            spans.extend(link_line_spans(&text, style));
+        } else {
+            spans.push(Span::styled(text, style));
+        }
         text_lines.push(Line::from(spans));
     }
 
@@ -673,6 +719,30 @@ mod tests {
         let ctl = Controller::new();
         let theme = TuiTheme::new();
         assert!(search_status_line(&ctl.state, &theme).is_none());
+    }
+
+    #[test]
+    fn split_markdown_link_url_isolates_href() {
+        let (pre, url, suf) = split_markdown_link_url("  [Click here](https://example.com/x)").unwrap();
+        assert_eq!(pre, "  [Click here](");
+        assert_eq!(url, "https://example.com/x");
+        assert_eq!(suf, ")");
+        assert!(split_markdown_link_url("plain text").is_none());
+        assert!(split_markdown_link_url("](no-open").is_none());
+    }
+
+    #[test]
+    fn link_line_spans_underline_only_url() {
+        use ratatui::style::{Color, Modifier, Style};
+        let base = Style::default().fg(Color::Blue);
+        let spans = link_line_spans("[Go](/path)", base);
+        assert_eq!(spans.len(), 3);
+        assert_eq!(spans[0].content.as_ref(), "[Go](");
+        assert!(!spans[0].style.add_modifier.contains(Modifier::UNDERLINED));
+        assert_eq!(spans[1].content.as_ref(), "/path");
+        assert!(spans[1].style.add_modifier.contains(Modifier::UNDERLINED));
+        assert_eq!(spans[2].content.as_ref(), ")");
+        assert!(!spans[2].style.add_modifier.contains(Modifier::UNDERLINED));
     }
 
     #[test]
