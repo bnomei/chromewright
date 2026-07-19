@@ -87,10 +87,7 @@ fn run_tui_with_config_and_companion(
     let companion = crate::tui::companion::start(coordinator.clone(), path, port)?;
     let result = run_loop(coordinator, config, &mut terminal);
     shared.deactivate_runtime();
-    // No browser/session teardown or terminal restoration may race an accepted
-    // companion tool worker. `block_in_place` leaves Tokio workers available to
-    // cancel the listener and complete already-running blocking requests.
-    tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(companion.stop()));
+    companion.stop();
     let restore_result = terminal.restore().map_err(|e| e.to_string());
 
     // Do not mask the application failure with a secondary cleanup failure.

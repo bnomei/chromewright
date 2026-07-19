@@ -14,13 +14,15 @@ use rmcp::transport::streamable_http_server::{
 };
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener};
 use std::sync::Arc;
+use std::thread::JoinHandle;
 
-/// Running loopback MCP companion: HTTP task handle plus the bound address/path.
+/// Running loopback MCP companion: owned HTTP runtime plus the bound address/path.
 ///
-/// Drop is not enough — call [`Companion::stop`] so the listener is aborted
-/// before the terminal restores raw mode.
+/// [`Companion::stop`] performs explicit shutdown; `Drop` performs the same
+/// drain-and-join sequence during unwinding.
 pub struct Companion {
-    task: tokio::task::JoinHandle<()>,
+    shutdown: Option<tokio::sync::oneshot::Sender<()>>,
+    thread: Option<JoinHandle<()>>,
     coordinator: Arc<PageCoordinator>,
     #[cfg_attr(not(test), allow(dead_code))]
     address: SocketAddr,
@@ -66,21 +68,35 @@ pub fn start(
         ));
     }
     listener.set_nonblocking(true).map_err(|e| e.to_string())?;
-    let listener = tokio::net::TcpListener::from_std(listener).map_err(|e| e.to_string())?;
-    let service = StreamableHttpService::new(
-        {
-            let coordinator = coordinator.clone();
-            move || Ok(BrowserServer::from_companion(coordinator.clone()))
-        },
-        LocalSessionManager::default().into(),
-        Default::default(),
-    );
-    let router = Router::new().nest_service(&path, service);
-    let task = tokio::spawn(async move {
-        let _ = axum::serve(listener, router).await;
-    });
+    let (shutdown, shutdown_rx) = tokio::sync::oneshot::channel();
+    let service_coordinator = coordinator.clone();
+    let service_path = path.clone();
+    let thread = std::thread::Builder::new()
+        .name("chromewright-tui-companion".into())
+        .spawn(move || {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("build TUI companion runtime");
+            runtime.block_on(async move {
+                let listener = tokio::net::TcpListener::from_std(listener)
+                    .expect("convert TUI companion listener");
+                let service = StreamableHttpService::new(
+                    move || Ok(BrowserServer::from_companion(service_coordinator.clone())),
+                    LocalSessionManager::default().into(),
+                    Default::default(),
+                );
+                let router = Router::new().nest_service(&service_path, service);
+                tokio::select! {
+                    _ = axum::serve(listener, router) => {}
+                    _ = shutdown_rx => {}
+                }
+            });
+        })
+        .map_err(|e| format!("failed to start TUI MCP companion runtime: {e}"))?;
     Ok(Companion {
-        task,
+        shutdown: Some(shutdown),
+        thread: Some(thread),
         coordinator,
         address,
         path,
@@ -100,11 +116,25 @@ impl Companion {
         &self.path
     }
 
-    /// Stop accepting requests, close the listener, then drain accepted tool workers.
-    pub async fn stop(self) {
-        self.task.abort();
-        let _ = self.task.await;
+    /// Stop accepting requests, drain accepted tool workers, and join the HTTP runtime.
+    pub fn stop(mut self) {
+        self.stop_inner();
+    }
+
+    fn stop_inner(&mut self) {
         self.coordinator.drain_companion_requests();
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
+        }
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+impl Drop for Companion {
+    fn drop(&mut self) {
+        self.stop_inner();
     }
 }
 
@@ -212,7 +242,7 @@ mod tests {
         assert_ne!(configured_status, 404, "configured path must be routed");
         assert_eq!(wrong_status, 404, "unconfigured path must not be routed");
 
-        companion.stop().await;
+        companion.stop();
         for _ in 0..40 {
             if std::net::TcpStream::connect(address).is_err() {
                 break;
@@ -225,6 +255,27 @@ mod tests {
             "listener must be unreachable after stop"
         );
         shared.deactivate_runtime();
+    }
+
+    #[test]
+    fn companion_drop_is_panic_safe_and_closes_listener() {
+        if !loopback_bind_available() {
+            return;
+        }
+        let (session, _shared) = active_companion_session();
+        let companion = start(session, "/mcp".into(), 0).expect("start");
+        let address = companion.address();
+
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _companion = companion;
+            panic!("simulated TUI unwind");
+        }));
+
+        assert!(unwind.is_err());
+        assert!(
+            std::net::TcpStream::connect(address).is_err(),
+            "listener must be unreachable after unwinding drop"
+        );
     }
 
     #[tokio::test]
@@ -338,7 +389,7 @@ mod tests {
         assert!(resource_uris.contains(&"chromewright://active/semantic.md"));
         assert!(resource_uris.contains(&"chromewright://tui/attention.json"));
 
-        companion.stop().await;
+        companion.stop();
         shared.deactivate_runtime();
     }
 
