@@ -140,7 +140,8 @@ impl PageActionJob {
 pub(crate) struct PreparedPageAction {
     pending: PendingPageAction,
     result: Result<Option<PageActionOutcome>, String>,
-    metadata: Option<((bool, bool), Option<(usize, usize)>)>,
+    history: (bool, bool),
+    tab_position: Option<(usize, usize)>,
 }
 
 /// Compare URLs for same-document activate short-circuit (ignore trailing slash / fragment).
@@ -766,20 +767,13 @@ impl Controller {
                 PageCoordinator::capture_with_metadata_barrier(driver)?,
             ))))
         })();
-        let metadata = matches!(
-            &result,
-            Ok(Some(PageActionOutcome::Captured(_))) | Ok(Some(PageActionOutcome::Patched { .. }))
-        )
-        .then(|| {
-            (
-                driver.history_availability().unwrap_or((false, false)),
-                driver.tab_position().unwrap_or(None),
-            )
-        });
+        let history = driver.history_availability().unwrap_or((false, false));
+        let tab_position = driver.tab_position().unwrap_or(None);
         PreparedPageAction {
             pending,
             result,
-            metadata,
+            history,
+            tab_position,
         }
     }
 
@@ -791,12 +785,11 @@ impl Controller {
         let PreparedPageAction {
             pending,
             result,
-            metadata,
+            history,
+            tab_position,
         } = prepared;
-        if let Some((history, tab_position)) = metadata {
-            self.state.set_history_availability(history.0, history.1);
-            self.state.set_tab_position(tab_position);
-        }
+        self.state.set_history_availability(history.0, history.1);
+        self.state.set_tab_position(tab_position);
         match result {
             Ok(Some(PageActionOutcome::Captured(doc))) => {
                 let saved_state = self.state.clone();
@@ -896,6 +889,23 @@ impl Controller {
             return;
         }
         self.state.enter_error(action, message);
+    }
+
+    /// Fail browser work that was claimed but never submitted to a worker.
+    pub(crate) fn fail_pending_page_action(&mut self, message: String) -> Result<(), String> {
+        let Some(pending) = self.pending_page_action.take() else {
+            return Ok(());
+        };
+        if let Err(error) = self.coordinator.shared().fail_page_action(
+            pending.ticket,
+            pending.action.clone(),
+            message.clone(),
+        ) {
+            self.synchronize_companion_state();
+            return Err(error.to_string());
+        }
+        self.state.enter_error(pending.action, message);
+        Ok(())
     }
 
     /// Browser has zero tabs: drop retained page so chrome/content clear and

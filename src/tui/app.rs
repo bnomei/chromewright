@@ -387,12 +387,23 @@ fn run_loop(
         }
     })();
 
-    // No return path may let terminal restoration race a browser worker. Finish
-    // and reconcile the transaction first, while retaining the primary error.
-    let cleanup = finish_worker_blocking(&mut in_flight, &mut controller);
+    finish_run_loop(result, &mut in_flight, &mut controller)
+}
+
+fn finish_run_loop(
+    result: Result<(), String>,
+    in_flight: &mut Option<InFlightPageAction>,
+    controller: &mut Controller,
+) -> Result<(), String> {
+    // No return path may restore the terminal with claimed work unresolved.
+    let cleanup = finish_worker_blocking(in_flight, controller);
+    let pending_cleanup = controller.fail_pending_page_action(match &result {
+        Err(error) => format!("terminal loop exited before browser work: {error}"),
+        Ok(()) => "terminal loop exited before browser work".into(),
+    });
     match result {
         Err(error) => Err(error),
-        Ok(()) => cleanup,
+        Ok(()) => cleanup.and(pending_cleanup),
     }
 }
 
@@ -589,6 +600,27 @@ mod tests {
         assert!(!can_open_editor(false, true));
         assert!(!can_open_editor(true, true));
         assert!(can_open_editor(false, false));
+    }
+
+    #[test]
+    fn loop_error_before_worker_fails_pending_ticket_before_return() {
+        let (mut controller, _session) = worker_fixture();
+        controller.bootstrap();
+        let mut worker = None;
+
+        let error = finish_run_loop(
+            Err("injected terminal draw failure".into()),
+            &mut worker,
+            &mut controller,
+        )
+        .expect_err("primary terminal error");
+
+        assert_eq!(error, "injected terminal draw failure");
+        assert!(!controller.has_pending_page_action());
+        assert!(matches!(
+            controller.coordinator.shared().lifecycle(),
+            Lifecycle::Error { .. }
+        ));
     }
 
     #[test]
